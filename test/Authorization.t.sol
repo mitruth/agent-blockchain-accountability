@@ -61,7 +61,7 @@ contract AuthorizationTest is Test {
             UNPAUSE_DELAY
         );
         ledger = new SpendLedger();
-        account = new SmartAccount();
+        account = new SmartAccount(config, ledger);
         vm.stopPrank();
     }
 
@@ -202,7 +202,7 @@ contract AuthorizationTest is Test {
         AcceptingModule module = new AcceptingModule();
 
         vm.prank(agent);
-        vm.expectRevert(bytes("SmartAccount: doar owner-ul poate face asta"));
+        vm.expectRevert(SmartAccount.SmartAccount_OnlyOwner.selector);
         account.installModule(address(module));
 
         assertFalse(account.installedModules(address(module)));
@@ -215,7 +215,7 @@ contract AuthorizationTest is Test {
         account.installModule(address(module));
 
         vm.prank(agent);
-        vm.expectRevert(bytes("SmartAccount: doar owner-ul poate face asta"));
+        vm.expectRevert(SmartAccount.SmartAccount_OnlyOwner.selector);
         account.uninstallModule(address(module));
 
         assertTrue(account.installedModules(address(module)));
@@ -324,8 +324,25 @@ contract AuthorizationTest is Test {
         AcceptingModule module = new AcceptingModule();
 
         vm.prank(guardian);
-        vm.expectRevert(bytes("SmartAccount: doar owner-ul poate face asta"));
+        vm.expectRevert(SmartAccount.SmartAccount_OnlyOwner.selector);
         account.installModule(address(module));
+    }
+
+    function test_account_bindsStickyPolicyPair() public view {
+        assertEq(address(account.policyConfig()), address(config));
+        assertEq(address(account.spendLedger()), address(ledger));
+    }
+
+    function test_uninstallRemovesModuleFromIterationList() public {
+        AcceptingModule module = new AcceptingModule();
+
+        vm.prank(owner);
+        account.installModule(address(module));
+        assertEq(account.getInstalledModules().length, 1);
+
+        vm.prank(owner);
+        account.uninstallModule(address(module));
+        assertEq(account.getInstalledModules().length, 0);
     }
 
     // ------------------------------------------------------------------
