@@ -380,6 +380,49 @@ opposite conclusions and must never share an output.
 **Consequence for step 4.** The mutation suite reports three states, not two:
 caught, not caught, and invalid mutant.
 
+### D5.7 — Removed the audited tooling rather than leaving it broken
+
+**Decision.** Deleted 14 scripts and `foundry.toml`. `scripts/` now holds only
+the two key-generation helpers. The `openai` dependency went with them.
+
+**Why.** Nine of the scripts loaded `SpendingLimitModule`, which the rebuild
+deleted, so they crashed on their first line with a missing-artifact error.
+Three more targeted `SmartAccount` through the old single-module `MODULE_ADDRESS`
+flow, which no longer describes how the contracts wire together — the new
+arrangement needs three keys, a validator selection step and an explicit ledger
+allowlist entry the old flow had no concept of. `common/chain.js` built its
+wallet client from a single `PRIVATE_KEY`, which is the F1 pattern itself.
+
+Broken code that looks runnable is worse than absent code. Someone reading
+`scripts/tests/` reasonably concludes the project has a test suite there; it has
+not since step 1, and the real one is in `test/`.
+
+**`generate_key.js` went too**, though it worked. It generates one key, and
+keeping a "generate the key" helper beside a "three keys, never one" doctrine is
+a trap rather than a convenience. `generate_destination.js` stays: it carries no
+assumption about the architecture.
+
+**`foundry.toml` deleted**, which resolves Q4. Foundry was never installed, and
+the file set `optimizer = false` while `hardhat.config.js` sets it on at 200
+runs. A second build configuration that nothing runs and that silently
+contradicts the one that does is a trap for anyone later checking deployed
+bytecode against a build artifact.
+
+**Nothing is lost.** All of it is at `1f49b7e`, the audited baseline, and that
+commit is cited in the finding list.
+
+**What was worth keeping and was not kept.** `agent/llm_agent.js` wired an LLM
+through Groq to propose new spending limits, with a system prompt that tried to
+resist prompt injection. The premise is obsolete — the whole point of the
+rebuild is that the agent cannot propose limits at all — but the wiring and the
+prompt are a reasonable starting point for step 6's adversarial evaluation.
+Recover it from `1f49b7e` rather than writing it again.
+
+**Consequence, stated plainly.** There is now no deployment path for the
+rebuilt contracts. There was not one before either — the old scripts deploy a
+contract that no longer exists — but the gap is now visible instead of hidden
+behind files that look like they would work.
+
 ### D5.6 — Documentation lives in `docs/`, one folder per category
 
 **Decision.** All documentation moved out of the repository root into `docs/`,
@@ -539,11 +582,8 @@ Not yet decided. Listed so they are not silently resolved.
   cannot function as a policy. Strict (18096) binds on 54/50/51 days. A 6× gap
   with nothing between them.
 
-- **Q4 — Two build configurations disagree.** `hardhat.config.js` enables the
-  optimizer at 200 runs; `foundry.toml` sets `optimizer = false`. Whichever is
-  not used produces different bytecode, which matters for any claim that
-  deployed bytecode matches the build artifact. Foundry is not currently
-  installed, so `foundry.toml` is aspirational either way.
+- **Q4 — Two build configurations disagree.** *(resolved: `foundry.toml`
+  deleted, see D5.7)*
 
 - **Q6 — Three mutations are caught by exactly one test each.** M3 (window
   boundary shifted a day), M6 (`capAt` returning the latest cap rather than the

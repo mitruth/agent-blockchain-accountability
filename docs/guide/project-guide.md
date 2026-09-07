@@ -59,10 +59,10 @@ probably just a copy of the other, and neither is evidence.
 This matters for reading the repo, and it is the main thing that will confuse
 you.
 
-- **The student's original** — everything in `scripts/`. Built around a single
-  contract, `SpendingLimitModule`, with one key doing everything. That contract
-  was deleted in the rebuild, so **most of `scripts/` no longer runs.** It is
-  kept for history, not because it works.
+- **The student's original** — built around a single contract,
+  `SpendingLimitModule`, with one key doing everything. That contract and its
+  tooling were deleted in the rebuild. All of it is preserved at commit
+  `1f49b7e` if you ever need to look.
 - **The rebuild** — `contracts/`, `test/`, `verifier/`, `differential/`. This is
   the live code. It runs entirely on your machine; no testnet, no gas, no keys.
 
@@ -122,21 +122,25 @@ Its two documents live under `docs/`: the specification it was written from is
 | `gen_arm_data.py` | Regenerates `test/ArmData.sol` from the record CSVs. |
 | `data/` | Scratch output, regenerated every run, gitignored. |
 
-### `scripts/` — the student's original testnet tooling (mostly dead)
+### `scripts/` — key generation (live)
 
-| File | Status |
+| File | What it does |
 |---|---|
-| `keys/generate_roles.js` | **Works.** Generates the three keys. Written during the rebuild. |
-| `keys/generate_key.js`, `keys/generate_destination.js` | Works. Single-key helpers from the original. |
-| `deploy/install_module.js`, `deploy/swap_module.js` | Partly works — install/uninstall against `SmartAccount`, but expects old env vars. |
-| `agent/llm_agent.js` | **Broken.** An LLM proposes new spending limits and the contract checks them. Interesting as a demo of the idea, but it targets the deleted contract. |
-| `deploy/deploy.js`, `deploy/deploy_module_v3.js` | **Broken.** Deploy the deleted contract. |
-| `limits/check_limits.js`, `limits/halve_limits.js` | **Broken.** Read/write the deleted contract. |
-| `tests/*.js` (5 files) | **Broken.** These were the original "tests" — they ran against the live Base Sepolia testnet, spent real gas, waited on network sync, and printed results rather than asserting them. Replaced by `test/`. |
+| `keys/generate_roles.js` | Generates the three keys — owner, agent, guardian — with a note on what each may do. |
+| `keys/generate_destination.js` | Generates a throwaway address to receive test transfers. |
 
-Nine of these fifteen crash with `ENOENT ... SpendingLimitModule.json`. That is
-expected: the contract was deleted. They are kept as a record of what the
-original looked like.
+The student's original testnet tooling lived here: deploy scripts, limit
+readers, an LLM agent that proposed new spending limits, and five "tests" that
+ran against live Base Sepolia, spent real gas, waited on network sync and
+printed results rather than asserting them. All of it was built around
+`SpendingLimitModule` and a single key holding both owner and agent authority.
+The contract was deleted in the rebuild and the scripts were removed with it;
+they are preserved at commit `1f49b7e`.
+
+**There is currently no deployment path for the rebuilt contracts.** The old
+scripts could not have provided one — they deploy a contract that no longer
+exists, and the new wiring needs three keys plus an explicit ledger allowlist
+step the old flow had no concept of.
 
 ### `docs/` — all documentation, one folder per category
 
@@ -157,7 +161,6 @@ repository root. Add a folder when a genuinely new category appears —
 |---|---|
 | `records_B0.csv`, `records_B1.csv`, `records_B2.csv` | One simulated year (365 days) of the same house under three different controllers. `B0` = simple if-then rules. `B1` = optimal with perfect foresight (unrealistic best case). `B2` = optimal using forecasts (realistic). The column that matters is `spendMilliUsd` — daily net cost in thousandths of a dollar, signed. |
 | `hardhat.config.js` | Build and network config. Loads three separate keys, never one. |
-| `foundry.toml` | Aspirational — Foundry is not installed. Note its optimizer setting disagrees with Hardhat's. |
 | `remappings.txt` | Points `forge-std/` at `node_modules`. |
 | `.env.example` | Template. The real `.env` holds private keys and is gitignored. |
 
