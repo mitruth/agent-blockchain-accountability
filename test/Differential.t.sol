@@ -31,9 +31,12 @@ contract DifferentialTest is Test {
     uint32 internal constant PAUSE_EXPIRY = 72 hours;
     uint32 internal constant UNPAUSE_DELAY = 6 hours;
 
-    // PolicyUpdated(uint256 indexed, int256, uint32, uint64, uint64, address)
+    // PolicyUpdated(uint256 indexed, int256, uint32, uint64, address)
+    // NOTE: gains a uint64 submittedOnDay when F7 lands; see
+    // docs/decisions/design-decisions.md D6.1. The guard at the end of
+    // _emitPolicyEvents fails loudly if this drifts from the contract.
     bytes32 internal constant POLICY_UPDATED_SIG =
-        keccak256("PolicyUpdated(uint256,int256,uint32,uint64,uint64,address)");
+        keccak256("PolicyUpdated(uint256,int256,uint32,uint64,address)");
 
     PolicyConfig internal config;
     SpendLedger internal ledger;
@@ -68,8 +71,8 @@ contract DifferentialTest is Test {
             if (logs[i].topics.length == 0 || logs[i].topics[0] != POLICY_UPDATED_SIG) continue;
 
             uint256 version = uint256(logs[i].topics[1]);
-            (int256 cap, uint32 windowDays, uint64 submittedOnDay, uint64 effectiveFromDay, address setBy) =
-                abi.decode(logs[i].data, (int256, uint32, uint64, uint64, address));
+            (int256 cap, uint32 windowDays, uint64 effectiveFromDay, address setBy) =
+                abi.decode(logs[i].data, (int256, uint32, uint64, address));
 
             console.log(
                 string.concat(
@@ -78,7 +81,6 @@ contract DifferentialTest is Test {
                     ",", vm.toString(version),
                     ",", vm.toString(cap),
                     ",", vm.toString(uint256(windowDays)),
-                    ",", vm.toString(uint256(submittedOnDay)),
                     ",", vm.toString(uint256(effectiveFromDay)),
                     ",", vm.toString(setBy)
                 )
