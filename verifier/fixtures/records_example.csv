@@ -1,0 +1,7 @@
+dayIndex,netSpend,policyVersion,paused
+0,400,1,false
+1,400,1,false
+2,-300,1,false
+3,0,1,true
+5,900,1,false
+7,50,2,false

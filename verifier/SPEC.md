@@ -245,3 +245,63 @@ useful. No Solidity, no web3, no chain access.
   correct and structurally unlike an incremental walk.
 - Where this document genuinely does not determine an answer, pick the reading
   you can defend, implement it, and record it in the README's ambiguity list.
+
+---
+
+## 10. Amendment 1 — the submission day (finding F7)
+
+**Added after the first differential run. Not yet implemented on either side.**
+
+The first run of both implementations against the same records produced 28
+disagreements, all from one root cause, and it is a defect in this document
+rather than in either implementation.
+
+§2.2 says `effectiveFromDay` is always explicit and must never be inferred. §5.4
+says a raise takes effect at the next window boundary. With no submission day in
+the event, those cannot both be followed:
+
+- A verifier that **trusts** `effectiveFromDay` cannot detect a chain that has
+  stopped deferring raises at all. It believes whatever effective day it is
+  handed. Measured: a chain mutated to apply raises immediately produced **zero**
+  disagreements.
+- A verifier that **re-derives** the boundary applies the boundary function to a
+  day the chain has already deferred, deferring it a second time. Measured:
+  **seven** false-positive days against a correct chain.
+
+No rewording of §5 fixes this. The information a verifier needs is not in the
+event.
+
+### 10.1 Event schema
+
+Policy events gain one field:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `submittedOnDay` | integer | The day index on which the write was made |
+
+### 10.2 Revised rule
+
+`effectiveFromDay` is still read from the event and never inferred — §2.2 stands
+unchanged. The verifier additionally **checks** it:
+
+```
+isRaise  = cap > (cap in force on submittedOnDay)
+expected = isRaise ? nextWindowBoundary(submittedOnDay, windowDays in force on submittedOnDay)
+                   : submittedOnDay
+
+report a defect if expected != effectiveFromDay
+```
+
+Note that classification is against the regime in force on **`submittedOnDay`**,
+not on `effectiveFromDay`. That resolves ambiguity A3 in `verifier/README.md`,
+which had no defensible answer while the submission day was absent.
+
+A mismatch is a **third result category**, alongside a compliance breach and a
+policy-version mismatch: the chain deviated from the deferral rule. It is not a
+breach by the agent and must not be reported as one.
+
+### 10.3 What this does not change
+
+§4, §6 and §7 are unaffected. Both implementations already agree on all 1,095
+day-rows of real arm data and on the pause scenario; every disagreement was in
+policy scheduling.

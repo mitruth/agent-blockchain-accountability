@@ -18,6 +18,7 @@ Findings referenced throughout:
 | F4 | Half-away-from-zero rounding claimed but not asserted on both sides. |
 | F5 | *(found during the rebuild survey, not in the original audit)* The agent could empty the rolling window alone by advancing `dayIndex`. |
 | F6 | *(found during the rebuild survey)* The validated quantity and the recorded quantity were different numbers written by different keys. |
+| F7 | *(found by the step 3 differential)* `PolicyUpdated` does not carry the day the write was submitted, so an independent verifier can either avoid false positives or detect a broken deferral rule, but not both. |
 
 Baseline commit, as audited: `1f49b7eb70634e4e3cd2f910d57c8d2d60621f5e`.
 
@@ -390,11 +391,110 @@ were never wrong: rebuilding from the step logs reproduces all three arms
 byte-identically and validation passes. The defect was broken cross-repo
 provenance, not arithmetic.
 
+
+---
+
+## 6. Findings from the differential (step 3)
+
+### D6.1 — `PolicyUpdated` must carry the submission day (F7)
+
+**Status.** Open. Requires a contract change.
+
+**What the differential found.** Both implementations agree on all 1,095 days of
+real arm data (B0, B1, B2) and on the pause scenario — 1,116 of 1,137 day-rows.
+All 28 disagreements come from a single scenario and a single root cause.
+
+The verifier, on a write it classifies as a raise, computes the effective day as
+`nextWindowBoundary(effectiveFromDay, incumbentWindowDays)`. But
+`effectiveFromDay` in the event has *already* been deferred by the chain, so the
+boundary function is applied twice and the raise slips an extra window.
+
+**Why this is the specification's fault, not the verifier's.** SPEC.md §2.2 says
+`effectiveFromDay` is always explicit and must never be inferred. §5.4 says a
+raise takes effect at the next window boundary. With no submission day in the
+event, those two instructions cannot both be followed, and each reading fails in
+an opposite direction:
+
+| chain | verifier reading | disagreeing days | outcome |
+|---|---|---|---|
+| correct | trusts `effectiveFromDay` | 0 | clean |
+| correct | re-derives the boundary | 7 | false positives |
+| mutated (raise applied immediately) | trusts `effectiveFromDay` | 0 | **mutation missed** |
+| mutated (raise applied immediately) | re-derives the boundary | 9 | mutation caught |
+
+A verifier that trusts the field cannot detect a chain that stopped deferring
+raises — it simply believes whatever effective day it is handed. A verifier that
+re-derives the field reports breaches on a correct chain. Neither is usable, and
+no wording change to §5 fixes it: the information required is not in the event.
+
+**The fix.** Add the submission day to the event:
+
+```
+event PolicyUpdated(
+    uint256 indexed policyVersion,
+    int256  cap,
+    uint32  windowDays,
+    uint64  submittedOnDay,     // new: todayIndex() at the time of the write
+    uint64  effectiveFromDay,
+    address setBy
+);
+```
+
+The verifier then checks the deferral rule rather than assuming it, by
+recomputing the expected effective day from `submittedOnDay` and comparing:
+
+```
+expected = isRaise ? nextWindowBoundary(submittedOnDay, incumbent.windowDays)
+                   : submittedOnDay
+assert expected == effectiveFromDay
+```
+
+That keeps §2.2's rule intact — the effective day is still read, never inferred
+— while making the deferral independently checkable, which is the whole point of
+having a second implementation.
+
+**Why this counts as a real result.** The exercise was set up so the two sides
+could disagree, and it produced a defect in the evidence schema that neither
+side could have found alone. The chain cannot notice that its event is missing a
+field a verifier would need; the verifier cannot tell a deferral it disagrees
+with from one it merely cannot check.
+
+### D6.2 — Agreement on the arms is a weak signal, and is treated as one
+
+**Decision.** The 1,095 matching day-rows across B0, B1 and B2 are recorded as a
+volume check on window arithmetic and signed handling, not as evidence that the
+rule is right.
+
+**Why.** Those three scenarios have a single genesis policy and no cap changes,
+so they exercise §4 and §6 but almost none of §5 — which is where every
+disagreement actually was. A differential is only as strong as the scenarios fed
+to it, and agreement on the easy region says nothing about the hard one.
+
+### D6.3 — Records are written directly to the ledger in the differential
+
+**Decision.** `test/Differential.t.sol` writes through an owner-allowlisted test
+writer rather than through `submitDay`.
+
+**Why.** `submitDay` reverts on a breach, which would halt a replay at the first
+one and make a disagreement *set* impossible to collect. The quantity being
+compared is the rule — `windowSum` and `capAt` on every day — not the revert.
+Enforcement behaviour is covered separately in `Enforcement.t.sol`.
+
 ---
 
 ## Open questions
 
 Not yet decided. Listed so they are not silently resolved.
+
+- **Q7 — Three further defects the verifier author raised**, none yet acted on.
+  §6.2 prescribes a *cap* comparison to detect a *version identity* failure, so
+  a write changing only `windowDays` produces two versions sharing a cap and
+  passes a check aimed at exactly that case. §7's rounding rule has no
+  application inside §2's data model, since every §2 field is already an
+  integer — if it is meant to apply at a specific conversion step, §7 should
+  name it. And §5 never says what governs a recorded day falling before the
+  first effective write. The full list of 22 ambiguities is in
+  `verifier/README.md`.
 
 - **Q1 — Does an agent-paused day get recorded at all?** *(still open)* `submitDay` currently
   reverts when the agent is paused, so no record is written and the day becomes
