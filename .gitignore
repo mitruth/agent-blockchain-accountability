@@ -1,0 +1,8 @@
+node_modules/
+artifacts/
+cache/
+
+# Secrets. PRIVATE_KEY, GROQ_API_KEY and deployed addresses live here.
+.env
+.env.*
+!.env.example
