@@ -153,7 +153,7 @@ contract DifferentialTest is Test {
     // ------------------------------------------------------------------
     // Scenario: policy churn
     //
-    // Aimed squarely at SPEC.md section 5 -- deferral, cancellation, same-day
+    // Aimed squarely at enforcement-rule.md section 5 -- deferral, cancellation, same-day
     // precedence, boundary-day writes, and a windowDays change. Day 19999 is a
     // boundary under w=7 (19999 = 7 * 2857), so 20006, 20013 and 20020 are the
     // boundaries that follow.
@@ -181,14 +181,14 @@ contract DifferentialTest is Test {
         vm.prank(owner);
         config.setPolicy(4000, 7);
 
-        // A raise made ON a boundary day (20006) -- the case SPEC.md section 5.5
+        // A raise made ON a boundary day (20006) -- the case enforcement-rule.md section 5.5
         // defers a full window rather than applying at once.
         warpToDay(start + 6);
         vm.prank(owner);
         config.setPolicy(25000, 7);
 
         // An unchanged cap. Neither a raise nor a lowering by the strict
-        // reading; SPEC.md section 5 does not cover equality.
+        // reading; enforcement-rule.md section 5 does not cover equality.
         warpToDay(start + 8);
         vm.prank(owner);
         config.setPolicy(25000, 7);

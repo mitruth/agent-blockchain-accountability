@@ -2,7 +2,7 @@
 
 What every file does, and how to run everything yourself.
 
-For *why* a design choice was made, see `DECISIONS.md`. This file is the map and
+For *why* a design choice was made, see `docs/decisions/design-decisions.md`. This file is the map and
 the runbook.
 
 ---
@@ -101,16 +101,18 @@ Solidity tests, run on a local simulated chain. No network, no keys, no cost.
 
 ### `verifier/` — the independent second implementation (live)
 
-Python. Written from `SPEC.md` alone by an author that was blocked from reading
+Python. Written from `enforcement-rule.md` alone by an author that was blocked from reading
 any Solidity. That isolation is the entire value: it can *disagree*.
 
 | File | Lines | What it does |
 |---|---|---|
-| `SPEC.md` | 307 | The rule written as behaviour, with implementation strategy deliberately removed. Both sides implement this; neither is derived from the other. §10 records the defect the differential found. |
 | `verify.py` | 740 | The implementation, plus a CLI. Recomputes every day's window from scratch over the whole record set — no running total — precisely because the chain uses a running walk. |
 | `test_verify.py` | 597 | 58 tests, written against the spec. |
-| `README.md` | 486 | **Read the ambiguity list.** 22 places the spec was under-determined and what the author assumed, plus 7 places they judged it outright wrong. This is the most useful document in the repo. |
 | `fixtures/` | — | Small hand-made inputs for the CLI. |
+
+Its two documents live under `docs/`: the specification it was written from is
+`docs/spec/enforcement-rule.md`, and its notes and ambiguity list are
+`docs/verifier/implementation-notes.md`.
 
 ### `differential/` — running both and diffing them (live)
 
@@ -136,12 +138,24 @@ Nine of these fifteen crash with `ENOENT ... SpendingLimitModule.json`. That is
 expected: the contract was deleted. They are kept as a record of what the
 original looked like.
 
+### `docs/` — all documentation, one folder per category
+
+| Folder | Holds |
+|---|---|
+| `docs/guide/` | This file. The map and the runbook. |
+| `docs/decisions/` | `design-decisions.md` — every non-obvious choice, why it was taken, what was rejected, and the open questions. |
+| `docs/spec/` | `enforcement-rule.md` — the rule as behaviour. Both implementations are written from this; neither is derived from the other. |
+| `docs/verifier/` | `implementation-notes.md` — **read the ambiguity list.** 22 places the spec was under-determined and 7 the author judged wrong. The most useful document here. |
+
+New documentation goes in a category folder under `docs/`, never at the
+repository root. Add a folder when a genuinely new category appears —
+`docs/security/` and `docs/evaluation/` are the two expected next.
+
 ### Data and config
 
 | File | What it is |
 |---|---|
 | `records_B0.csv`, `records_B1.csv`, `records_B2.csv` | One simulated year (365 days) of the same house under three different controllers. `B0` = simple if-then rules. `B1` = optimal with perfect foresight (unrealistic best case). `B2` = optimal using forecasts (realistic). The column that matters is `spendMilliUsd` — daily net cost in thousandths of a dollar, signed. |
-| `DECISIONS.md` | Every non-obvious design choice and why. Includes the open questions. |
 | `hardhat.config.js` | Build and network config. Loads three separate keys, never one. |
 | `foundry.toml` | Aspirational — Foundry is not installed. Note its optimizer setting disagrees with Hardhat's. |
 | `remappings.txt` | Points `forge-std/` at `node_modules`. |
@@ -272,7 +286,7 @@ Steps 1–3 of the rebuild are done and committed.
 | F3 — negative days had no credit path | **Fixed.** Signed `int256` end to end. |
 | F4 — rounding claimed but untested | Half-done. Correct in `export_records.py`; asserted in the verifier; no contract-side path yet. |
 | F5 — agent could empty the window alone | **Fixed.** Day index derived on-chain from block time. |
-| F6 — validated and recorded numbers differ | **Open.** A decision, not a bug — see `DECISIONS.md` Q2. |
+| F6 — validated and recorded numbers differ | **Open.** A decision, not a bug — see `docs/decisions/design-decisions.md` Q2. |
 | F7 — event lacks the submission day | **Open.** Found by the differential; needs a contract change. |
 
 **What is fair to say right now:** contract implemented, test suite present, two

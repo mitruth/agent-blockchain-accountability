@@ -1,16 +1,16 @@
 # Independent verifier — rolling-window spending cap
 
 An independent reimplementation of the enforcement rule described in
-[`SPEC.md`](SPEC.md).
+[`enforcement-rule.md`](../spec/enforcement-rule.md).
 
-**Provenance.** This was written from `SPEC.md` alone. No `.sol` file was read,
-opened, grepped, globbed or listed; `DECISIONS.md`, the repository `README.md`,
+**Provenance.** This was written from `enforcement-rule.md` alone. No `.sol` file was read,
+opened, grepped, globbed or listed; `docs/decisions/design-decisions.md`, the repository `README.md`,
 `scripts/`, `artifacts/` and `cache/` were not consulted. The only other files
 read were the daily-record CSVs at the repository root, and only as *data*
 (column names and value ranges), never as a source for the rule.
 
 The point of the exercise is that this implementation must be *capable of
-disagreeing* with the on-chain one. Where `SPEC.md` under-determines an answer,
+disagreeing* with the on-chain one. Where `enforcement-rule.md` under-determines an answer,
 the reading taken here is recorded in [Ambiguities](#ambiguities-and-assumptions)
 below rather than smoothed over. Those entries are the map of where the two
 implementations can legitimately diverge.
@@ -61,7 +61,7 @@ from verify import DayRecord, PolicyEvent, verify, window_sum, build_policy_sche
 report = verify(records, events)
 report.results              # list[DayResult]
 report.breaches             # compliant is False
-report.version_mismatches   # SPEC.md 6.2 divergences
+report.version_mismatches   # enforcement-rule.md 6.2 divergences
 report.undetermined         # recorded days with no policy in force
 report.anomalies            # list[Anomaly]
 report.schedule             # the replayed list[Regime]
@@ -96,7 +96,7 @@ CSV. Required: `seq`, `policyVersion`, `cap`, `windowDays`, `effectiveFromDay`.
 Optional: `setBy` (informational).
 
 Rows may be in any order; `seq` is authoritative. A duplicate `seq` is a hard
-error (`SPEC.md` §2.2: "Ties are impossible"). `windowDays` must be ≥ 1.
+error (`enforcement-rule.md` §2.2: "Ties are impossible"). `windowDays` must be ≥ 1.
 
 Fixtures under `verifier/fixtures/`:
 
@@ -108,7 +108,7 @@ Fixtures under `verifier/fixtures/`:
 
 ## Output format
 
-CSV with exactly the columns `SPEC.md` §8.1 asks for:
+CSV with exactly the columns `enforcement-rule.md` §8.1 asks for:
 
 ```
 dayIndex, netSpend, windowSum, capInForce, windowDaysInForce, compliant, policyVersionMismatch
@@ -154,7 +154,7 @@ lands on day 301, and the lowering requested on day 303 lands on day 303.
 
 ## How the window sum is computed (the structural requirement)
 
-`SPEC.md` §4 requires each day's window to be computed **independently from the
+`enforcement-rule.md` §4 requires each day's window to be computed **independently from the
 complete record set**, because the on-chain implementation walks the window
 incrementally and two implementations sharing that structure share its failure
 modes.
@@ -189,8 +189,8 @@ still advances across it — it is a zero-spend day, not a hole.
 
 ## Ambiguities and assumptions
 
-This section is a required deliverable (`SPEC.md` §8.3). Each entry is a place
-where `SPEC.md` did not determine an answer, the reading taken here, and — where
+This section is a required deliverable (`enforcement-rule.md` §8.3). Each entry is a place
+where `enforcement-rule.md` did not determine an answer, the reading taken here, and — where
 it matters — the alternative reading that the on-chain implementation might
 plausibly have taken instead. Entries marked **⚠ divergence candidate** are the
 ones I would check first if the two implementations disagree.
@@ -304,7 +304,7 @@ even a retroactive lowering wipes later-scheduled changes.
 ### A8 — recorded days before any policy is effective
 
 §5 gives no cap before the first effective write, and §6 defines compliance only
-against a cap. `SPEC.md` never says what to do with a record on such a day.
+against a cap. `enforcement-rule.md` never says what to do with a record on such a day.
 
 **Assumed:** report `windowSum`, `capInForce`, `windowDaysInForce`, `compliant`
 and `policyVersionMismatch` all as `NA`, raise a `no_policy_in_force` anomaly,
@@ -381,7 +381,7 @@ preferred input at the boundary.
 
 ### A16 — file format and column names
 
-`SPEC.md` names fields but never specifies a file format. **Assumed:** CSV with
+`enforcement-rule.md` names fields but never specifies a file format. **Assumed:** CSV with
 those field names as headers.
 
 Because the repository's generated daily-record files call the spend column
@@ -392,7 +392,7 @@ verdict available" (`NA`) rather than inventing one.
 
 ### A17 — one agent per run
 
-`SPEC.md` describes a single agent's ledger and never mentions `agentId`; the
+`enforcement-rule.md` describes a single agent's ledger and never mentions `agentId`; the
 record CSVs have such a column. **Assumed:** a verification run covers exactly
 one agent. If the file holds more than one distinct `agentId`, `--agent` is
 required. Records for different agents are never summed into one window.
@@ -433,7 +433,7 @@ windows but produce no row of their own.
 
 ---
 
-## Things I believe are wrong, missing, or contradictory in `SPEC.md`
+## Things I believe are wrong, missing, or contradictory in `enforcement-rule.md`
 
 Stated plainly rather than quietly resolved, as §9 asks.
 

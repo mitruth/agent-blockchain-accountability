@@ -3,13 +3,13 @@ disagreement set.
 
 The on-chain side is test/Differential.t.sol, which replays scenarios into the
 real contracts and prints its verdict as CSV. The off-chain side is
-verifier/verify.py, written from verifier/SPEC.md by an author who never saw
+verifier/verify.py, written from docs/spec/enforcement-rule.md by an author who never saw
 the Solidity.
 
 Disagreements are the output of this script. A clean run is a weaker result
 than it looks: it is at least as likely to mean the two sides share an
 assumption as that both are right. Read the ambiguity list in
-verifier/README.md alongside whatever this prints.
+docs/verifier/implementation-notes.md alongside whatever this prints.
 
 Usage:
     python differential/run_diff.py            # runs hardhat, then compares

@@ -2,8 +2,8 @@
 """
 Independent verifier for the rolling-window spending-cap enforcement rule.
 
-Implemented solely from ``verifier/SPEC.md``.  No on-chain source, no
-``DECISIONS.md``, no Solidity of any kind was consulted.
+Implemented solely from ``docs/spec/enforcement-rule.md``.  No on-chain source, no
+``docs/decisions/design-decisions.md``, no Solidity of any kind was consulted.
 
 Design notes that matter for the audit
 --------------------------------------
@@ -14,14 +14,14 @@ Design notes that matter for the audit
     running total, no add-new/subtract-expiring step, no cursor, no
     incremental state of any kind carried between days.  Deleting the result
     for day ``d`` would not change the result for day ``d + 1``.  This is
-    required by SPEC.md section 4 and is deliberately the opposite structure
+    required by enforcement-rule.md section 4 and is deliberately the opposite structure
     to an incremental walk.
 
 *   **All money is integer milli-USD.**  Floats never reach a comparison.
     The only place a real-valued quantity becomes an integer is
     :func:`round_half_away_from_zero`, applied once at the parsing boundary,
     and it is implemented with :mod:`decimal` rather than the built-in
-    ``round`` (which is banker's rounding and would be wrong -- SPEC.md
+    ``round`` (which is banker's rounding and would be wrong -- enforcement-rule.md
     section 7).
 
 *   **The policy schedule is reconstructed by replaying the event log.**
@@ -73,7 +73,7 @@ def round_half_away_from_zero(value) -> int:
     ``2.5 -> 3``, ``-2.5 -> -3``, ``3.5 -> 4``, ``-3.5 -> -4``.
 
     This is *not* Python's built-in :func:`round`, which is round-half-to-even
-    and would give ``2.5 -> 2`` and ``-2.5 -> -2``.  SPEC.md section 7 forbids
+    and would give ``2.5 -> 2`` and ``-2.5 -> -2``.  enforcement-rule.md section 7 forbids
     that rule here.
 
     Accepts ``int``, ``str``, :class:`decimal.Decimal` and ``float``.  Strings
@@ -100,7 +100,7 @@ def round_half_away_from_zero(value) -> int:
     if not dec.is_finite():
         raise ValueError(f"not a finite number: {value!r}")
     # Decimal's ROUND_HALF_UP means "half away from zero" (it is sign-aware),
-    # which is exactly the rule SPEC.md section 7 asks for.
+    # which is exactly the rule enforcement-rule.md section 7 asks for.
     return int(dec.quantize(_ONE, rounding=ROUND_HALF_UP))
 
 
@@ -152,7 +152,7 @@ def day_index_from_unix_seconds(unix_seconds: int) -> int:
 
 @dataclass(frozen=True)
 class DayRecord:
-    """One reported calendar day (SPEC.md section 2.1)."""
+    """One reported calendar day (enforcement-rule.md section 2.1)."""
 
     dayIndex: int
     netSpend: int                      # signed milli-USD, as recorded
@@ -173,7 +173,7 @@ class DayRecord:
 
 @dataclass(frozen=True)
 class PolicyEvent:
-    """One owner policy write (SPEC.md section 2.2)."""
+    """One owner policy write (enforcement-rule.md section 2.2)."""
 
     seq: int
     policyVersion: int
@@ -258,7 +258,7 @@ class VerificationReport:
 
 
 def next_window_boundary(day: int, window_days: int) -> int:
-    """The window boundary *strictly after* ``day`` (SPEC.md section 5.5).
+    """The window boundary *strictly after* ``day`` (enforcement-rule.md section 5.5).
 
     Boundaries sit at multiples of ``window_days`` counted from the Unix
     epoch, so the answer is the next multiple of ``window_days`` strictly
@@ -284,7 +284,7 @@ def _resolve_at(schedule: Sequence[Regime], day: int) -> Optional[Regime]:
 def build_policy_schedule(events: Iterable[PolicyEvent]) -> list:
     """Replay the policy event log from genesis into a list of `Regime`.
 
-    Implements SPEC.md section 5 rules 1-6:
+    Implements enforcement-rule.md section 5 rules 1-6:
 
     1/2. A write governs from its effective day until superseded; the regime on
          day ``d`` is the applicable write with the greatest effective day
@@ -303,11 +303,11 @@ def build_policy_schedule(events: Iterable[PolicyEvent]) -> list:
     for event in ordered:
         if event.seq in seen_seq:
             raise ValueError(f"duplicate policy event seq {event.seq}; "
-                             "SPEC.md section 2.2 says ties are impossible")
+                             "enforcement-rule.md section 2.2 says ties are impossible")
         seen_seq.add(event.seq)
         if event.windowDays < 1:
             raise ValueError(f"policy event seq {event.seq} has windowDays "
-                             f"{event.windowDays}; SPEC.md section 2.2 "
+                             f"{event.windowDays}; enforcement-rule.md section 2.2 "
                              "requires >= 1")
 
     schedule: list = []
@@ -372,7 +372,7 @@ def regime_in_force(schedule: Sequence[Regime], day: int) -> Optional[Regime]:
 def window_sum(records: Sequence[DayRecord], day: int, window_days: int) -> int:
     """Sum of ``netSpend`` over the inclusive day range ``[day - w + 1, day]``.
 
-    **Structural note (SPEC.md section 4).**  This function is deliberately
+    **Structural note (enforcement-rule.md section 4).**  This function is deliberately
     stateless and self-contained.  It re-scans the *entire* record set on every
     call and keeps nothing between calls.  It does not know, and cannot know,
     what the previous day's answer was.  There is no accumulator to drift, no
@@ -421,7 +421,7 @@ def verify(records: Iterable[DayRecord],
     for record in records:
         if record.dayIndex in seen_days:
             raise ValueError(
-                f"duplicate record for dayIndex {record.dayIndex}; SPEC.md "
+                f"duplicate record for dayIndex {record.dayIndex}; enforcement-rule.md "
                 "section 2.1 specifies one row per calendar day"
             )
         seen_days[record.dayIndex] = record
@@ -429,7 +429,7 @@ def verify(records: Iterable[DayRecord],
             anomalies.append(Anomaly(
                 "paused_day_nonzero_netspend", record.dayIndex,
                 f"paused day carries netSpend {record.netSpend}; treated as 0 "
-                "for the window sum per SPEC.md section 4",
+                "for the window sum per enforcement-rule.md section 4",
             ))
 
     schedule = build_policy_schedule(events)
@@ -512,7 +512,7 @@ _TRUE = {"1", "true", "t", "yes", "y"}
 _FALSE = {"", "0", "false", "f", "no", "n"}
 
 # Accepted spellings for the net-spend column.  The generated daily-record
-# files in this repository call it ``spendMilliUsd``; SPEC.md calls it
+# files in this repository call it ``spendMilliUsd``; enforcement-rule.md calls it
 # ``netSpend``.  Both are accepted, ``netSpend`` wins if both are present.
 _NET_SPEND_ALIASES = ("netSpend", "spendMilliUsd", "netSpendMilliUsd")
 
@@ -617,7 +617,7 @@ def read_policy_events_csv(path: str) -> list:
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"{path}:{line_no}: {exc}") from exc
     if not events:
-        raise ValueError(f"{path}: no policy events; SPEC.md section 5 needs "
+        raise ValueError(f"{path}: no policy events; enforcement-rule.md section 5 needs "
                          "at least a genesis write")
     return events
 
@@ -679,7 +679,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="verify.py",
         description="Independent verifier for the rolling-window spending cap "
-                    "(implemented from verifier/SPEC.md).",
+                    "(implemented from docs/spec/enforcement-rule.md).",
     )
     parser.add_argument("--records", required=True,
                         help="day-record CSV (dayIndex, netSpend/spendMilliUsd"

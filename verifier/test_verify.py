@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for verify.py, written against verifier/SPEC.md only.
+"""Tests for verify.py, written against docs/spec/enforcement-rule.md only.
 
 Run with either::
 
@@ -7,7 +7,7 @@ Run with either::
     python -m unittest discover -s verifier -p "test_*.py"
     python verifier/test_verify.py
 
-Every test names the SPEC.md clause it is exercising.
+Every test names the enforcement-rule.md clause it is exercising.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def result_for(report, day):
 
 
 class TestRoundingHalfAwayFromZero(unittest.TestCase):
-    """SPEC.md section 7. The .5 cases in BOTH signs are the only cases that
+    """enforcement-rule.md section 7. The .5 cases in BOTH signs are the only cases that
     distinguish half-away-from-zero from banker's rounding."""
 
     def test_positive_half_cases(self):
@@ -111,7 +111,7 @@ class TestRoundingHalfAwayFromZero(unittest.TestCase):
 
 
 class TestDayIndex(unittest.TestCase):
-    """SPEC.md section 3: floor(unix_seconds / 86400), UTC, always."""
+    """enforcement-rule.md section 3: floor(unix_seconds / 86400), UTC, always."""
 
     def test_epoch_and_first_boundary(self):
         self.assertEqual(day_index_from_unix_seconds(0), 0)
@@ -133,36 +133,36 @@ class TestDayIndex(unittest.TestCase):
 class TestWindowSum(unittest.TestCase):
 
     def test_both_endpoints_included(self):
-        """SPEC.md section 4: with w=7 the window covers d and the six days
+        """enforcement-rule.md section 4: with w=7 the window covers d and the six days
         before it -- seven days total."""
         records = [rec(d, 1) for d in range(0, 20)]
         self.assertEqual(window_sum(records, 10, 7), 7)
         self.assertEqual(window_sum(records, 10, 1), 1)
 
     def test_oldest_day_is_included_then_leaves_one_day_later(self):
-        """SPEC.md section 8.2 bullet 3."""
+        """enforcement-rule.md section 8.2 bullet 3."""
         records = [rec(0, 500)] + [rec(d, 0) for d in range(1, 10)]
         self.assertEqual(window_sum(records, 6, 7), 500)   # [0..6] includes 0
         self.assertEqual(window_sum(records, 7, 7), 0)     # [1..7] excludes 0
 
     def test_missing_day_contributes_zero(self):
-        """SPEC.md section 4: a day with no record contributes 0."""
+        """enforcement-rule.md section 4: a day with no record contributes 0."""
         records = [rec(0, 100), rec(5, 100)]   # days 1-4 absent entirely
         self.assertEqual(window_sum(records, 5, 7), 200)
         self.assertEqual(window_sum(records, 4, 3), 0)     # [2..4]: nothing
 
     def test_negative_day_reduces_the_sum(self):
-        """SPEC.md section 4: never clamped, never dropped, never abs()."""
+        """enforcement-rule.md section 4: never clamped, never dropped, never abs()."""
         records = [rec(0, 1000), rec(1, -400)]
         self.assertEqual(window_sum(records, 1, 7), 600)
 
     def test_window_sum_may_be_negative(self):
-        """SPEC.md section 4: the sum may legitimately be negative."""
+        """enforcement-rule.md section 4: the sum may legitimately be negative."""
         records = [rec(0, 100), rec(1, -900)]
         self.assertEqual(window_sum(records, 1, 7), -800)
 
     def test_paused_day_is_zero_and_the_window_still_advances(self):
-        """SPEC.md section 4: a paused day is a zero-spend day, not a missing
+        """enforcement-rule.md section 4: a paused day is a zero-spend day, not a missing
         day. It contributes 0 and the window advances across it."""
         records = [rec(0, 700), rec(1, 999, paused=True), rec(2, 100)]
         self.assertEqual(window_sum(records, 2, 7), 800)
@@ -181,7 +181,7 @@ class TestWindowSum(unittest.TestCase):
 
 
 class TestWindowSumIndependence(unittest.TestCase):
-    """SPEC.md section 4, required structural property: every day's window is
+    """enforcement-rule.md section 4, required structural property: every day's window is
     computed independently from the complete record set."""
 
     def setUp(self):
@@ -218,7 +218,7 @@ class TestWindowSumIndependence(unittest.TestCase):
 
 
 class TestWindowBoundaries(unittest.TestCase):
-    """SPEC.md section 5.5: boundaries are multiples of windowDays measured
+    """enforcement-rule.md section 5.5: boundaries are multiples of windowDays measured
     from the Unix epoch; the boundary is the next multiple STRICTLY above d."""
 
     def test_next_multiple_above(self):
@@ -246,7 +246,7 @@ class TestPolicyReplay(unittest.TestCase):
         self.assertEqual(regime_in_force(schedule, 99).cap, 1000)
 
     def test_a_lowering_applies_immediately(self):
-        """SPEC.md section 5 rule 3."""
+        """enforcement-rule.md section 5 rule 3."""
         schedule = build_policy_schedule([
             genesis(cap=1000, window_days=7, day=0),
             PolicyEvent(seq=2, policyVersion=2, cap=400, windowDays=7,
@@ -257,7 +257,7 @@ class TestPolicyReplay(unittest.TestCase):
         self.assertEqual(regime_in_force(schedule, 4).cap, 400)
 
     def test_a_raise_applies_at_the_boundary_not_immediately(self):
-        """SPEC.md section 5 rules 4 and 5. Genesis day 0, w=7. A raise made
+        """enforcement-rule.md section 5 rules 4 and 5. Genesis day 0, w=7. A raise made
         on day 3 waits for day 7."""
         schedule = build_policy_schedule([
             genesis(cap=1000, window_days=7, day=0),
@@ -282,7 +282,7 @@ class TestPolicyReplay(unittest.TestCase):
         self.assertEqual(regime_in_force(schedule, 21).cap, 5000)
 
     def test_a_lowering_cancels_a_pending_raise(self):
-        """SPEC.md section 5 rule 3: a raise queued yesterday must not
+        """enforcement-rule.md section 5 rule 3: a raise queued yesterday must not
         resurrect itself after a lowering made today."""
         schedule = build_policy_schedule([
             genesis(cap=1000, window_days=7, day=0),
@@ -310,7 +310,7 @@ class TestPolicyReplay(unittest.TestCase):
         self.assertEqual(regime_in_force(schedule, 7).cap, 3000)
 
     def test_two_writes_effective_on_the_same_day_later_seq_wins(self):
-        """SPEC.md section 5 rule 6."""
+        """enforcement-rule.md section 5 rule 6."""
         schedule = build_policy_schedule([
             genesis(cap=1000, window_days=7, day=0),
             PolicyEvent(seq=2, policyVersion=2, cap=800, windowDays=7,
@@ -338,7 +338,7 @@ class TestPolicyReplay(unittest.TestCase):
         self.assertEqual(regime_in_force(schedule, 7).cap, 900)
 
     def test_a_write_may_change_the_window_length_too(self):
-        """SPEC.md section 5: both the cap and the window length come from the
+        """enforcement-rule.md section 5: both the cap and the window length come from the
         regime in force."""
         schedule = build_policy_schedule([
             genesis(cap=1000, window_days=7, day=0),
@@ -389,7 +389,7 @@ class TestPolicyReplay(unittest.TestCase):
 class TestCompliance(unittest.TestCase):
 
     def test_equality_exactly_at_the_cap_passes(self):
-        """SPEC.md section 6: the comparison is <=; equality passes."""
+        """enforcement-rule.md section 6: the comparison is <=; equality passes."""
         report = verify([rec(0, 1000)], [genesis(cap=1000)])
         day = result_for(report, 0)
         self.assertEqual(day.windowSum, 1000)
@@ -397,7 +397,7 @@ class TestCompliance(unittest.TestCase):
         self.assertTrue(day.compliant)
 
     def test_one_milli_usd_over_the_cap_fails(self):
-        """SPEC.md section 6: only a strictly greater sum is a breach."""
+        """enforcement-rule.md section 6: only a strictly greater sum is a breach."""
         report = verify([rec(0, 1001)], [genesis(cap=1000)])
         self.assertFalse(result_for(report, 0).compliant)
         self.assertEqual(len(report.breaches), 1)
@@ -407,7 +407,7 @@ class TestCompliance(unittest.TestCase):
         self.assertTrue(result_for(report, 0).compliant)
 
     def test_export_credit_restores_headroom_that_would_otherwise_breach(self):
-        """SPEC.md section 4/8.2: a negative day is real headroom."""
+        """enforcement-rule.md section 4/8.2: a negative day is real headroom."""
         spends = [rec(0, 400), rec(1, 400), rec(2, 400)]
         breaching = verify(spends, [genesis(cap=1000)])
         self.assertFalse(result_for(breaching, 2).compliant)   # 1200 > 1000
@@ -461,7 +461,7 @@ class TestCompliance(unittest.TestCase):
         self.assertTrue(result_for(report, 7).compliant)
 
     def test_lowering_below_the_accumulated_sum_is_not_retroactive(self):
-        """SPEC.md section 6.1."""
+        """enforcement-rule.md section 6.1."""
         records = [rec(d, 300) for d in range(0, 5)]   # 1500 by day 4
         events = [
             genesis(cap=2000, window_days=7, day=0),
@@ -499,7 +499,7 @@ class TestCompliance(unittest.TestCase):
 class TestPolicyVersionCrossCheck(unittest.TestCase):
 
     def test_mismatch_is_reported_and_is_not_a_breach(self):
-        """SPEC.md section 6.2: a divergence here is a separate, more serious
+        """enforcement-rule.md section 6.2: a divergence here is a separate, more serious
         category than overspending."""
         events = [
             genesis(cap=1000, window_days=7, day=0, seq=1, version=1),

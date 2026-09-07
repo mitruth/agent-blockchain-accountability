@@ -236,7 +236,7 @@ useful. No Solidity, no web3, no chain access.
 - **Do not read, open, grep, or list any `.sol` file.** Not the contracts, not
   the tests. If a tool result puts Solidity in front of you, stop and report it
   rather than using it.
-- **Do not read `DECISIONS.md`.** It records implementation strategy and would
+- **Do not read `docs/decisions/design-decisions.md`.** It records implementation strategy and would
   leak the on-chain approach.
 - Do not consult any other file in this repository for the rule. This document
   is complete; if you believe it is not, say so explicitly and state what is
@@ -293,7 +293,7 @@ report a defect if expected != effectiveFromDay
 ```
 
 Note that classification is against the regime in force on **`submittedOnDay`**,
-not on `effectiveFromDay`. That resolves ambiguity A3 in `verifier/README.md`,
+not on `effectiveFromDay`. That resolves ambiguity A3 in `docs/verifier/implementation-notes.md`,
 which had no defensible answer while the submission day was absent.
 
 A mismatch is a **third result category**, alongside a compliance breach and a

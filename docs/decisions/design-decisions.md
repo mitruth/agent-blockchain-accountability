@@ -380,6 +380,29 @@ opposite conclusions and must never share an output.
 **Consequence for step 4.** The mutation suite reports three states, not two:
 caught, not caught, and invalid mutant.
 
+### D5.6 — Documentation lives in `docs/`, one folder per category
+
+**Decision.** All documentation moved out of the repository root into `docs/`,
+with a subfolder per category: `guide/`, `decisions/`, `spec/`, `verifier/`.
+Only the project `README.md` stays at the root. New documents go in a category
+folder; a new folder is added when a genuinely new category appears.
+
+**Why.** Four documents at the root was already hard to scan, and the work still
+to come adds a security analysis, an evaluation write-up, a mutation-suite
+report and a record-schema note. Deciding the shape once, while there are four
+files rather than ten, costs nothing; deciding it later means moving every file
+and rewriting every reference again.
+
+**Cost paid once.** 68 lines across 8 files referenced these documents by path,
+including 39 inside the verifier's own source and tests. All were rewritten, and
+`git mv` preserved history. Cross-references now use the full repository path so
+they read identically from source, commit message or another document.
+
+**Naming.** Files are named for what they are, not where they sit:
+`enforcement-rule.md` rather than another `SPEC.md`, `implementation-notes.md`
+rather than another `README.md`. Four files called `README.md` in four folders
+is not an improvement on four files at the root.
+
 ### D5.5 — Build scripts committed where they actually live
 
 **Decision.** `export_records.py` and `calibrate_policy.py` are committed in the
@@ -409,7 +432,7 @@ The verifier, on a write it classifies as a raise, computes the effective day as
 `effectiveFromDay` in the event has *already* been deferred by the chain, so the
 boundary function is applied twice and the raise slips an extra window.
 
-**Why this is the specification's fault, not the verifier's.** SPEC.md §2.2 says
+**Why this is the specification's fault, not the verifier's.** enforcement-rule.md §2.2 says
 `effectiveFromDay` is always explicit and must never be inferred. §5.4 says a
 raise takes effect at the next window boundary. With no submission day in the
 event, those two instructions cannot both be followed, and each reading fails in
@@ -494,7 +517,7 @@ Not yet decided. Listed so they are not silently resolved.
   integer — if it is meant to apply at a specific conversion step, §7 should
   name it. And §5 never says what governs a recorded day falling before the
   first effective write. The full list of 22 ambiguities is in
-  `verifier/README.md`.
+  `docs/verifier/implementation-notes.md`.
 
 - **Q1 — Does an agent-paused day get recorded at all?** *(still open)* `submitDay` currently
   reverts when the agent is paused, so no record is written and the day becomes

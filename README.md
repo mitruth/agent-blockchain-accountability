@@ -1,3 +1,14 @@
+# Delegated-authority enforcement for a home energy agent
+
+An on-chain spending policy an autonomous energy agent operates under and
+cannot change, plus evidence that every action stayed inside it.
+
+**Documentation is in [`docs/`](docs/README.md).** Start with
+[`docs/guide/project-guide.md`](docs/guide/project-guide.md) for what every file
+does and how to run everything locally.
+
+---
+
 # Daily records for on-chain policy
 
 These CSVs are a compressed, integer-only view of one simulated year of home energy
