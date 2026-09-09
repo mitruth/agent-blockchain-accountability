@@ -182,7 +182,7 @@ deployment context suggests otherwise.
 
 ## 3. Records
 
-### D3.1 — `DayRecord` is a frozen schema
+### D3.1 — `DayRecord` is a frozen schema  **[Superseded by D3.7]**
 
 **Decision.** The struct is fixed as specified: `dayIndex uint64`,
 `netSpend int256`, `policyVersion uint256`, `paused bool` — in that field order.
@@ -209,7 +209,7 @@ the mechanism. Discarding export credit was rejected for the same reason.
 (B0 9, B1 16, B2 10), most negative −428 milli-USD on B1 day 167. This is not a
 hypothetical path.
 
-### D3.3 — Existence is tracked outside the frozen struct
+### D3.3 — Existence is tracked outside the frozen struct  **[Superseded by D3.7]**
 
 **Decision.** `isRecorded` is a separate mapping, not a field on `DayRecord`.
 
@@ -218,12 +218,100 @@ The distinction is needed, but adding an `exists` field would change a schema
 that is meant to be frozen. Keeping it outside leaves the record schema exactly
 as specified.
 
+### D3.7 — Storage is a bounded one-year ring; events are the archive
+
+**Supersedes D3.1 and D3.3.** Taken before deployment, which is the only moment
+the ledger's layout can change at all.
+
+**Decision.** `SpendLedger` keeps the most recent `RETENTION_DAYS = 365` days in
+a fixed-size ring keyed by `dayIndex % RETENTION_DAYS`. Older days are evicted
+from storage and survive only in the `DayRecorded` event log. `DayRecord` is
+repacked and gains a `recorded` flag; the separate `isRecorded` mapping is gone.
+
+**Why bound it.** The previous mapping grew by a slot every day, forever, while
+the rule never looks back further than `windowDays`. Storage only has to hold
+what the contract needs to enforce the rule on itself. The claim that matters —
+that a third party can recompute compliance from the event log alone — is
+untouched, because the log is unbounded and complete.
+
+**Why a ring rather than pruning.** Pruning needs a loop, a deletion, and refund
+mechanics that EIP-3529 caps anyway. A ring is O(1), has no loop to bound, and
+has a fixed footprint from the first day. `dayIndex` was already in the schema,
+where it duplicated the mapping key; in a ring it becomes the thing that
+distinguishes a live slot from a wrapped leftover.
+
+**Measured.** First write to a virgin slot 95,753 gas; overwrite once the ring
+has filled 7,700. A 92% reduction in steady state, reported by
+`test_reportGasFirstWriteVersusOverwrite` so the evaluation quotes a measured
+figure rather than a cold-start one.
+
+**Repacking.** `dayIndex`, `paused` and `recorded` share one slot, so a record
+costs 3 slots against the 4 the specification's declaration order cost. D3.1
+paid that slot for fidelity to a frozen schema; the schema is being reopened
+regardless, so the reason no longer applies.
+
+**Why `recorded` exists at all.** For every day but one, `slot.dayIndex == d`
+settles whether a slot is live. Day 0 is the exception: an untouched slot also
+reads `dayIndex == 0`. The flag costs nothing — it packs into the same slot —
+and removes the special case instead of documenting it.
+
+**The failure this could have introduced.** A wrapped slot holds a real record
+from exactly a year earlier. Read as current, it produces a wrong window sum
+with no error anywhere. `test_windowIgnoresWrappedLeftovers` and
+`test_writeExactlyOneRetentionLaterEvictsTheOlderDay` exist for that, and two
+mutations confirm they bite: dropping the `dayIndex` check in either
+`netSpendOf` or `isRecorded` fails 3 tests each.
+
+**Not adopted: writing an explicit zero for days the agent never reported.**
+It would change no arithmetic — an absent day already contributes zero to every
+window — while asserting that the agent reported a day on which it reported
+nothing. In a system whose product is evidence, the gap is the evidence: it
+separates an offline agent from one reporting a genuinely zero day. It would
+also make an outage expensive, since only the session key can write and it would
+have to backfill every missed day at roughly 20,000 gas each before reporting
+today. Paused days remain the exception and are written as explicit zeros with
+`paused = true`, because a pause is a real event rather than an absence.
+
+### D3.8 — `windowDays` is bounded above by the retention period
+
+**Decision.** `PolicyConfig.MAX_WINDOW_DAYS = 365`, enforced in the constructor
+and in `setPolicy`, and required to equal `SpendLedger.RETENTION_DAYS`.
+
+**Why.** Two reasons, and the second is the serious one.
+
+Before the ring, `windowDays` had only a non-zero check on a `uint32`. An owner
+typo of a few hundred thousand would make `windowSum` loop that many times and
+every submission run out of gas. Owner-set rather than agent-set, so not an
+attack path, but a permanent stall until the owner noticed and lowered it.
+
+After the ring it stops being a liveness problem and becomes a correctness one.
+A window longer than retention reaches past the wrap, reads evicted days as
+zero, and understates the sum — quietly, with nothing erroring. The bound is
+what makes that unreachable.
+
+**Kept in step by a test.** The two constants live in different contracts, so
+`test_retentionAndMaxWindowAgree` asserts they are equal. Shrinking retention to
+364 fails it, plus one more.
+
 ### D3.4 — Same-day resubmission accumulates
 
 **Decision.** A second submission for a day already recorded adds to it.
 
 **Why.** Preserved from the audited implementation, where it was confirmed
 sound. Several settlements may land on one calendar day and each must count.
+
+**Was untested until D3.7's mutation run.** Replacing the accumulation with an
+overwrite passed all 70 tests. The audited version had covered it, but only in
+a live-testnet script that was deleted with the rest of that tooling, and the
+behaviour was never carried into the local suite. Three tests now cover it. The
+gap mattered: without accumulation an agent can split a breach across two
+submissions in one day.
+
+Worth recording precisely, because the obvious test is not the one that catches
+it. `test_agentCannotSplitABreachAcrossOneDay` still passes under the overwrite
+mutation, because the cap is checked against the stored value *before* the write
+— the corruption only shows in what is stored afterwards. The two tests that
+assert the stored total are what discriminate.
 
 ### D3.5 — Day index is UTC, derived on-chain, never supplied
 

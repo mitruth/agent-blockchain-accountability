@@ -18,6 +18,20 @@ contract PolicyConfig {
     ///         Pinned here so nothing depends on a host timezone.
     uint64 public constant SECONDS_PER_DAY = 86400;
 
+    /// @notice Upper bound on the rolling window length, in days.
+    ///
+    /// Must equal SpendLedger.RETENTION_DAYS, and a test asserts the two agree.
+    /// The ledger holds only the most recent RETENTION_DAYS in storage; a
+    /// window longer than that would reach past the ring's wrap, read evicted
+    /// days as zero, and understate the sum without erroring. Bounding it here
+    /// is what keeps that unreachable.
+    ///
+    /// It also bounds the validator's window loop. windowDays is owner-set
+    /// rather than agent-set, so this is not an attack path, but an owner typo
+    /// of a few hundred thousand would otherwise make every submission run out
+    /// of gas.
+    uint32 public constant MAX_WINDOW_DAYS = 365;
+
     /// @notice One cap regime, in force from `effectiveFromDay` onward until a
     ///         later epoch supersedes it.
     struct CapEpoch {
@@ -100,6 +114,10 @@ contract PolicyConfig {
         uint32 unpauseDelaySeconds_
     ) {
         require(initialWindowDays != 0, "PolicyConfig: windowDays is zero");
+        require(
+            initialWindowDays <= MAX_WINDOW_DAYS,
+            "PolicyConfig: windowDays exceeds ledger retention"
+        );
         require(pauseExpirySeconds_ != 0, "PolicyConfig: pauseExpiry is zero");
         require(
             unpauseDelaySeconds_ < pauseExpirySeconds_,
@@ -215,6 +233,10 @@ contract PolicyConfig {
     /// Pause does not block this path -- the owner must always be able to lower.
     function setPolicy(int256 newCap, uint32 newWindowDays) external onlyOwner {
         require(newWindowDays != 0, "PolicyConfig: windowDays is zero");
+        require(
+            newWindowDays <= MAX_WINDOW_DAYS,
+            "PolicyConfig: windowDays exceeds ledger retention"
+        );
 
         uint64 today = todayIndex();
         CapEpoch memory current = regimeAt(today);

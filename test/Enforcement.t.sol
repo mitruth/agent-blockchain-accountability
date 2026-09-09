@@ -195,6 +195,55 @@ contract EnforcementTest is Test {
         assertEq(validator.windowSum(ANCHOR_DAY), -1500);
     }
 
+
+    // ------------------------------------------------------------------
+    // Same-day resubmission accumulates
+    //
+    // Preserved from the audited implementation: several settlements may land
+    // on one calendar day and each must count. Found untested by a mutation --
+    // replacing the accumulation with an overwrite passed the entire suite,
+    // which is the difference between a cap and a cap the agent can evade by
+    // submitting twice.
+    // ------------------------------------------------------------------
+
+    function test_sameDayResubmissionAccumulates() public {
+        submit(ANCHOR_DAY, 1200);
+        assertEq(ledger.netSpendOf(ANCHOR_DAY), 1200);
+
+        warpToDay(ANCHOR_DAY);
+        vm.prank(agent);
+        validator.submitDay(800);
+
+        assertEq(ledger.netSpendOf(ANCHOR_DAY), 2000, "the day must hold the sum, not the last write");
+        assertEq(validator.windowSum(ANCHOR_DAY), 2000);
+    }
+
+    /// The agent must not be able to split a breach across two submissions in
+    /// the same day. The second is checked against the window the first left.
+    function test_agentCannotSplitABreachAcrossOneDay() public {
+        submit(ANCHOR_DAY, 6000);
+
+        // 6000 + 5000 = 11000, over the 10000 cap. Under an overwrite this
+        // would be checked as though the day held nothing and would pass.
+        warpToDay(ANCHOR_DAY);
+        vm.prank(agent);
+        vm.expectRevert(SpendValidator.SpendValidator_CapExceeded.selector);
+        validator.submitDay(5000);
+
+        assertEq(ledger.netSpendOf(ANCHOR_DAY), 6000, "the rejected top-up left no trace");
+    }
+
+    /// A negative top-up on the same day nets off rather than replacing.
+    function test_sameDayResubmissionAccumulatesNegatives() public {
+        submit(ANCHOR_DAY, 4000);
+
+        warpToDay(ANCHOR_DAY);
+        vm.prank(agent);
+        validator.submitDay(-1500);
+
+        assertEq(ledger.netSpendOf(ANCHOR_DAY), 2500);
+    }
+
     // ------------------------------------------------------------------
     // Records bind the policy they were checked against
     // ------------------------------------------------------------------
@@ -353,7 +402,7 @@ contract EnforcementTest is Test {
 
         warpToDay(ANCHOR_DAY);
         vm.prank(agent);
-        vm.expectRevert(bytes("SpendLedger: not an allowlisted writer"));
+        vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
         orphan.submitDay(1000);
     }
 

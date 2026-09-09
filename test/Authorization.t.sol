@@ -223,7 +223,7 @@ contract AuthorizationTest is Test {
 
     function test_agent_mayNotWriteLedgerDirectly() public {
         vm.prank(agent);
-        vm.expectRevert(bytes("SpendLedger: not an allowlisted writer"));
+        vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
         ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
 
         assertFalse(ledger.isRecorded(ANCHOR_DAY));
@@ -231,7 +231,7 @@ contract AuthorizationTest is Test {
 
     function test_agent_mayNotAlterLedgerAllowlist() public {
         vm.prank(agent);
-        vm.expectRevert(bytes("SpendLedger: only owner"));
+        vm.expectRevert(SpendLedger.SpendLedger_OnlyOwner.selector);
         ledger.setWriter(agent, true);
 
         assertFalse(ledger.isWriter(agent));
@@ -310,13 +310,13 @@ contract AuthorizationTest is Test {
 
     function test_guardian_mayNotWriteLedger() public {
         vm.prank(guardian);
-        vm.expectRevert(bytes("SpendLedger: not an allowlisted writer"));
+        vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
         ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
     }
 
     function test_guardian_mayNotAlterLedgerAllowlist() public {
         vm.prank(guardian);
-        vm.expectRevert(bytes("SpendLedger: only owner"));
+        vm.expectRevert(SpendLedger.SpendLedger_OnlyOwner.selector);
         ledger.setWriter(guardian, true);
     }
 
@@ -363,7 +363,7 @@ contract AuthorizationTest is Test {
         assertFalse(ledger.isWriter(address(module)));
 
         vm.prank(address(module));
-        vm.expectRevert(bytes("SpendLedger: not an allowlisted writer"));
+        vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
         ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
     }
 
@@ -387,7 +387,7 @@ contract AuthorizationTest is Test {
         assertTrue(account.installedModules(address(module)), "still installed");
 
         vm.prank(address(module));
-        vm.expectRevert(bytes("SpendLedger: not an allowlisted writer"));
+        vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
         ledger.recordDay(ANCHOR_DAY + 1, 5000, 1, false);
     }
 
@@ -405,11 +405,11 @@ contract AuthorizationTest is Test {
         config.pauseSpends();
 
         vm.prank(stranger);
-        vm.expectRevert(bytes("SpendLedger: only owner"));
+        vm.expectRevert(SpendLedger.SpendLedger_OnlyOwner.selector);
         ledger.setWriter(stranger, true);
 
         vm.prank(stranger);
-        vm.expectRevert(bytes("SpendLedger: not an allowlisted writer"));
+        vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
         ledger.recordDay(ANCHOR_DAY, 1, 1, false);
     }
 
@@ -419,7 +419,7 @@ contract AuthorizationTest is Test {
         vm.expectRevert(bytes("PolicyConfig: only owner"));
         config.setPolicy(PERMISSIVE_CAP, WINDOW_DAYS);
 
-        vm.expectRevert(bytes("SpendLedger: only owner"));
+        vm.expectRevert(SpendLedger.SpendLedger_OnlyOwner.selector);
         ledger.setWriter(address(this), true);
     }
 }
