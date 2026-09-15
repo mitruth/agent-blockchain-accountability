@@ -5,6 +5,8 @@ root except the project `README.md` itself.
 
 ## Where to start
 
+**Picking the work back up?** Read [plan/roadmap.md](plan/roadmap.md) first.
+
 New to the project — read these in order:
 
 1. **[guide/project-guide.md](guide/project-guide.md)** — what every file and
@@ -23,6 +25,7 @@ New to the project — read these in order:
 | `guide/` | Orientation and runbooks — how to find things and how to run them | `project-guide.md` |
 | `decisions/` | The design decision log. Append-only: a reversal gets a new entry marked **Superseded**, never an edit | `design-decisions.md` |
 | `spec/` | Specifications. What a thing must do, written so an implementation can be checked against it rather than derived from it | `enforcement-rule.md` |
+| `plan/` | Where the work stands and what comes next, in dependency order | `roadmap.md` |
 | `verifier/` | Notes on the independent verifier: its assumptions, its ambiguity list, and what it found | `implementation-notes.md` |
 
 Expected next, once the work reaches them: `security/` for the threat model and
