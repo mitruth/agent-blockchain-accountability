@@ -48,7 +48,7 @@ contract DifferentialTest is Test {
         config = new PolicyConfig(guardian, agent, cap, windowDays, PAUSE_EXPIRY, UNPAUSE_DELAY);
         ledger = new SpendLedger();
         account = new SmartAccount(config, ledger);
-        validator = new SpendValidator(config, ledger, address(account));
+        validator = new SpendValidator(config, ledger, address(account), 0);
         account.installModule(address(validator));
         account.setSpendValidator(address(validator));
         // The test writes records directly; see the note above.

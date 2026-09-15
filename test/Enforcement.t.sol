@@ -43,7 +43,7 @@ contract EnforcementTest is Test {
         config = new PolicyConfig(guardian, agent, CAP, WINDOW_DAYS, PAUSE_EXPIRY, UNPAUSE_DELAY);
         ledger = new SpendLedger();
         account = new SmartAccount(config, ledger);
-        validator = new SpendValidator(config, ledger, address(account));
+        validator = new SpendValidator(config, ledger, address(account), 0);
 
         account.installModule(address(validator));
         account.setSpendValidator(address(validator));
@@ -370,7 +370,7 @@ contract EnforcementTest is Test {
 
         // Swap in a fresh validator against the same, never-redeployed ledger.
         vm.startPrank(owner);
-        SpendValidator validator2 = new SpendValidator(config, ledger, address(account));
+        SpendValidator validator2 = new SpendValidator(config, ledger, address(account), 0);
         account.installModule(address(validator2));
         account.setSpendValidator(address(validator2));
         ledger.setWriter(address(validator2), true);
@@ -396,7 +396,7 @@ contract EnforcementTest is Test {
     /// D1.3 from the validator's side.
     function test_validatorWithoutAllowlistEntryCannotRecord() public {
         vm.startPrank(owner);
-        SpendValidator orphan = new SpendValidator(config, ledger, address(account));
+        SpendValidator orphan = new SpendValidator(config, ledger, address(account), 0);
         account.installModule(address(orphan));
         vm.stopPrank();
 
