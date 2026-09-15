@@ -50,6 +50,10 @@ contract PolicyConfig {
     ///         no pause.
     address public sessionKey;
 
+    /// @notice The price feed daily spend is computed against. Owner-chosen;
+    ///         the publisher behind it is the oracle's own key (D7.2).
+    address public priceOracle;
+
     /// @notice Append-only in effect: strictly increasing in effectiveFromDay.
     ///         A write whose effectiveFromDay equals the last epoch's replaces
     ///         it rather than appending, so last-write-wins on a given day.
@@ -88,6 +92,7 @@ contract PolicyConfig {
 
     event GuardianUpdated(address indexed previousGuardian, address indexed newGuardian);
     event SessionKeyUpdated(address indexed previousSessionKey, address indexed newSessionKey);
+    event PriceOracleUpdated(address indexed previousOracle, address indexed newOracle);
 
     event SpendsPaused(address indexed by, uint64 startedAt, uint64 expiresAt);
     event AgentPaused(address indexed by, uint64 startedAt, uint64 expiresAt);
@@ -315,6 +320,13 @@ contract PolicyConfig {
     function setSessionKey(address newSessionKey) external onlyOwner {
         emit SessionKeyUpdated(sessionKey, newSessionKey);
         sessionKey = newSessionKey;
+    }
+
+    /// @notice Choose which price oracle daily spend is computed against.
+    ///         The owner picks the feed; it never publishes prices itself.
+    function setPriceOracle(address newOracle) external onlyOwner {
+        emit PriceOracleUpdated(priceOracle, newOracle);
+        priceOracle = newOracle;
     }
 
     // ------------------------------------------------------------------
