@@ -18,6 +18,7 @@ Findings referenced throughout:
 | F4 | Half-away-from-zero rounding claimed but not asserted on both sides. |
 | F5 | *(found during the rebuild survey, not in the original audit)* The agent could empty the rolling window alone by advancing `dayIndex`. |
 | F6 | *(found during the rebuild survey)* The validated quantity and the recorded quantity were different numbers written by different keys. |
+| F8 | *(raised by Dan after step 3)* The agent reports its own daily spend, so the cap bounds *reported* spend. An agent that wants to overspend reports less. |
 | F7 | *(found by the step 3 differential)* `PolicyUpdated` does not carry the day the write was submitted, so an independent verifier can either avoid false positives or detect a broken deferral rule, but not both. |
 
 Baseline commit, as audited: `1f49b7eb70634e4e3cd2f910d57c8d2d60621f5e`.
@@ -293,7 +294,7 @@ what makes that unreachable.
 `test_retentionAndMaxWindowAgree` asserts they are equal. Shrinking retention to
 364 fails it, plus one more.
 
-### D3.4 — Same-day resubmission accumulates
+### D3.4 — Same-day resubmission accumulates  **[Superseded on the live path by D7.9]**
 
 **Decision.** A second submission for a day already recorded adds to it.
 
@@ -313,7 +314,7 @@ mutation, because the cap is checked against the stored value *before* the write
 — the corruption only shows in what is stored afterwards. The two tests that
 assert the stored total are what discriminate.
 
-### D3.5 — Day index is UTC, derived on-chain, never supplied
+### D3.5 — Day index is UTC, derived on-chain, never supplied  **[Superseded by D7.8]**
 
 **Decision.** `dayIndex = block.timestamp / 86400`, computed by the contract.
 The submitter passes only `netSpend`.
@@ -636,6 +637,218 @@ Enforcement behaviour is covered separately in `Enforcement.t.sol`.
 
 ---
 
+## 7. Measured inputs: the agent no longer reports its spend
+
+Decided 2026-09-15 with Dan, before deployment. This section replaces the
+agent-reported spend path that steps 1–3 were built on. The earlier decisions
+stay in the log as history; the ones this section overrides are marked.
+
+### D7.1 — Spend is computed on-chain from measured inputs (F8)
+
+**Decision.** The agent no longer submits a daily spend figure. Daily spend is
+computed by the contract from two inputs the agent does not control: per
+half-hour grid import and export, signed by a meter, and per half-hour prices,
+published by a price oracle.
+
+**Why.** Every enforcement result so far bounded a number the agent supplied.
+The rule could be implemented perfectly, twice, by independent authors, and an
+agent could still overspend by under-reporting. That breaks the project's
+governing principle — the proposer is never trusted — at the one input that
+matters most.
+
+**Why moving the arithmetic alone was not enough.** Had the agent posted raw
+quantities for the contract to multiply, it would under-report imports instead
+of spend. What closes the gap is who supplies each input, not where the
+multiplication happens.
+
+**Why per half-hour, not daily totals.** Prices vary up to 3.3× within a day.
+Daily import and export totals multiplied by the day's mean price mis-state
+spend by 393 mUSD/day on average and 19,801 mUSD on the worst day of 2022 —
+larger than the entire 7-day strict cap of 18,096.
+
+**Remaining trust assumptions, stated rather than hidden.** Enforcement is sound
+provided the meter reports honestly and the price publisher publishes honestly.
+Neither is the agent, and a real deployment would have exactly these two parties
+in a smart meter and a market data feed. The security analysis must say so.
+
+### D7.2 — Prices come from a price oracle with its own publisher key
+
+**Decision.** A `PriceOracle` contract. A fourth key, the price publisher,
+publishes one UTC day of 48 import prices and 48 export prices, once per day,
+never amended. The oracle stores a hash commitment to the day's prices and emits
+the prices in full; settlement passes the prices in and the contract checks them
+against the commitment.
+
+**Why not the owner.** Posting 96 prices a day is operational work an owner key
+should not be doing, and it would put a hot key in charge of a policy-critical
+input. Dan's call.
+
+**Why a commitment rather than stored prices.** Storing 96 prices is 24 slots a
+day; a commitment is one. The prices still reach the chain, in the event, and
+the event log is already the archive (D3.7). Prices and meter readings then have
+the same shape: authenticated once, carried as calldata.
+
+**Simulated.** A script holding the publisher key reads `rtp_usd_per_kwh` from
+the dataset — the real CAISO TH_NP15 real-time series — and publishes it. The
+publisher never runs in the agent's process. The contract interface is narrow so
+a real feed can replace the simulated one.
+
+**Changed from what was proposed in conversation.** The proposal was an
+owner-set export multiplier φ in `PolicyConfig`. Rejected on implementation
+review: raising φ lowers measured spend, so it would be a cap raise that
+bypasses the boundary deferral of D4.1. Export tariffs are also set by the
+utility, not the household. The publisher therefore publishes export prices
+directly; the simulated publisher derives them with the simulator's existing
+rule, `price_exp = max(0, 0.3 × price_imp)`.
+
+**Signed.** Prices are signed integers. CAISO real-time prices can go negative;
+none do in 2022, but the contract must not assume it.
+
+### D7.3 — Grid import and export come from a meter; anyone may relay the readings
+
+**Decision.** The meter key signs a day's 48 import and 48 export readings. Any
+address may submit the signed payload; the contract checks the signature against
+the meter address the owner registered in `PolicyConfig`.
+
+**Simulated.** The dataset contains no meter data at all — it is simulated, and
+grid import and export are not in it. The HEMS simulator computes them from load,
+PV and the agent's own battery and appliance decisions. The simulator, not the
+agent, therefore plays the meter and holds its key.
+
+**Why anyone may relay.** It removes a withholding attack that exists today: an
+agent that reports its own days can simply not report a bad one, and a missing
+day counts as zero. When authenticity comes from the meter's signature rather
+than from who sends the transaction, the owner or the guardian can post a day
+the agent withheld.
+
+**What the signature binds.** Chain id, the `SpendLedger` address, the day, and
+all 96 readings. The ledger rather than the validator, because the ledger is
+never redeployed: signatures stay valid across a validator upgrade, and cannot
+be replayed onto another ledger or chain.
+
+### D7.4 — Battery degradation is excluded from the enforced spend
+
+**Decision.** Enforced spend is energy cost only:
+`Σ import × import_price − export × export_price`. The simulator's `c_deg` term
+stays a reported metric off-chain and stays in the controllers' objective.
+
+**Why.** Degradation is modelled battery wear, not money paid, and the owner
+delegated spending authority. Decisively, it is computed from battery discharge,
+which sits behind the meter and would have to be reported by the agent —
+re-introducing exactly the agent-reported input D7.1 removes. It is 1.8% of
+annual cost.
+
+**Consequence.** `export_records.py` validates against published annual costs
+that include degradation; it needs energy-only reference figures. Caps are
+recalibrated anyway (Phase E).
+
+### D7.5 — Record the measured day, then restrict the agent
+
+**Decision.** A settled day is always recorded, whatever its spend. When the
+rolling window is over the cap, the agent's authorisation is withdrawn until the
+window falls back under it. Supersedes the revert-on-breach behaviour of
+`submitDay`.
+
+**Why.** Reverting an over-cap report left a hole: the rejected day was never
+written, so it counted as zero in the next six windows, and a breach gave the
+agent *more* headroom afterwards. With self-reported spend that could be read as
+"authorisation denied". With meter readings describing energy already consumed,
+refusing to record them makes the ledger show less spend than occurred. The
+ledger must record what happened; enforcement acts on what the agent may do
+next.
+
+**Consequence for F6 (Q2).** `SmartAccount.execute` becomes the gated action.
+Transfer values are not spend — spend is metered — so the validator stops
+treating them as spend and checks the agent's authorisation instead.
+
+### D7.6 — Pause gates actions, not accounting (resolves Q1)
+
+**Decision.** A pause blocks the agent's actions. It no longer changes a day's
+recorded spend.
+
+**Why.** "A paused day is a zero-spend day" made sense when the agent reported
+spend: a pause could force the report to zero. A pause cannot make metered
+energy not have been consumed. Q1 — whether an agent-paused day is recorded —
+dissolves: the meter's day is recorded regardless.
+
+**Supersedes a rule from the handoff document itself**, which said a paused day
+is a zero-spend day. Recorded explicitly because the handoff was authoritative
+where it conflicted with code; this is a deliberate change of premise, approved
+by Dan, not a drift.
+
+### D7.7 — The day boundary is UTC; the dataset clock is treated as fixed UTC−8
+
+**Decision.** Prices and readings are grouped into UTC days of 48 half-hours. The
+dataset's `America/Los_Angeles` timestamps, which run a regular 48-step grid on
+every day including daylight-saving transitions, are mapped to UTC as a fixed
+UTC−8 offset. The two partial UTC days at the edges of the 2022 evaluation year
+are dropped, leaving 364 complete days.
+
+**Why.** On-chain day index is UTC (D3.5). A local day and a UTC day are eight
+hours apart, so the two sides would otherwise put different half-hours into the
+same day. The dataset's grid has no gaps or duplicates at DST transitions, so it
+is not true local time; a fixed offset preserves a one-to-one mapping to UTC.
+The cost is a one-hour misalignment between the grid and wall-clock time during
+summer, identical on both sides because both read the same readings.
+
+### D7.8 — Settled days are consecutive and strictly in the past (supersedes D3.5)
+
+**Decision.** A day may be settled only after it has ended, and only as the day
+immediately following the last settled day.
+
+**Why it supersedes D3.5.** The day index is now supplied by whoever relays the
+readings, not derived from block time. F5 — an agent emptying its window by
+jumping the day index forward — stays closed for three reasons: the agent does
+not settle days, the meter signs the real day, and settlement cannot skip.
+
+**Why consecutive.** Without it, a stranger holding two valid signed days could
+settle the later one first. The ledger's non-decreasing rule would then make the
+earlier day permanently unrecordable, and it would count as zero — handing the
+agent headroom. A permissionless relay has to be ordered.
+
+### D7.9 — One settlement per day, no corrections (supersedes D3.4 on the live path)
+
+**Decision.** A meter day is settled once and is final. The ledger still supports
+same-day accumulation for its writers, but the live path never uses it.
+
+**Why.** The meter reports a complete day, not a stream of settlements, so there
+is nothing to accumulate. A correction mechanism is a real need for a deployment
+with real meters and is out of scope here; recorded so it is a known gap rather
+than a surprise.
+
+### D7.10 — Integer units, and rounding happens once, on-chain (moves F4)
+
+**Decision.** Readings are unsigned milliwatt-hours; prices are signed integers
+in 10⁻⁸ USD/kWh. The contract sums the day exactly as an integer numerator and
+rounds once, half away from zero, to milli-USD.
+
+**Why these units.** The dataset's prices carry 8 decimal places, so 10⁻⁸
+USD/kWh is exact. The simulator's energy values carry up to 20 decimal places of
+floating-point noise, so the simulated meter must round to a resolution the way
+a real meter does; at 1 mWh the rounding moves a day's spend by far less than
+one milli-USD.
+
+**Why round once.** Rounding each half-hour would compound 48 rounding errors
+into the day. Keeping the exact numerator and rounding the total matches how the
+existing records are built — once per field per day.
+
+**Consequence.** F4 is no longer a float-to-integer step in the export script.
+It is signed integer division in Solidity, and the verifier must reproduce it
+independently.
+
+### D7.11 — The agent is unauthorised when settlement falls behind
+
+**Decision.** If the last settled day is more than two days before today, the
+agent is unauthorised, exactly as if it were over the cap.
+
+**Why.** Enforcement can only see settled days. If settlement stalls — a meter
+outage, a missing price day, deliberate withholding — the agent would otherwise
+keep acting against a window that no longer reflects what it spends. The failure
+has to be closed: no fresh measurement, no authority. Two days allows a day to
+end, prices and readings to be signed, and a relay to land.
+
+---
+
 ## Open questions
 
 Not yet decided. Listed so they are not silently resolved.
@@ -650,7 +863,7 @@ Not yet decided. Listed so they are not silently resolved.
   first effective write. The full list of 22 ambiguities is in
   `docs/verifier/implementation-notes.md`.
 
-- **Q1 — Does an agent-paused day get recorded at all?** *(still open)* `submitDay` currently
+- **Q1 — Does an agent-paused day get recorded at all?** *(resolved by D7.6)* `submitDay` currently
   reverts when the agent is paused, so no record is written and the day becomes
   a *missing* day rather than a zero day. Arithmetically the window still
   advances (an unrecorded day reads as zero), but the record set has a hole, and
@@ -658,7 +871,7 @@ Not yet decided. Listed so they are not silently resolved.
   the suite. Options: record a forced zero with `paused = true` instead of
   reverting, or accept the hole and document it.
 
-- **Q2 — Is F6 closed, or deliberately out of scope?** `validateTransaction`
+- **Q2 — Is F6 closed, or deliberately out of scope?** *(resolved by D7.5)* `validateTransaction`
   checks the window but `execute` records nothing; `submitDay` records but is a
   separate path. The two are still different numbers from different keys. This
   may be correct — `execute` is the transaction-level counterfactual the paper
