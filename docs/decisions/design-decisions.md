@@ -847,6 +847,46 @@ keep acting against a window that no longer reflects what it spends. The failure
 has to be closed: no fresh measurement, no authority. Two days allows a day to
 end, prices and readings to be signed, and a relay to land.
 
+
+### D7.12 — The meter may never be the agent's session key, enforced on-chain
+
+**Decision.** `PolicyConfig.setMeter` refuses the current session key, and
+`setSessionKey` refuses the current meter. Revoking the session key to zero is
+unaffected.
+
+**Why.** The same lesson as F1. If one key both acts as the agent and signs the
+meter readings, the agent is back to reporting its own spend, and nothing else
+in the system would notice. One misconfiguration at deployment is enough, so the
+rule is enforced rather than trusted to a deployment script.
+
+**Not extended to the price publisher.** The publisher lives in `PriceOracle`,
+and the oracle's admin can change it at any time without `PolicyConfig` seeing
+the change, so a check at registration would be partial and could give false
+comfort. Keeping the publisher distinct from the agent is a deployment
+obligation, and the security analysis must list it as one.
+
+### D7.13 — Meter readings are EIP-712 typed data, checked against an independent encoder
+
+**Decision.** The meter signs `MeterReadings(uint64 dayIndex, uint64[48]
+importMWh, uint64[48] exportMWh)` under domain `HouseholdMeter`, version `1`.
+One test pins the Solidity digest to a value computed separately with viem's
+`hashTypedData`.
+
+**Why typed data.** A standard encoding means an ordinary signer produces the
+signature — the simulated meter signs with viem, and a hardware signer could do
+the same — rather than a bespoke hash only this contract understands.
+
+**Why the pinned reference.** Every other signature test compares the contract
+against itself, so an error in how fixed-size arrays are encoded would pass all
+of them and then fail every genuine signature in deployment. The pinned test
+caught four of the twelve A2 mutations, and was the only test to catch the
+removal of the EIP-712 `\x19\x01` prefix.
+
+**One equivalent mutant, recorded as such.** Removing the check that `v` is 27
+or 28 changes nothing observable: the recovery precompile already returns the
+zero address for any other `v`, and the zero-signer check rejects it with the
+same error. The explicit check stays for readability; it is not a test gap.
+
 ---
 
 ## Open questions

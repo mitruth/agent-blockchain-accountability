@@ -54,6 +54,11 @@ contract PolicyConfig {
     ///         the publisher behind it is the oracle's own key (D7.2).
     address public priceOracle;
 
+    /// @notice The key that signs grid import and export readings. Never the
+    ///         agent's session key: an agent that signs its own meter readings
+    ///         reports its own spend again, which is F8 in a different shape.
+    address public meter;
+
     /// @notice Append-only in effect: strictly increasing in effectiveFromDay.
     ///         A write whose effectiveFromDay equals the last epoch's replaces
     ///         it rather than appending, so last-write-wins on a given day.
@@ -93,6 +98,7 @@ contract PolicyConfig {
     event GuardianUpdated(address indexed previousGuardian, address indexed newGuardian);
     event SessionKeyUpdated(address indexed previousSessionKey, address indexed newSessionKey);
     event PriceOracleUpdated(address indexed previousOracle, address indexed newOracle);
+    event MeterUpdated(address indexed previousMeter, address indexed newMeter);
 
     event SpendsPaused(address indexed by, uint64 startedAt, uint64 expiresAt);
     event AgentPaused(address indexed by, uint64 startedAt, uint64 expiresAt);
@@ -318,6 +324,10 @@ contract PolicyConfig {
     /// @notice Revoke or rotate the agent's session key. Deliberately reachable
     ///         while paused: a pause must never trap a compromised key in place.
     function setSessionKey(address newSessionKey) external onlyOwner {
+        require(
+            newSessionKey == address(0) || newSessionKey != meter,
+            "PolicyConfig: session key may not be the meter"
+        );
         emit SessionKeyUpdated(sessionKey, newSessionKey);
         sessionKey = newSessionKey;
     }
@@ -327,6 +337,22 @@ contract PolicyConfig {
     function setPriceOracle(address newOracle) external onlyOwner {
         emit PriceOracleUpdated(priceOracle, newOracle);
         priceOracle = newOracle;
+    }
+
+    /// @notice Register the key whose signature authenticates meter readings.
+    ///
+    /// Refuses the agent's session key, and setSessionKey refuses the meter.
+    /// Enforced here rather than trusted to deployment, for the same reason the
+    /// key separation of step 1 is asserted rather than assumed: a single
+    /// misconfiguration would quietly return the agent to reporting its own
+    /// spend.
+    function setMeter(address newMeter) external onlyOwner {
+        require(
+            newMeter == address(0) || newMeter != sessionKey,
+            "PolicyConfig: meter may not be the session key"
+        );
+        emit MeterUpdated(meter, newMeter);
+        meter = newMeter;
     }
 
     // ------------------------------------------------------------------
