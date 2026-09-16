@@ -1,597 +1,662 @@
 #!/usr/bin/env python3
-"""Tests for verify.py, written against docs/spec/enforcement-rule.md only.
+"""Tests for verify.py (version 2), written against docs/spec/enforcement-rule.md.
 
-Run with either::
+pytest is not installed here; the suite is plain unittest and runs under either::
 
-    python -m pytest verifier/test_verify.py
-    python -m unittest discover -s verifier -p "test_*.py"
+    python -m unittest discover -s verifier -p "test_*.py" -v
     python verifier/test_verify.py
 
-Every test names the enforcement-rule.md clause it is exercising.
+Each test names the spec section it exercises.
 """
 
 from __future__ import annotations
 
+import ast
+import csv
 import io
+import json
 import os
 import sys
+import tempfile
 import unittest
-from decimal import Decimal
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
+import verify as v  # noqa: E402
 from verify import (  # noqa: E402
-    Anomaly,
-    DayRecord,
-    PolicyEvent,
-    build_policy_schedule,
-    day_index_from_unix_seconds,
-    next_window_boundary,
-    regime_in_force,
-    round_half_away_from_zero,
-    verify,
+    EXACT_UNITS_PER_MILLI_USD as UNIT,
+    PolicyEvent, Price, Reading,
+    day_index_from_unix_seconds, exact_day_total, next_window_boundary,
+    regime_on, replay_policy, round_exact_to_milli_usd, settle, verify,
     window_sum,
-    write_results_csv,
 )
 
+# One price unit is 1e-8 USD/kWh, so 1e8 is 1 USD/kWh; 1000 mWh at 1 USD/kWh
+# is exactly 1e11 exact units = 1 milli-USD.
+ONE_USD_PER_KWH = 100_000_000
 
-def genesis(cap=1000, window_days=7, day=0, seq=1, version=1):
-    return PolicyEvent(seq=seq, policyVersion=version, cap=cap,
-                       windowDays=window_days, effectiveFromDay=day,
+
+# ---------------------------------------------------------------------------
+# Builders
+# ---------------------------------------------------------------------------
+
+
+def day_rows(day, spend_milli=0, *, skip_slot=None, both_slot=None):
+    """48 readings + 48 prices whose exact total is spend_milli * 1e11."""
+    readings, prices = [], []
+    for slot in range(48):
+        prices.append(Price(day, slot, ONE_USD_PER_KWH, ONE_USD_PER_KWH))
+        if slot == skip_slot:       # drop the reading only; prices stay complete
+            continue
+        imp = exp = 0
+        if slot == 0 and spend_milli > 0:
+            imp = spend_milli * 1000
+        if slot == 0 and spend_milli < 0:
+            exp = -spend_milli * 1000
+        if slot == both_slot:
+            imp, exp = imp or 1, exp or 1
+        readings.append(Reading(day, slot, imp, exp))
+    return readings, prices
+
+
+def ledger(spends):
+    """{day: spend_milli} -> (readings, prices), every day settled."""
+    readings, prices = [], []
+    for day, spend in spends.items():
+        r, p = day_rows(day, spend)
+        readings += r
+        prices += p
+    return readings, prices
+
+
+def ev(seq, cap, window=7, submitted=0, effective=None, version=None):
+    return PolicyEvent(seq=seq, policyVersion=seq if version is None else version,
+                       cap=cap, windowDays=window, submittedOnDay=submitted,
+                       effectiveFromDay=submitted if effective is None else effective,
                        setBy="0xowner")
 
 
-def rec(day, spend, version=None, paused=False):
-    return DayRecord(dayIndex=day, netSpend=spend, policyVersion=version,
-                     paused=paused)
+def run(spends, events):
+    readings, prices = ledger(spends)
+    return verify(readings, prices, events)
 
 
-def result_for(report, day):
-    for r in report.results:
-        if r.dayIndex == day:
+def day_of(report, d):
+    for r in report.days:
+        if r.dayIndex == d:
             return r
-    raise AssertionError(f"no result for day {day}")
+    raise AssertionError(f"no result row for day {d}")
+
+
+def derived(replayed, seq):
+    for w in replayed:
+        if w.seq == seq:
+            return w
+    raise AssertionError(f"no write seq {seq}")
+
+
+def categories(report):
+    return [a.category for a in report.anomalies]
 
 
 # ---------------------------------------------------------------------------
-# Section 7 -- rounding
+# Section 5 -- rounding and daily spend
 # ---------------------------------------------------------------------------
 
 
-class TestRoundingHalfAwayFromZero(unittest.TestCase):
-    """enforcement-rule.md section 7. The .5 cases in BOTH signs are the only cases that
-    distinguish half-away-from-zero from banker's rounding."""
+class TestRounding(unittest.TestCase):
 
-    def test_positive_half_cases(self):
-        self.assertEqual(round_half_away_from_zero("2.5"), 3)
-        self.assertEqual(round_half_away_from_zero("3.5"), 4)
-        self.assertEqual(round_half_away_from_zero("0.5"), 1)
-        self.assertEqual(round_half_away_from_zero("1.5"), 2)
+    def test_spec_table_both_signs(self):
+        table = [
+            (250_000_000_000, 3), (-250_000_000_000, -3),
+            (150_000_000_000, 2), (-150_000_000_000, -2),
+            (249_999_999_999, 2), (-249_999_999_999, -2),
+            (50_000_000_000, 1), (-50_000_000_000, -1),
+            (49_999_999_999, 0), (-49_999_999_999, 0),
+        ]
+        for exact, expected in table:
+            with self.subTest(exact=exact):
+                self.assertEqual(round_exact_to_milli_usd(exact), expected)
 
-    def test_negative_half_cases(self):
-        self.assertEqual(round_half_away_from_zero("-2.5"), -3)
-        self.assertEqual(round_half_away_from_zero("-3.5"), -4)
-        self.assertEqual(round_half_away_from_zero("-0.5"), -1)
-        self.assertEqual(round_half_away_from_zero("-1.5"), -2)
+    def test_half_cases_are_not_bankers_or_truncation(self):
+        # 2.5 -> 3 (banker's gives 2, truncation gives 2);
+        # -2.5 -> -3 (truncation toward zero gives -2); 3.5 -> 4 both ways.
+        self.assertEqual(round_exact_to_milli_usd(25 * UNIT // 10), 3)
+        self.assertEqual(round_exact_to_milli_usd(-25 * UNIT // 10), -3)
+        self.assertEqual(round_exact_to_milli_usd(45 * UNIT // 10), 5)
+        self.assertEqual(round_exact_to_milli_usd(-45 * UNIT // 10), -5)
+        self.assertEqual(round_exact_to_milli_usd(0), 0)
+        self.assertEqual(round_exact_to_milli_usd(7 * UNIT), 7)
+        self.assertEqual(round_exact_to_milli_usd(-7 * UNIT), -7)
 
-    def test_differs_from_builtin_round_on_every_half_case(self):
-        # If this ever passes trivially the rounding rule has been broken.
-        for text, expected in [("2.5", 3), ("-2.5", -3), ("0.5", 1),
-                               ("-0.5", -1), ("4.5", 5), ("-4.5", -5)]:
-            with self.subTest(text=text):
-                self.assertEqual(round_half_away_from_zero(text), expected)
-                self.assertNotEqual(round(float(text)), expected,
-                                    "builtin round() should disagree here; "
-                                    "if it agrees the test is not testing "
-                                    "the distinguishing case")
-
-    def test_non_half_cases_are_ordinary_nearest(self):
-        self.assertEqual(round_half_away_from_zero("2.4"), 2)
-        self.assertEqual(round_half_away_from_zero("2.6"), 3)
-        self.assertEqual(round_half_away_from_zero("-2.4"), -2)
-        self.assertEqual(round_half_away_from_zero("-2.6"), -3)
-
-    def test_accepts_int_decimal_and_float(self):
-        self.assertEqual(round_half_away_from_zero(7), 7)
-        self.assertEqual(round_half_away_from_zero(-7), -7)
-        self.assertEqual(round_half_away_from_zero(Decimal("-2.5")), -3)
-        self.assertEqual(round_half_away_from_zero(2.5), 3)
-        self.assertEqual(round_half_away_from_zero(-2.5), -3)
-
-    def test_rejects_garbage(self):
-        with self.assertRaises(ValueError):
-            round_half_away_from_zero("not a number")
+    def test_rejects_non_int(self):
         with self.assertRaises(TypeError):
-            round_half_away_from_zero(True)
+            round_exact_to_milli_usd(2.5)
+        with self.assertRaises(TypeError):
+            round_exact_to_milli_usd(True)
+
+    def test_exact_half_reached_through_a_real_day_both_signs(self):
+        # 250_000 mWh at 1 USD/kWh = 250 milli... use price 1e6 to get 2.5
+        r = [Reading(0, s, 250_000 if s == 0 else 0, 0) for s in range(48)]
+        p = [Price(0, s, 1_000_000, 0) for s in range(48)]
+        spends, _ = settle(r, p)
+        self.assertEqual(spends, {0: 3})
+        r = [Reading(0, s, 0, 250_000 if s == 0 else 0) for s in range(48)]
+        p = [Price(0, s, 0, 1_000_000) for s in range(48)]
+        spends, _ = settle(r, p)
+        self.assertEqual(spends, {0: -3})
+
+    def test_round_once_per_day_not_per_half_hour(self):
+        # Each half-hour is exactly 0.4 milli-USD: per-half-hour rounding gives
+        # 48 * 0 = 0; rounding the day's exact total gives round(19.2) = 19.
+        r = [Reading(0, s, 40_000, 0) for s in range(48)]
+        p = [Price(0, s, 1_000_000, 0) for s in range(48)]
+        per_half_hour = sum(round_exact_to_milli_usd(x.importMWh * y.importPrice)
+                            for x, y in zip(r, p))
+        self.assertEqual(per_half_hour, 0)
+        spends, _ = settle(r, p)
+        self.assertEqual(spends, {0: 19})
+
+    def test_round_once_per_day_half_case(self):
+        # Each half-hour exactly 0.5 -> per-half-hour gives 48, daily gives 24.
+        r = [Reading(0, s, 50_000, 0) for s in range(48)]
+        p = [Price(0, s, 1_000_000, 0) for s in range(48)]
+        spends, _ = settle(r, p)
+        self.assertEqual(spends, {0: 24})
+
+    def test_negative_price(self):
+        # Importing at a negative price earns money; exporting at a negative
+        # price costs money.
+        r = [Reading(0, s, 3000 if s == 0 else 0, 2000 if s == 1 else 0)
+             for s in range(48)]
+        p = [Price(0, s, -ONE_USD_PER_KWH, -ONE_USD_PER_KWH) for s in range(48)]
+        self.assertEqual(exact_day_total(zip(r, p)), (-3 + 2) * UNIT)
+        spends, anomalies = settle(r, p)
+        self.assertEqual(spends, {0: -1})
+        self.assertEqual(anomalies, [])
+
+    def test_negative_day_contributes_negatively(self):
+        report = run({0: 500, 1: -800, 2: 100}, [ev(1, 10_000)])
+        self.assertEqual(report.spends[1], -800)
+        self.assertEqual(day_of(report, 1).spendMilliUsd, -800)
+        self.assertEqual(day_of(report, 1).windowSum, -300)
+        self.assertEqual(day_of(report, 2).windowSum, -200)
+
+    def test_sum_can_be_negative_and_negative_cap_compared_with_le(self):
+        report = run({0: -100}, [ev(1, -100)])
+        self.assertTrue(day_of(report, 0).compliant)
+        report = run({0: -99}, [ev(1, -100)])
+        self.assertFalse(day_of(report, 0).compliant)
 
 
 # ---------------------------------------------------------------------------
-# Section 3 -- day index
+# Section 4 -- settlement
 # ---------------------------------------------------------------------------
 
 
-class TestDayIndex(unittest.TestCase):
-    """enforcement-rule.md section 3: floor(unix_seconds / 86400), UTC, always."""
+class TestSettlement(unittest.TestCase):
 
-    def test_epoch_and_first_boundary(self):
+    def test_missing_slot_not_settled(self):
+        r, p = day_rows(5, 100, skip_slot=17)
+        spends, anomalies = settle(r, p)
+        self.assertNotIn(5, spends)
+        self.assertEqual([a.category for a in anomalies], ["incomplete_day"])
+
+    def test_missing_price_slot_not_settled(self):
+        r, p = day_rows(5, 100)
+        p = [x for x in p if x.slot != 47]
+        spends, anomalies = settle(r, p)
+        self.assertNotIn(5, spends)
+        self.assertEqual([a.category for a in anomalies], ["incomplete_day"])
+
+    def test_readings_without_any_prices_is_incomplete(self):
+        r, _ = day_rows(5, 100)
+        spends, anomalies = settle(r, [])
+        self.assertEqual(spends, {})
+        self.assertEqual([a.category for a in anomalies], ["incomplete_day"])
+
+    def test_import_and_export_in_same_half_hour_not_settled(self):
+        r, p = day_rows(5, 100, both_slot=0)
+        spends, anomalies = settle(r, p)
+        self.assertNotIn(5, spends)
+        self.assertEqual([a.category for a in anomalies], ["invalid_half_hour"])
+
+    def test_duplicate_slot_not_settled(self):
+        r, p = day_rows(5, 100)
+        r.append(Reading(5, 3, 0, 0))
+        spends, anomalies = settle(r, p)
+        self.assertNotIn(5, spends)
+        self.assertEqual([a.category for a in anomalies], ["duplicate_slot"])
+
+    def test_gap_reported(self):
+        r1, p1 = day_rows(1, 10)
+        r4, p4 = day_rows(4, 10)
+        spends, anomalies = settle(r1 + r4, p1 + p4)
+        self.assertEqual(sorted(spends), [1, 4])
+        self.assertEqual([(a.category, a.dayIndex) for a in anomalies], [("gap", 2)])
+
+    def test_unsettled_day_between_settled_days_is_also_a_gap(self):
+        r1, p1 = day_rows(1, 10)
+        r2, p2 = day_rows(2, 10, skip_slot=0)
+        r3, p3 = day_rows(3, 10)
+        _, anomalies = settle(r1 + r2 + r3, p1 + p2 + p3)
+        self.assertEqual(sorted(a.category for a in anomalies), ["gap", "incomplete_day"])
+
+    def test_zero_import_and_zero_export_is_valid(self):
+        spends, anomalies = settle(*day_rows(0, 0))
+        self.assertEqual((spends, anomalies), ({0: 0}, []))
+
+    def test_day_index(self):
         self.assertEqual(day_index_from_unix_seconds(0), 0)
         self.assertEqual(day_index_from_unix_seconds(86399), 0)
         self.assertEqual(day_index_from_unix_seconds(86400), 1)
-        self.assertEqual(day_index_from_unix_seconds(86401), 1)
-
-    def test_floors_towards_negative_infinity_before_epoch(self):
         self.assertEqual(day_index_from_unix_seconds(-1), -1)
-        self.assertEqual(day_index_from_unix_seconds(-86400), -1)
-        self.assertEqual(day_index_from_unix_seconds(-86401), -2)
 
 
 # ---------------------------------------------------------------------------
-# Section 4 -- the window sum
+# Sections 6, 8 -- window sum and compliance
 # ---------------------------------------------------------------------------
 
 
-class TestWindowSum(unittest.TestCase):
+class TestWindowAndCompliance(unittest.TestCase):
 
-    def test_both_endpoints_included(self):
-        """enforcement-rule.md section 4: with w=7 the window covers d and the six days
-        before it -- seven days total."""
-        records = [rec(d, 1) for d in range(0, 20)]
-        self.assertEqual(window_sum(records, 10, 7), 7)
-        self.assertEqual(window_sum(records, 10, 1), 1)
+    def test_equality_at_cap_passes_one_over_fails(self):
+        self.assertTrue(day_of(run({0: 600, 1: 400}, [ev(1, 1000)]), 1).compliant)
+        self.assertFalse(day_of(run({0: 600, 1: 401}, [ev(1, 1000)]), 1).compliant)
 
-    def test_oldest_day_is_included_then_leaves_one_day_later(self):
-        """enforcement-rule.md section 8.2 bullet 3."""
-        records = [rec(0, 500)] + [rec(d, 0) for d in range(1, 10)]
-        self.assertEqual(window_sum(records, 6, 7), 500)   # [0..6] includes 0
-        self.assertEqual(window_sum(records, 7, 7), 0)     # [1..7] excludes 0
+    def test_oldest_day_included_and_leaves_one_day_later(self):
+        spends = {d: 0 for d in range(0, 10)}
+        spends[0] = 1000
+        report = run(spends, [ev(1, 5000, window=7)])
+        self.assertEqual(day_of(report, 6).windowSum, 1000)   # [0, 6]
+        self.assertEqual(day_of(report, 7).windowSum, 0)      # [1, 7]
 
-    def test_missing_day_contributes_zero(self):
-        """enforcement-rule.md section 4: a day with no record contributes 0."""
-        records = [rec(0, 100), rec(5, 100)]   # days 1-4 absent entirely
-        self.assertEqual(window_sum(records, 5, 7), 200)
-        self.assertEqual(window_sum(records, 4, 3), 0)     # [2..4]: nothing
+    def test_gap_day_contributes_zero(self):
+        report = run({0: 100, 1: 200, 3: 300}, [ev(1, 5000)])
+        self.assertEqual(day_of(report, 3).windowSum, 600)
+        self.assertNotIn(2, [r.dayIndex for r in report.days])
+        self.assertIn("gap", categories(report))
 
-    def test_negative_day_reduces_the_sum(self):
-        """enforcement-rule.md section 4: never clamped, never dropped, never abs()."""
-        records = [rec(0, 1000), rec(1, -400)]
-        self.assertEqual(window_sum(records, 1, 7), 600)
+    def test_unsettled_day_contributes_zero_even_with_readings(self):
+        r0, p0 = day_rows(0, 100)
+        r1, p1 = day_rows(1, 5000, both_slot=5)
+        r2, p2 = day_rows(2, 100)
+        report = verify(r0 + r1 + r2, p0 + p1 + p2, [ev(1, 1000)])
+        self.assertEqual(day_of(report, 2).windowSum, 200)
 
-    def test_window_sum_may_be_negative(self):
-        """enforcement-rule.md section 4: the sum may legitimately be negative."""
-        records = [rec(0, 100), rec(1, -900)]
-        self.assertEqual(window_sum(records, 1, 7), -800)
-
-    def test_paused_day_is_zero_and_the_window_still_advances(self):
-        """enforcement-rule.md section 4: a paused day is a zero-spend day, not a missing
-        day. It contributes 0 and the window advances across it."""
-        records = [rec(0, 700), rec(1, 999, paused=True), rec(2, 100)]
-        self.assertEqual(window_sum(records, 2, 7), 800)
-        # The window is not frozen while paused: day 0 still ages out on
-        # schedule even though day 1 was paused.
-        self.assertEqual(window_sum(records, 7, 7), 100)   # [1..7]
-        self.assertEqual(window_sum(records, 9, 7), 0)     # [3..9]
-
-    def test_window_of_one_day(self):
-        records = [rec(0, 100), rec(1, 200)]
-        self.assertEqual(window_sum(records, 1, 1), 200)
-
-    def test_rejects_zero_window(self):
-        with self.assertRaises(ValueError):
-            window_sum([rec(0, 1)], 0, 0)
-
-
-class TestWindowSumIndependence(unittest.TestCase):
-    """enforcement-rule.md section 4, required structural property: every day's window is
-    computed independently from the complete record set."""
-
-    def setUp(self):
-        self.records = [rec(d, (d * 37) % 101 - 50) for d in range(0, 40)]
-
-    def test_order_of_evaluation_does_not_matter(self):
-        forward = [window_sum(self.records, d, 7) for d in range(0, 40)]
-        backward = [window_sum(self.records, d, 7) for d in range(39, -1, -1)]
+    def test_window_sum_is_order_independent_and_isolated(self):
+        spends = {d: (d * 37) % 101 - 50 for d in range(0, 40)}
+        forward = [window_sum(spends, d, 7) for d in range(0, 40)]
+        backward = [window_sum(spends, d, 7) for d in reversed(range(0, 40))]
         self.assertEqual(forward, list(reversed(backward)))
+        shuffled = dict(sorted(spends.items(), key=lambda kv: -kv[0]))
+        self.assertEqual(window_sum(shuffled, 25, 7), forward[25])
+        brute = sum(spends[d] for d in range(19, 26))
+        self.assertEqual(window_sum(spends, 25, 7), brute)
 
-    def test_a_single_day_in_isolation_matches_the_full_pass(self):
-        full = {d: window_sum(self.records, d, 7) for d in range(0, 40)}
-        for d in (0, 1, 6, 7, 23, 39):
-            with self.subTest(day=d):
-                self.assertEqual(window_sum(self.records, d, 7), full[d])
+    def test_window_length_change_recomputes_from_scratch(self):
+        # Window 7 until day 14, then a window-only write to 3 (unchanged cap).
+        spends = {d: 10 for d in range(0, 20)}
+        report = run(spends, [ev(1, 1000, window=7, submitted=0),
+                              ev(2, 1000, window=3, submitted=14)])
+        self.assertEqual(day_of(report, 13).windowSum, 70)
+        self.assertEqual(day_of(report, 14).windowSum, 30)
+        self.assertEqual(day_of(report, 14).windowDaysInForce, 3)
 
-    def test_record_ordering_does_not_matter(self):
-        shuffled = list(reversed(self.records))
-        for d in range(0, 40):
-            with self.subTest(day=d):
-                self.assertEqual(window_sum(self.records, d, 7),
-                                 window_sum(shuffled, d, 7))
+    def test_lowering_is_not_retroactive(self):
+        spends = {d: 100 for d in range(0, 6)}
+        report = run(spends, [ev(1, 1000), ev(2, 250, submitted=4)])
+        self.assertTrue(day_of(report, 3).compliant)       # 400 <= 1000
+        self.assertEqual(day_of(report, 3).capInForce, 1000)
+        self.assertFalse(day_of(report, 4).compliant)      # 500 > 250
 
-    def test_changing_window_length_recomputes_from_scratch(self):
-        # An incremental walk would have to be told the length changed; a
-        # from-scratch recomputation simply gets a different answer.
-        self.assertNotEqual(window_sum(self.records, 20, 7),
-                            window_sum(self.records, 20, 3))
+    def test_settled_day_before_any_regime_is_undetermined(self):
+        report = run({0: 5, 1: 5, 2: 5}, [ev(1, 1000, submitted=2, effective=2)])
+        r0 = day_of(report, 0)
+        self.assertEqual((r0.spendMilliUsd, r0.windowSum, r0.capInForce,
+                          r0.compliant, r0.authorisedNextDay), (5, None, None, None, None))
+        self.assertEqual(categories(report).count("no_regime"), 2)
+        # The pre-regime days still count in later windows.
+        self.assertEqual(day_of(report, 2).windowSum, 15)
+        # Day 1 has no regime; day 2 does. windowSum(1) has no window length,
+        # so authorisation on day 2 is undetermined as well.
+        self.assertIsNone(day_of(report, 1).authorisedNextDay)
+
+    def test_no_float_decimal_or_round_in_verifier_source(self):
+        with open(os.path.join(HERE, "verify.py"), encoding="utf-8") as h:
+            tree = ast.parse(h.read())
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        imports = {a.name for n in ast.walk(tree)
+                   if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+        modules = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+        floats = [n for n in ast.walk(tree)
+                  if isinstance(n, ast.Constant) and isinstance(n.value, float)]
+        self.assertNotIn("float", names)
+        self.assertNotIn("round", names)
+        self.assertNotIn("Decimal", names | imports)
+        self.assertNotIn("decimal", modules | imports)
+        self.assertNotIn("quantize", attrs)
+        self.assertEqual(floats, [])
+        divisions = [n for n in ast.walk(tree)
+                     if isinstance(n, (ast.BinOp, ast.AugAssign)) and isinstance(n.op, ast.Div)]
+        self.assertEqual(divisions, [])
 
 
 # ---------------------------------------------------------------------------
-# Section 5 -- the cap in force
+# Section 7 -- policy replay
 # ---------------------------------------------------------------------------
-
-
-class TestWindowBoundaries(unittest.TestCase):
-    """enforcement-rule.md section 5.5: boundaries are multiples of windowDays measured
-    from the Unix epoch; the boundary is the next multiple STRICTLY above d."""
-
-    def test_next_multiple_above(self):
-        self.assertEqual(next_window_boundary(0, 7), 7)
-        self.assertEqual(next_window_boundary(1, 7), 7)
-        self.assertEqual(next_window_boundary(6, 7), 7)
-        self.assertEqual(next_window_boundary(7, 7), 14)   # strictly after
-        self.assertEqual(next_window_boundary(13, 7), 14)
-
-    def test_boundaries_are_anchored_to_the_epoch_not_to_the_ledger(self):
-        # Nothing about these answers depends on when records started.
-        self.assertEqual(next_window_boundary(100, 30), 120)
-        self.assertEqual(next_window_boundary(-1, 7), 0)
-
-    def test_window_of_one_day_boundaries_every_day(self):
-        self.assertEqual(next_window_boundary(5, 1), 6)
 
 
 class TestPolicyReplay(unittest.TestCase):
 
-    def test_genesis_applies_from_its_effective_day(self):
-        schedule = build_policy_schedule([genesis(cap=1000, day=3)])
-        self.assertIsNone(regime_in_force(schedule, 2))
-        self.assertEqual(regime_in_force(schedule, 3).cap, 1000)
-        self.assertEqual(regime_in_force(schedule, 99).cap, 1000)
+    def test_boundary_arithmetic(self):
+        self.assertEqual(next_window_boundary(4, 7), 7)
+        self.assertEqual(next_window_boundary(7, 7), 14)
+        self.assertEqual(next_window_boundary(0, 7), 7)
+        self.assertEqual(next_window_boundary(-1, 7), 0)
+        self.assertEqual(next_window_boundary(-7, 7), 0)
+        self.assertEqual(next_window_boundary(5, 1), 6)
 
-    def test_a_lowering_applies_immediately(self):
-        """enforcement-rule.md section 5 rule 3."""
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=400, windowDays=7,
-                        effectiveFromDay=3),
-        ])
-        self.assertEqual(regime_in_force(schedule, 2).cap, 1000)
-        self.assertEqual(regime_in_force(schedule, 3).cap, 400)
-        self.assertEqual(regime_in_force(schedule, 4).cap, 400)
+    def test_genesis_uses_recorded_effective_day(self):
+        replayed, anomalies = replay_policy([ev(1, 1000, submitted=10, effective=3)])
+        self.assertEqual(replayed[0].derivedEffectiveFromDay, 3)
+        self.assertTrue(replayed[0].deferralOk)
+        self.assertEqual(anomalies, [])
 
-    def test_a_raise_applies_at_the_boundary_not_immediately(self):
-        """enforcement-rule.md section 5 rules 4 and 5. Genesis day 0, w=7. A raise made
-        on day 3 waits for day 7."""
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=5000, windowDays=7,
-                        effectiveFromDay=3),
-        ])
-        for day in (3, 4, 5, 6):
-            with self.subTest(day=day):
-                self.assertEqual(regime_in_force(schedule, day).cap, 1000)
-        self.assertEqual(regime_in_force(schedule, 7).cap, 5000)
+    def test_raise_takes_effect_at_next_boundary_of_incumbent_window(self):
+        # Incumbent window 10; the raise introduces window 3. Submitted day 4:
+        # boundary under 10 is day 10 (under 3 it would be day 6).
+        events = [ev(1, 1000, window=10, submitted=0),
+                  ev(2, 2000, window=3, submitted=4, effective=10)]
+        replayed, anomalies = replay_policy(events)
+        self.assertEqual(derived(replayed, 2).derivedEffectiveFromDay, 10)
+        self.assertEqual(derived(replayed, 2).classification, "raise")
+        self.assertEqual(anomalies, [])
+        self.assertEqual(regime_on(replayed, 9).seq, 1)
+        self.assertEqual(regime_on(replayed, 10).seq, 2)
+        spends = {d: 0 for d in range(0, 12)}
+        report = run(spends, events)
+        self.assertEqual(day_of(report, 9).capInForce, 1000)
+        self.assertEqual(day_of(report, 10).capInForce, 2000)
+        self.assertEqual(day_of(report, 10).windowDaysInForce, 3)
 
-    def test_a_raise_made_on_a_boundary_day_still_waits(self):
-        """The literal reading of section 5.5 ('strictly after day d'). This is
-        called out in README.md's ambiguity list as a likely divergence."""
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=5000, windowDays=7,
-                        effectiveFromDay=14),
-        ])
-        self.assertEqual(regime_in_force(schedule, 14).cap, 1000)
-        self.assertEqual(regime_in_force(schedule, 20).cap, 1000)
-        self.assertEqual(regime_in_force(schedule, 21).cap, 5000)
+    def test_raise_submitted_on_boundary_defers_a_full_window(self):
+        replayed, _ = replay_policy([ev(1, 1000, window=7, submitted=0),
+                                     ev(2, 2000, window=7, submitted=14, effective=21)])
+        self.assertEqual(derived(replayed, 2).derivedEffectiveFromDay, 21)
+        self.assertEqual(regime_on(replayed, 20).seq, 1)
 
-    def test_a_lowering_cancels_a_pending_raise(self):
-        """enforcement-rule.md section 5 rule 3: a raise queued yesterday must not
-        resurrect itself after a lowering made today."""
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=5000, windowDays=7,
-                        effectiveFromDay=3),      # would become effective day 7
-            PolicyEvent(seq=3, policyVersion=3, cap=500, windowDays=7,
-                        effectiveFromDay=4),      # lowering, immediate
-        ])
-        self.assertEqual(regime_in_force(schedule, 3).cap, 1000)
-        self.assertEqual(regime_in_force(schedule, 4).cap, 500)
-        self.assertEqual(regime_in_force(schedule, 7).cap, 500)
-        self.assertEqual(regime_in_force(schedule, 100).cap, 500)
-        self.assertNotIn(5000, [r.cap for r in schedule])
+    def test_lowering_immediate_and_cancels_pending_raise(self):
+        events = [ev(1, 1000, window=7, submitted=0),
+                  ev(2, 5000, window=7, submitted=2, effective=7),   # pending raise
+                  ev(3, 800, window=7, submitted=4, effective=4)]    # lowering
+        replayed, anomalies = replay_policy(events)
+        self.assertEqual(anomalies, [])
+        self.assertEqual(derived(replayed, 3).derivedEffectiveFromDay, 4)
+        self.assertEqual(derived(replayed, 2).cancelledBySeq, 3)
+        self.assertEqual(regime_on(replayed, 3).seq, 1)
+        for d in (4, 7, 30):
+            self.assertEqual(regime_on(replayed, d).cap, 800)
 
-    def test_a_raise_does_not_cancel_anything(self):
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=5000, windowDays=7,
-                        effectiveFromDay=3),      # effective day 7
-            PolicyEvent(seq=3, policyVersion=3, cap=3000, windowDays=7,
-                        effectiveFromDay=4),      # raise vs in-force 1000
-        ])
-        # Both land on day 7; rule 6 gives it to the later seq.
-        self.assertEqual(regime_in_force(schedule, 6).cap, 1000)
-        self.assertEqual(regime_in_force(schedule, 7).cap, 3000)
+    def test_lowering_does_not_cancel_write_effective_on_its_own_day(self):
+        events = [ev(1, 1000, window=7, submitted=0),
+                  ev(2, 5000, window=7, submitted=3, effective=7),
+                  ev(3, 900, window=7, submitted=7, effective=7)]
+        replayed, _ = replay_policy(events)
+        self.assertIsNone(derived(replayed, 2).cancelledBySeq)
+        self.assertEqual(derived(replayed, 3).classification, "not_raise")  # vs 5000
+        self.assertEqual(regime_on(replayed, 7).seq, 3)
 
-    def test_two_writes_effective_on_the_same_day_later_seq_wins(self):
-        """enforcement-rule.md section 5 rule 6."""
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=800, windowDays=7,
-                        effectiveFromDay=5),
-            PolicyEvent(seq=3, policyVersion=3, cap=600, windowDays=7,
-                        effectiveFromDay=5),
-        ])
-        self.assertEqual(regime_in_force(schedule, 5).cap, 600)
-        self.assertEqual(regime_in_force(schedule, 5).policyVersion, 3)
+    def test_unchanged_cap_takes_effect_immediately(self):
+        events = [ev(1, 1000, window=7, submitted=0),
+                  ev(2, 1000, window=14, submitted=3, effective=3)]
+        replayed, anomalies = replay_policy(events)
+        self.assertEqual(anomalies, [])
+        self.assertEqual(derived(replayed, 2).derivedEffectiveFromDay, 3)
+        self.assertEqual(derived(replayed, 2).classification, "not_raise")
+        self.assertEqual(regime_on(replayed, 3).windowDays, 14)
 
-    def test_raise_classification_sees_an_earlier_same_day_lowering(self):
-        """Consequence of classifying against the cap in force at the write's
-        effectiveFromDay (README ambiguity A3). seq 2 lowers 1000 -> 600 on
-        day 5 immediately; seq 3's 900 is then a RAISE relative to 600, so it
-        defers to the boundary instead of winning day 5 under rule 6."""
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=600, windowDays=7,
-                        effectiveFromDay=5),
-            PolicyEvent(seq=3, policyVersion=3, cap=900, windowDays=7,
-                        effectiveFromDay=5),
-        ])
-        self.assertEqual(regime_in_force(schedule, 5).cap, 600)
-        self.assertEqual(regime_in_force(schedule, 6).cap, 600)
-        self.assertEqual(regime_in_force(schedule, 7).cap, 900)
+    def test_unchanged_cap_also_cancels_pending_raise(self):
+        events = [ev(1, 1000, submitted=0),
+                  ev(2, 5000, submitted=1, effective=7),
+                  ev(3, 1000, window=5, submitted=2)]
+        replayed, _ = replay_policy(events)
+        self.assertEqual(derived(replayed, 2).cancelledBySeq, 3)
+        self.assertEqual(regime_on(replayed, 7).seq, 3)
 
-    def test_a_write_may_change_the_window_length_too(self):
-        """enforcement-rule.md section 5: both the cap and the window length come from the
-        regime in force."""
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=1000, windowDays=3,
-                        effectiveFromDay=5),
-        ])
-        self.assertEqual(regime_in_force(schedule, 4).windowDays, 7)
-        # Cap unchanged -> not a raise -> immediate (see README ambiguity A4).
-        self.assertEqual(regime_in_force(schedule, 5).windowDays, 3)
+    def test_same_effective_day_higher_seq_wins(self):
+        events = [ev(1, 1000, submitted=0),
+                  ev(2, 3000, submitted=1, effective=7),
+                  ev(3, 2000, submitted=2, effective=7)]    # also a raise vs 1000
+        replayed, anomalies = replay_policy(events)
+        self.assertEqual(anomalies, [])
+        self.assertEqual(derived(replayed, 2).derivedEffectiveFromDay, 7)
+        self.assertEqual(derived(replayed, 3).derivedEffectiveFromDay, 7)
+        self.assertEqual(regime_on(replayed, 7).seq, 3)
+        report = run({7: 0}, events)
+        self.assertEqual(day_of(report, 7).capInForce, 2000)
+        self.assertEqual(day_of(report, 7).policyVersionInForce, 3)
 
-    def test_deferred_raise_uses_the_window_length_currently_in_force(self):
-        """The boundary belongs to the window already partly spent, so it is
-        measured with the incumbent w=10, not the new w=3 (README A5)."""
-        schedule = build_policy_schedule([
-            genesis(cap=1000, window_days=10, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=5000, windowDays=3,
-                        effectiveFromDay=4),
-        ])
-        self.assertEqual(regime_in_force(schedule, 9).cap, 1000)
-        self.assertEqual(regime_in_force(schedule, 10).cap, 5000)
-        self.assertEqual(regime_in_force(schedule, 10).windowDays, 3)
+    def test_same_day_lowering_then_raise_classified_against_the_lowering(self):
+        events = [ev(1, 1000, submitted=0),
+                  ev(2, 600, submitted=3),
+                  ev(3, 900, submitted=3, effective=7)]
+        replayed, anomalies = replay_policy(events)
+        self.assertEqual(anomalies, [])
+        self.assertEqual(derived(replayed, 3).classification, "raise")
+        self.assertEqual(regime_on(replayed, 3).cap, 600)
+        self.assertEqual(regime_on(replayed, 7).cap, 900)
 
-    def test_events_are_replayed_in_seq_order_not_file_order(self):
-        events = [
-            PolicyEvent(seq=3, policyVersion=3, cap=500, windowDays=7,
-                        effectiveFromDay=4),
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=5000, windowDays=7,
-                        effectiveFromDay=3),
-        ]
-        schedule = build_policy_schedule(events)
-        self.assertEqual(regime_in_force(schedule, 7).cap, 500)
+    def test_raise_compared_to_regime_in_force_not_to_pending(self):
+        # 1000 in force; 2000 pending at 7; on day 4 write 1500. 1500 > 1000,
+        # so it is a raise: deferred to 7, cancels nothing, and wins day 7 on seq.
+        events = [ev(1, 1000), ev(2, 2000, submitted=2, effective=7),
+                  ev(3, 1500, submitted=4, effective=7)]
+        replayed, _ = replay_policy(events)
+        self.assertIsNone(derived(replayed, 2).cancelledBySeq)
+        self.assertEqual(regime_on(replayed, 4).cap, 1000)
+        self.assertEqual(regime_on(replayed, 7).cap, 1500)
 
-    def test_duplicate_seq_is_rejected(self):
+    def test_deferral_mismatch_reported_not_a_breach_and_derived_day_used(self):
+        # The chain applied a raise immediately on day 3; the rule defers to 7.
+        events = [ev(1, 100, submitted=0), ev(2, 10_000, submitted=3, effective=3)]
+        spends = {d: 60 for d in range(0, 8)}
+        report = run(spends, events)
+        self.assertEqual(categories(report), ["deferral_mismatch"])
+        row = [p for p in report.policy if p.seq == 2][0]
+        self.assertEqual((row.derivedEffectiveFromDay, row.emittedEffectiveFromDay,
+                          row.deferralOk), (7, 3, False))
+        # Derived day used: days 3..6 are judged against 100 and breach.
+        self.assertEqual(day_of(report, 3).capInForce, 100)
+        self.assertFalse(day_of(report, 3).compliant)
+        self.assertEqual(day_of(report, 7).capInForce, 10_000)
+        # Breaches are verdicts in the day rows, never deferral anomalies, and
+        # the mismatch never appears as a day verdict.
+        self.assertNotIn("breach", " ".join(categories(report)))
+        genesis_row = [p for p in report.policy if p.seq == 1][0]
+        self.assertTrue(genesis_row.deferralOk)
+
+    def test_lowering_recorded_late_is_a_mismatch(self):
+        events = [ev(1, 1000), ev(2, 500, submitted=3, effective=7)]
+        replayed, anomalies = replay_policy(events)
+        self.assertEqual(derived(replayed, 2).derivedEffectiveFromDay, 3)
+        self.assertEqual([a.category for a in anomalies], ["deferral_mismatch"])
+
+    def test_cancelled_write_still_deferral_checked(self):
+        events = [ev(1, 1000), ev(2, 5000, submitted=1, effective=1),
+                  ev(3, 500, submitted=2)]
+        replayed, anomalies = replay_policy(events)
+        self.assertEqual(derived(replayed, 2).cancelledBySeq, 3)
+        self.assertEqual([(a.category, a.seq) for a in anomalies],
+                         [("deferral_mismatch", 2)])
+
+    def test_later_write_with_no_incumbent_is_flagged(self):
+        events = [ev(1, 1000, submitted=0, effective=100),
+                  ev(2, 2000, submitted=50, effective=50)]
+        replayed, anomalies = replay_policy(events)
+        self.assertEqual([a.category for a in anomalies], ["no_incumbent_regime"])
+        self.assertEqual(derived(replayed, 2).derivedEffectiveFromDay, 50)
+        self.assertEqual(derived(replayed, 1).cancelledBySeq, 2)
+
+    def test_out_of_order_submission_flagged(self):
+        events = [ev(1, 1000, submitted=0), ev(2, 900, submitted=10),
+                  ev(3, 800, submitted=5)]
+        _, anomalies = replay_policy(events)
+        self.assertEqual([a.category for a in anomalies], ["policy_out_of_order"])
+
+    def test_events_sorted_by_seq_and_duplicate_seq_rejected(self):
+        replayed, _ = replay_policy([ev(2, 500, submitted=3), ev(1, 1000)])
+        self.assertEqual(replayed[0].classification, "genesis")
+        self.assertEqual(replayed[0].seq, 1)
         with self.assertRaises(ValueError):
-            build_policy_schedule([genesis(seq=1), genesis(seq=1, cap=2)])
-
-    def test_zero_window_days_is_rejected(self):
-        with self.assertRaises(ValueError):
-            build_policy_schedule([genesis(window_days=0)])
+            replay_policy([ev(1, 1000), ev(1, 500)])
 
 
 # ---------------------------------------------------------------------------
-# Section 6 -- the compliance test
+# Section 9 -- authorisation on the next day
 # ---------------------------------------------------------------------------
 
 
-class TestCompliance(unittest.TestCase):
+class TestAuthorisation(unittest.TestCase):
 
-    def test_equality_exactly_at_the_cap_passes(self):
-        """enforcement-rule.md section 6: the comparison is <=; equality passes."""
-        report = verify([rec(0, 1000)], [genesis(cap=1000)])
-        day = result_for(report, 0)
-        self.assertEqual(day.windowSum, 1000)
-        self.assertEqual(day.capInForce, 1000)
-        self.assertTrue(day.compliant)
+    def test_uses_cap_in_force_on_next_day(self):
+        spends = {d: 100 for d in range(0, 6)}
+        events = [ev(1, 1000), ev(2, 300, submitted=4)]  # lowering effective day 4
+        report = run(spends, events)
+        r3 = day_of(report, 3)                           # windowSum 400
+        self.assertEqual(r3.windowSum, 400)
+        self.assertTrue(r3.compliant)                    # 400 <= 1000 on day 3
+        self.assertFalse(r3.authorisedNextDay)           # 400 > 300 on day 4
+        self.assertTrue(day_of(report, 2).authorisedNextDay)
 
-    def test_one_milli_usd_over_the_cap_fails(self):
-        """enforcement-rule.md section 6: only a strictly greater sum is a breach."""
-        report = verify([rec(0, 1001)], [genesis(cap=1000)])
-        self.assertFalse(result_for(report, 0).compliant)
-        self.assertEqual(len(report.breaches), 1)
+    def test_raise_on_next_day_grants_authority(self):
+        spends = {d: 100 for d in range(0, 8)}
+        events = [ev(1, 600), ev(2, 5000, submitted=3, effective=7)]
+        report = run(spends, events)
+        r6 = day_of(report, 6)                           # windowSum 700
+        self.assertFalse(r6.compliant)
+        self.assertTrue(r6.authorisedNextDay)
 
-    def test_one_milli_usd_under_the_cap_passes(self):
-        report = verify([rec(0, 999)], [genesis(cap=1000)])
-        self.assertTrue(result_for(report, 0).compliant)
+    def test_next_day_equality_passes(self):
+        report = run({0: 300}, [ev(1, 1000), ev(2, 300, submitted=1)])
+        self.assertTrue(day_of(report, 0).authorisedNextDay)
+        report = run({0: 301}, [ev(1, 1000), ev(2, 300, submitted=1)])
+        self.assertFalse(day_of(report, 0).authorisedNextDay)
 
-    def test_export_credit_restores_headroom_that_would_otherwise_breach(self):
-        """enforcement-rule.md section 4/8.2: a negative day is real headroom."""
-        spends = [rec(0, 400), rec(1, 400), rec(2, 400)]
-        breaching = verify(spends, [genesis(cap=1000)])
-        self.assertFalse(result_for(breaching, 2).compliant)   # 1200 > 1000
-
-        with_credit = spends + [rec(3, -300)]
-        # Day 3's window [0..3] is 900, back under the cap.
-        report = verify(with_credit, [genesis(cap=1000)])
-        self.assertEqual(result_for(report, 3).windowSum, 900)
-        self.assertTrue(result_for(report, 3).compliant)
-
-    def test_a_negative_window_sum_is_compliant_against_a_positive_cap(self):
-        report = verify([rec(0, 100), rec(1, -900)], [genesis(cap=1000)])
-        self.assertEqual(result_for(report, 1).windowSum, -800)
-        self.assertTrue(result_for(report, 1).compliant)
-
-    def test_a_negative_cap_can_be_breached_by_a_less_negative_sum(self):
-        # Caps are signed (section 2.2). -100 <= -100 passes, -99 > -100 fails.
-        report = verify([rec(0, -100)], [genesis(cap=-100)])
-        self.assertTrue(result_for(report, 0).compliant)
-        report = verify([rec(0, -99)], [genesis(cap=-100)])
-        self.assertFalse(result_for(report, 0).compliant)
-
-    def test_paused_day_counts_as_zero_and_the_window_advances(self):
-        records = [rec(0, 900), rec(1, 900, paused=True), rec(2, 50)]
-        report = verify(records, [genesis(cap=1000)])
-        self.assertEqual(result_for(report, 1).windowSum, 900)
-        self.assertTrue(result_for(report, 1).compliant)
-        self.assertEqual(result_for(report, 2).windowSum, 950)
-        # The inconsistent record (paused but non-zero netSpend) is reported.
-        self.assertIn("paused_day_nonzero_netspend",
-                      {a.kind for a in report.anomalies})
-
-    def test_missing_day_counts_as_zero(self):
-        report = verify([rec(0, 600), rec(4, 300)], [genesis(cap=1000)])
-        self.assertEqual(result_for(report, 4).windowSum, 900)
-        self.assertTrue(result_for(report, 4).compliant)
-
-    def test_a_raise_applies_at_the_boundary_in_the_compliance_result(self):
-        records = [rec(d, 300) for d in range(0, 9)]
-        events = [
-            genesis(cap=1000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=100000, windowDays=7,
-                        effectiveFromDay=3),
-        ]
-        report = verify(records, events)
-        # Day 3: sum 1200 > cap 1000, and the raise is not yet effective.
-        self.assertEqual(result_for(report, 3).capInForce, 1000)
-        self.assertFalse(result_for(report, 3).compliant)
-        # Day 7: the raise has landed.
-        self.assertEqual(result_for(report, 7).capInForce, 100000)
-        self.assertTrue(result_for(report, 7).compliant)
-
-    def test_lowering_below_the_accumulated_sum_is_not_retroactive(self):
-        """enforcement-rule.md section 6.1."""
-        records = [rec(d, 300) for d in range(0, 5)]   # 1500 by day 4
-        events = [
-            genesis(cap=2000, window_days=7, day=0),
-            PolicyEvent(seq=2, policyVersion=2, cap=100, windowDays=7,
-                        effectiveFromDay=4),
-        ]
-        report = verify(records, events)
-        for day in (0, 1, 2, 3):
-            with self.subTest(day=day):
-                self.assertTrue(result_for(report, day).compliant,
-                                "earlier days must not be convicted "
-                                "retroactively")
-                self.assertEqual(result_for(report, day).capInForce, 2000)
-        self.assertFalse(result_for(report, 4).compliant)
-        self.assertEqual(result_for(report, 4).capInForce, 100)
-
-    def test_days_before_any_policy_are_undetermined_not_breaches(self):
-        report = verify([rec(0, 99999)], [genesis(cap=1000, day=5)])
-        day = result_for(report, 0)
-        self.assertIsNone(day.compliant)
-        self.assertIsNone(day.capInForce)
-        self.assertEqual(report.breaches, [])
-        self.assertIn("no_policy_in_force", {a.kind for a in report.anomalies})
-
-    def test_duplicate_day_records_are_rejected(self):
-        with self.assertRaises(ValueError):
-            verify([rec(0, 1), rec(0, 2)], [genesis()])
+    def test_window_for_authorisation_is_day_d_window(self):
+        # Window 7 on day d, window 1 from d+1 (unchanged cap). windowSum(d)
+        # must still use 7.
+        spends = {d: 100 for d in range(0, 7)}
+        report = run(spends, [ev(1, 650, window=7), ev(2, 650, window=1, submitted=7)])
+        self.assertEqual(day_of(report, 6).windowSum, 700)
+        self.assertFalse(day_of(report, 6).authorisedNextDay)
 
 
 # ---------------------------------------------------------------------------
-# Section 6.2 -- the bound policy-version cross-check
+# Section 10.1 -- CLI and file formats
 # ---------------------------------------------------------------------------
 
 
-class TestPolicyVersionCrossCheck(unittest.TestCase):
-
-    def test_mismatch_is_reported_and_is_not_a_breach(self):
-        """enforcement-rule.md section 6.2: a divergence here is a separate, more serious
-        category than overspending."""
-        events = [
-            genesis(cap=1000, window_days=7, day=0, seq=1, version=1),
-            PolicyEvent(seq=2, policyVersion=2, cap=50, windowDays=7,
-                        effectiveFromDay=2),          # lowering, immediate
-        ]
-        # Day 2 is governed by version 2 (cap 50) but the record claims it was
-        # checked against version 1 (cap 1000).
-        report = verify([rec(2, 10, version=1)], events)
-        day = result_for(report, 2)
-        self.assertTrue(day.policyVersionMismatch)
-        self.assertTrue(day.compliant, "10 <= 50 is compliant; the mismatch "
-                                       "must not be reported as a breach")
-        self.assertEqual(report.breaches, [])
-        self.assertEqual(len(report.version_mismatches), 1)
-
-    def test_matching_version_is_not_a_mismatch(self):
-        events = [genesis(cap=1000, day=0, seq=1, version=1)]
-        report = verify([rec(0, 10, version=1)], events)
-        self.assertFalse(result_for(report, 0).policyVersionMismatch)
-
-    def test_check_is_on_the_cap_not_the_version_number(self):
-        """Section 6.2 says to compare the two CAPS. Two versions carrying the
-        same cap therefore agree (README ambiguity A9)."""
-        events = [
-            genesis(cap=1000, window_days=7, day=0, seq=1, version=1),
-            PolicyEvent(seq=2, policyVersion=2, cap=1000, windowDays=3,
-                        effectiveFromDay=2),
-        ]
-        report = verify([rec(2, 10, version=1)], events)
-        self.assertFalse(result_for(report, 2).policyVersionMismatch)
-
-    def test_unknown_policy_version_is_a_mismatch(self):
-        report = verify([rec(0, 10, version=99)], [genesis(cap=1000)])
-        self.assertTrue(result_for(report, 0).policyVersionMismatch)
-        self.assertIn("unknown_policy_version",
-                      {a.kind for a in report.anomalies})
-
-    def test_absent_policy_version_column_yields_no_verdict(self):
-        report = verify([rec(0, 10)], [genesis(cap=1000)])
-        self.assertIsNone(result_for(report, 0).policyVersionMismatch)
-        self.assertEqual(report.version_mismatches, [])
-
-    def test_a_breach_and_a_mismatch_are_counted_separately(self):
-        events = [
-            genesis(cap=1000, window_days=7, day=0, seq=1, version=1),
-            PolicyEvent(seq=2, policyVersion=2, cap=50, windowDays=7,
-                        effectiveFromDay=2),
-        ]
-        report = verify([rec(2, 500, version=1)], events)
-        self.assertFalse(result_for(report, 2).compliant)      # 500 > 50
-        self.assertTrue(result_for(report, 2).policyVersionMismatch)
-        self.assertEqual(len(report.breaches), 1)
-        self.assertEqual(len(report.version_mismatches), 1)
+def _write_csv(path, header, rows):
+    with open(path, "w", newline="", encoding="utf-8") as h:
+        w = csv.writer(h)
+        w.writerow(header)
+        w.writerows(rows)
 
 
-# ---------------------------------------------------------------------------
-# Output shape (section 8.1)
-# ---------------------------------------------------------------------------
+class TestCli(unittest.TestCase):
 
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+        readings, prices = ledger({0: 400, 1: 700, 2: -150})
+        self.readings = os.path.join(self.dir, "r.csv")
+        self.prices = os.path.join(self.dir, "p.csv")
+        _write_csv(self.readings, ["dayIndex", "slot", "importMWh", "exportMWh"],
+                   [(x.dayIndex, x.slot, x.importMWh, x.exportMWh) for x in readings])
+        _write_csv(self.prices, ["dayIndex", "slot", "importPrice", "exportPrice"],
+                   [(x.dayIndex, x.slot, x.importPrice, x.exportPrice) for x in prices])
 
-class TestOutput(unittest.TestCase):
+    def tearDown(self):
+        self.tmp.cleanup()
 
-    def test_csv_header_and_row_shape(self):
-        report = verify([rec(0, 10, version=1)], [genesis(cap=1000)])
-        buf = io.StringIO()
-        write_results_csv(report, buf)
-        lines = buf.getvalue().strip().split("\n")
-        self.assertEqual(
-            lines[0],
-            "dayIndex,netSpend,windowSum,capInForce,windowDaysInForce,"
-            "compliant,policyVersionMismatch",
-        )
-        self.assertEqual(lines[1], "0,10,10,1000,7,true,false")
+    def _policy(self, rows):
+        path = os.path.join(self.dir, "e.csv")
+        _write_csv(path, ["seq", "policyVersion", "cap", "windowDays",
+                          "submittedOnDay", "effectiveFromDay", "setBy"], rows)
+        return path
 
-    def test_undetermined_days_render_as_NA(self):
-        report = verify([rec(0, 10)], [genesis(cap=1000, day=5)])
-        buf = io.StringIO()
-        write_results_csv(report, buf)
-        self.assertEqual(buf.getvalue().strip().split("\n")[1],
-                         "0,10,NA,NA,NA,NA,NA")
+    def _run(self, policy_rows):
+        out = os.path.join(self.dir, "days.csv")
+        pol = os.path.join(self.dir, "policy.csv")
+        summ = os.path.join(self.dir, "summary.json")
+        err = io.StringIO()
+        old = sys.stderr
+        sys.stderr = err
+        try:
+            code = v.main(["--readings", self.readings, "--prices", self.prices,
+                           "--policy", self._policy(policy_rows), "--out", out,
+                           "--policy-report", pol, "--summary-json", summ])
+        finally:
+            sys.stderr = old
+        with open(out, encoding="utf-8") as h:
+            days = h.read().splitlines()
+        with open(pol, encoding="utf-8") as h:
+            policy = h.read().splitlines()
+        with open(summ, encoding="utf-8") as h:
+            summary = json.load(h)
+        return code, days, policy, summary, err.getvalue()
 
-    def test_results_are_ordered_by_day(self):
-        report = verify([rec(3, 1), rec(1, 1), rec(2, 1)], [genesis()])
-        self.assertEqual([r.dayIndex for r in report.results], [1, 2, 3])
+    def test_clean_run_columns_and_exit_zero(self):
+        code, days, policy, summary, err = self._run([(1, 1, 1000, 7, 0, 0, "0xa")])
+        self.assertEqual(code, 0)
+        self.assertEqual(days[0], "dayIndex,spendMilliUsd,windowSum,capInForce,"
+                                  "windowDaysInForce,policyVersionInForce,compliant,"
+                                  "authorisedNextDay")
+        self.assertEqual(days[1:], ["0,400,400,1000,7,1,true,true",
+                                    "1,700,1100,1000,7,1,false,false",
+                                    "2,-150,950,1000,7,1,true,true"])
+        self.assertEqual(policy, ["seq,policyVersion,submittedOnDay,"
+                                  "derivedEffectiveFromDay,emittedEffectiveFromDay,"
+                                  "deferralOk", "1,1,0,0,0,true"])
+        self.assertEqual(summary["settledDays"], 3)
+        self.assertEqual(summary["totalSpendMilliUsd"], 950)
+        self.assertEqual(summary["breaches"], [1])
+        self.assertEqual(summary["anomalyCount"], 0)
 
-    def test_report_ok_flag(self):
-        self.assertTrue(verify([rec(0, 10, version=1)],
-                               [genesis(cap=1000)]).ok)
-        self.assertFalse(verify([rec(0, 10000, version=1)],
-                                [genesis(cap=1000)]).ok)
+    def test_anomalies_exit_nonzero_and_go_to_stderr(self):
+        code, days, policy, summary, err = self._run(
+            [(1, 1, 1000, 7, 1, 1, "0xa"), (2, 2, 5000, 7, 2, 2, "0xa")])
+        self.assertEqual(code, 1)
+        self.assertIn("0,400,NA,NA,NA,NA,NA,NA", days)
+        self.assertIn("[no_regime]", err)
+        self.assertIn("[deferral_mismatch]", err)
+        self.assertEqual(policy[2], "2,2,2,7,2,false")
+        self.assertEqual(summary["anomaliesByCategory"],
+                         {"deferral_mismatch": 1, "no_regime": 1})
+
+    def test_bad_input_exit_two(self):
+        code = v.main(["--readings", self.readings, "--prices", self.prices,
+                       "--policy", self._policy([(1, 1, "1000.5", 7, 0, 0, "")]),
+                       "--out", os.path.join(self.dir, "x.csv")])
+        self.assertEqual(code, 2)
+
+    def test_parse_int_is_strict(self):
+        for bad in ["1.0", "1e3", "", " ", "٣", "0x10"]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                v.parse_int(bad, "x")
+        self.assertEqual(v.parse_int(" -42 ", "x"), -42)
+        self.assertEqual(v.parse_int("+7", "x"), 7)
+
+    def test_fixture_policies_parse(self):
+        fixtures = os.path.join(HERE, "fixtures")
+        for name in sorted(os.listdir(fixtures)):
+            if name.startswith("policy_") and name.endswith(".csv"):
+                with self.subTest(name=name):
+                    self.assertTrue(v.read_policy_csv(os.path.join(fixtures, name)))
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

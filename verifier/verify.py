@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
 """
-Independent verifier for the rolling-window spending-cap enforcement rule.
+Independent verifier for the rolling-window energy spending cap -- version 2.
 
-Implemented solely from ``docs/spec/enforcement-rule.md``.  No on-chain source, no
-``docs/decisions/design-decisions.md``, no Solidity of any kind was consulted.
+Implemented solely from ``docs/spec/enforcement-rule.md`` (version 2).  No
+Solidity, no on-chain source, and nothing describing the on-chain side was
+consulted.  Every judgment call not settled by the spec is listed in
+``docs/verifier/implementation-notes.md`` under "Ambiguities".
 
-Design notes that matter for the audit
---------------------------------------
+Structure, and why it looks the way it does
+-------------------------------------------
 
-*   **The window sum is recomputed from scratch for every day.**  See
-    :func:`window_sum`.  It performs a full linear scan of the *complete*
-    record set and selects the days inside ``[d - w + 1, d]``.  There is no
-    running total, no add-new/subtract-expiring step, no cursor, no
-    incremental state of any kind carried between days.  Deleting the result
-    for day ``d`` would not change the result for day ``d + 1``.  This is
-    required by enforcement-rule.md section 4 and is deliberately the opposite structure
-    to an incremental walk.
+The pipeline is four pure stages, each a function of complete inputs:
 
-*   **All money is integer milli-USD.**  Floats never reach a comparison.
-    The only place a real-valued quantity becomes an integer is
-    :func:`round_half_away_from_zero`, applied once at the parsing boundary,
-    and it is implemented with :mod:`decimal` rather than the built-in
-    ``round`` (which is banker's rounding and would be wrong -- enforcement-rule.md
-    section 7).
+1.  :func:`settle` -- readings + prices -> ``{dayIndex: spendMilliUsd}`` for
+    settled days only, plus anomalies (spec sections 4, 5).
+2.  :func:`replay_policy` -- policy events -> every write with its *derived*
+    effective day and whether it survived (spec 7.1, 7.2, 7.4).
+3.  :func:`regime_on` -- surviving writes + a day -> the regime in force
+    (spec 7.3).  Called afresh for every day asked about.
+4.  :func:`window_sum` -- the *complete* spend mapping + a day + a window
+    length -> the sum (spec 6).  It scans every settled day on every call and
+    keeps nothing between calls: no running total, no add-new/subtract-expiring
+    step, no cursor, no cache.  Evaluating days in any order, or one day in
+    isolation, gives identical answers.
 
-*   **The policy schedule is reconstructed by replaying the event log.**
-    See :func:`build_policy_schedule`.  Every judgment call taken there is
-    recorded in ``README.md`` under "Ambiguities".
+All arithmetic is on Python ``int``.  There is no ``float``, no ``Decimal`` and
+no built-in ``round`` anywhere in this module; section 5's half-away-from-zero
+rounding is :func:`round_exact_to_milli_usd`, done with ``divmod`` on
+magnitudes.
 """
 
 from __future__ import annotations
@@ -34,601 +35,552 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
-from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Iterable, Optional, Sequence
+from dataclasses import dataclass
+from typing import Iterable, Mapping, Optional, Sequence
 
 __all__ = [
-    "DayRecord",
-    "PolicyEvent",
-    "Regime",
-    "DayResult",
-    "Anomaly",
-    "VerificationReport",
-    "round_half_away_from_zero",
-    "to_int_milli_usd",
-    "day_index_from_unix_seconds",
-    "next_window_boundary",
-    "build_policy_schedule",
-    "regime_in_force",
-    "window_sum",
-    "verify",
-    "read_records_csv",
-    "read_policy_events_csv",
-    "write_results_csv",
+    "SLOTS_PER_DAY", "EXACT_UNITS_PER_MILLI_USD",
+    "Reading", "Price", "PolicyEvent", "ReplayedWrite", "Anomaly",
+    "DayResult", "PolicyRow", "Report",
+    "day_index_from_unix_seconds", "round_exact_to_milli_usd",
+    "exact_day_total", "settle", "next_window_boundary", "replay_policy",
+    "regime_on", "window_sum", "verify",
+    "read_readings_csv", "read_prices_csv", "read_policy_csv",
+    "write_days_csv", "write_policy_csv", "summary_dict", "main",
 ]
 
-
-# ---------------------------------------------------------------------------
-# Section 7 -- rounding, and the integer boundary
-# ---------------------------------------------------------------------------
-
-_ONE = Decimal(1)
-
-
-def round_half_away_from_zero(value) -> int:
-    """Round *value* to the nearest integer, ties going away from zero.
-
-    ``2.5 -> 3``, ``-2.5 -> -3``, ``3.5 -> 4``, ``-3.5 -> -4``.
-
-    This is *not* Python's built-in :func:`round`, which is round-half-to-even
-    and would give ``2.5 -> 2`` and ``-2.5 -> -2``.  enforcement-rule.md section 7 forbids
-    that rule here.
-
-    Accepts ``int``, ``str``, :class:`decimal.Decimal` and ``float``.  Strings
-    and ``Decimal`` are exact.  A ``float`` is converted through ``repr`` so
-    that the value the *caller wrote* is what gets rounded, rather than the
-    binary artefact underneath it (``2.675`` is really ``2.67499...`` in
-    binary; ``Decimal(repr(2.675))`` is ``2.675``).
-    """
-    if isinstance(value, bool):  # bool is an int subclass; refuse it explicitly
-        raise TypeError("bool is not a numeric value here")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, Decimal):
-        dec = value
-    elif isinstance(value, float):
-        dec = Decimal(repr(value))
-    elif isinstance(value, str):
-        try:
-            dec = Decimal(value.strip())
-        except InvalidOperation as exc:
-            raise ValueError(f"not a number: {value!r}") from exc
-    else:
-        raise TypeError(f"cannot round value of type {type(value).__name__}")
-    if not dec.is_finite():
-        raise ValueError(f"not a finite number: {value!r}")
-    # Decimal's ROUND_HALF_UP means "half away from zero" (it is sign-aware),
-    # which is exactly the rule enforcement-rule.md section 7 asks for.
-    return int(dec.quantize(_ONE, rounding=ROUND_HALF_UP))
-
-
-def to_int_milli_usd(value) -> int:
-    """Convert a parsed field to integer milli-USD, once, at the boundary.
-
-    After this call nothing downstream is anything other than ``int``.
-    """
-    return round_half_away_from_zero(value)
-
-
-def _to_int_exact(value, what: str) -> int:
-    """Parse a field that must already be a whole number (indices, versions)."""
-    if isinstance(value, bool):
-        raise TypeError(f"{what} must not be a bool")
-    if isinstance(value, int):
-        return value
-    text = str(value).strip()
-    try:
-        dec = Decimal(text)
-    except InvalidOperation as exc:
-        raise ValueError(f"{what} is not an integer: {value!r}") from exc
-    if dec != dec.to_integral_value():
-        raise ValueError(f"{what} must be a whole number, got {value!r}")
-    return int(dec)
-
-
-# ---------------------------------------------------------------------------
-# Section 3 -- day index
-# ---------------------------------------------------------------------------
-
+SLOTS_PER_DAY = 48
 SECONDS_PER_DAY = 86400
+# exact is in 1e-14 USD (1 mWh = 1e-6 kWh, one price unit = 1e-8 USD/kWh).
+# One milli-USD = 1e-3 USD = 1e11 exact units.
+EXACT_UNITS_PER_MILLI_USD = 100_000_000_000
+
+# Anomaly categories.  The first five are the ones spec section 10.1 names;
+# the rest are places the input is malformed in a way the spec does not name
+# (see the ambiguity list).
+INCOMPLETE_DAY = "incomplete_day"
+INVALID_HALF_HOUR = "invalid_half_hour"
+GAP = "gap"
+NO_REGIME = "no_regime"
+DEFERRAL_MISMATCH = "deferral_mismatch"
+DUPLICATE_SLOT = "duplicate_slot"
+POLICY_OUT_OF_ORDER = "policy_out_of_order"
+NO_INCUMBENT_REGIME = "no_incumbent_regime"
+
+
+# ---------------------------------------------------------------------------
+# Integer primitives
+# ---------------------------------------------------------------------------
+
+_INT_RE = re.compile(r"[+-]?[0-9]+", re.ASCII)
+
+
+def parse_int(text, what: str) -> int:
+    """Parse a strictly integral field.  ``"1.0"``, ``"1e3"``, ``""`` and
+    non-ASCII digits are rejected rather than coerced."""
+    if isinstance(text, bool):
+        raise ValueError(f"{what} must be an integer, got a bool")
+    if isinstance(text, int):
+        return text
+    s = str(text).strip()
+    if not _INT_RE.fullmatch(s):
+        raise ValueError(f"{what} is not an integer: {text!r}")
+    return int(s)
 
 
 def day_index_from_unix_seconds(unix_seconds: int) -> int:
-    """``floor(unix_seconds / 86400)``, UTC, always.
+    """Spec section 3: ``floor(unix_seconds / 86400)``.  ``//`` floors."""
+    return parse_int(unix_seconds, "unix_seconds") // SECONDS_PER_DAY
 
-    Python's ``//`` floors towards negative infinity, which is what "floor"
-    means here, including for pre-epoch instants.  No timezone, no calendar
-    library, no host clock is involved.
+
+def round_exact_to_milli_usd(exact: int) -> int:
+    """Spec section 5: ``exact / 1e11`` rounded half away from zero.
+
+    Works on the magnitude so that the sign cannot interact with floor
+    division, then restores the sign.  A remainder of at least one half
+    (``2 * r >= divisor``) rounds the magnitude up.
     """
-    return _to_int_exact(unix_seconds, "unix_seconds") // SECONDS_PER_DAY
-
-
-# ---------------------------------------------------------------------------
-# Input types
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class DayRecord:
-    """One reported calendar day (enforcement-rule.md section 2.1)."""
-
-    dayIndex: int
-    netSpend: int                      # signed milli-USD, as recorded
-    policyVersion: Optional[int] = None
-    paused: bool = False
-
-    @property
-    def contribution(self) -> int:
-        """What this day contributes to a window sum.
-
-        A paused day is a *zero-spend day, not a missing day* (section 4): it
-        contributes 0, and the window still advances across it.  The recorded
-        ``netSpend`` is kept verbatim on the record so the discrepancy stays
-        visible; it is reported as an anomaly rather than silently trusted.
-        """
-        return 0 if self.paused else self.netSpend
-
-
-@dataclass(frozen=True)
-class PolicyEvent:
-    """One owner policy write (enforcement-rule.md section 2.2)."""
-
-    seq: int
-    policyVersion: int
-    cap: int                           # signed milli-USD
-    windowDays: int                    # >= 1
-    effectiveFromDay: int
-    setBy: str = ""
-
-
-@dataclass(frozen=True)
-class Regime:
-    """A policy write resolved onto the day it actually starts governing."""
-
-    effectiveDay: int                  # resolved: may be deferred past effectiveFromDay
-    seq: int
-    policyVersion: int
-    cap: int
-    windowDays: int
-    requestedFromDay: int              # the event's raw effectiveFromDay
-    deferred: bool = False             # True if a raise was pushed to a boundary
-
-    @property
-    def sort_key(self) -> tuple:
-        # Section 5.2 orders by effective day; section 5.6 breaks ties on the
-        # same day in favour of the later-emitted write.
-        return (self.effectiveDay, self.seq)
-
-
-# ---------------------------------------------------------------------------
-# Output types
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class DayResult:
-    dayIndex: int
-    netSpend: int
-    windowSum: Optional[int]
-    capInForce: Optional[int]
-    windowDaysInForce: Optional[int]
-    compliant: Optional[bool]
-    policyVersionMismatch: Optional[bool]
-    policyVersionInForce: Optional[int] = None
-    paused: bool = False
-
-
-@dataclass(frozen=True)
-class Anomaly:
-    kind: str
-    dayIndex: Optional[int]
-    detail: str
-
-
-@dataclass
-class VerificationReport:
-    results: list = field(default_factory=list)      # list[DayResult]
-    schedule: list = field(default_factory=list)     # list[Regime]
-    anomalies: list = field(default_factory=list)    # list[Anomaly]
-
-    @property
-    def breaches(self) -> list:
-        return [r for r in self.results if r.compliant is False]
-
-    @property
-    def version_mismatches(self) -> list:
-        return [r for r in self.results if r.policyVersionMismatch]
-
-    @property
-    def undetermined(self) -> list:
-        """Days with a record but no policy regime in force."""
-        return [r for r in self.results if r.compliant is None]
-
-    @property
-    def ok(self) -> bool:
-        return not (self.breaches or self.version_mismatches
-                    or self.undetermined or self.anomalies)
-
-
-# ---------------------------------------------------------------------------
-# Section 5 -- the cap in force on a day
-# ---------------------------------------------------------------------------
+    if isinstance(exact, bool) or not isinstance(exact, int):
+        raise TypeError("exact must be an int")
+    magnitude = -exact if exact < 0 else exact
+    quotient, remainder = divmod(magnitude, EXACT_UNITS_PER_MILLI_USD)
+    if 2 * remainder >= EXACT_UNITS_PER_MILLI_USD:
+        quotient += 1
+    return -quotient if exact < 0 else quotient
 
 
 def next_window_boundary(day: int, window_days: int) -> int:
-    """The window boundary *strictly after* ``day`` (enforcement-rule.md section 5.5).
-
-    Boundaries sit at multiples of ``window_days`` counted from the Unix
-    epoch, so the answer is the next multiple of ``window_days`` strictly
-    above ``day``.  If ``day`` is itself a multiple, the answer is
-    ``day + window_days``, not ``day`` -- see the ambiguity list in README.md,
-    this is the literal reading of "strictly after".
-    """
+    """Spec 7.2: the smallest multiple of ``window_days`` strictly greater
+    than ``day``.  If ``day`` is a multiple, the answer is ``day + w``."""
     if window_days < 1:
         raise ValueError("windowDays must be >= 1")
     return (day // window_days + 1) * window_days
 
 
-def _resolve_at(schedule: Sequence[Regime], day: int) -> Optional[Regime]:
-    """Greatest effective day <= ``day``; later ``seq`` wins a tie."""
+# ---------------------------------------------------------------------------
+# Input and output types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Reading:
+    dayIndex: int
+    slot: int
+    importMWh: int
+    exportMWh: int
+
+
+@dataclass(frozen=True)
+class Price:
+    dayIndex: int
+    slot: int
+    importPrice: int
+    exportPrice: int
+
+
+@dataclass(frozen=True)
+class PolicyEvent:
+    seq: int
+    policyVersion: int
+    cap: int
+    windowDays: int
+    submittedOnDay: int
+    effectiveFromDay: int
+    setBy: str = ""
+
+
+@dataclass(frozen=True)
+class ReplayedWrite:
+    """A policy event after replay.
+
+    ``classification`` is one of ``genesis``, ``raise``, ``not_raise`` or
+    ``no_incumbent``.  ``cancelledBySeq`` is the seq of the lowering/unchanged
+    write that cancelled it, or ``None`` if it survived.
+    """
+    event: PolicyEvent
+    derivedEffectiveFromDay: int
+    classification: str
+    incumbentSeq: Optional[int]
+    cancelledBySeq: Optional[int] = None
+
+    @property
+    def seq(self) -> int:
+        return self.event.seq
+
+    @property
+    def cap(self) -> int:
+        return self.event.cap
+
+    @property
+    def windowDays(self) -> int:
+        return self.event.windowDays
+
+    @property
+    def policyVersion(self) -> int:
+        return self.event.policyVersion
+
+    @property
+    def survives(self) -> bool:
+        return self.cancelledBySeq is None
+
+    @property
+    def deferralOk(self) -> bool:
+        if self.classification == "genesis":
+            return True
+        return self.derivedEffectiveFromDay == self.event.effectiveFromDay
+
+
+@dataclass(frozen=True)
+class Anomaly:
+    category: str
+    dayIndex: Optional[int]
+    detail: str
+    seq: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class DayResult:
+    dayIndex: int
+    spendMilliUsd: int
+    windowSum: Optional[int]
+    capInForce: Optional[int]
+    windowDaysInForce: Optional[int]
+    policyVersionInForce: Optional[int]
+    compliant: Optional[bool]
+    authorisedNextDay: Optional[bool]
+
+
+@dataclass(frozen=True)
+class PolicyRow:
+    seq: int
+    policyVersion: int
+    submittedOnDay: int
+    derivedEffectiveFromDay: int
+    emittedEffectiveFromDay: int
+    deferralOk: bool
+
+
+@dataclass
+class Report:
+    days: list          # list[DayResult], ascending dayIndex, settled days only
+    policy: list        # list[PolicyRow], ascending seq
+    replay: list        # list[ReplayedWrite], ascending seq
+    spends: dict        # {dayIndex: spendMilliUsd}, settled days only
+    anomalies: list     # list[Anomaly]
+
+    @property
+    def ok(self) -> bool:
+        return not self.anomalies
+
+
+# ---------------------------------------------------------------------------
+# Sections 4 and 5 -- settlement and daily spend
+# ---------------------------------------------------------------------------
+
+
+def exact_day_total(pairs: Iterable[tuple]) -> int:
+    """Spec 5: sum(import * importPrice) - sum(export * exportPrice), exact,
+    over (Reading, Price) pairs.  Not rounded."""
+    imported = 0
+    exported = 0
+    for reading, price in pairs:
+        imported += reading.importMWh * price.importPrice
+        exported += reading.exportMWh * price.exportPrice
+    return imported - exported
+
+
+def settle(readings: Iterable[Reading], prices: Iterable[Price]):
+    """Decide which days are settled and compute each settled day's spend.
+
+    Returns ``(spends, anomalies)`` where ``spends`` maps dayIndex to signed
+    milli-USD for settled days only.
+
+    A day is considered if it appears in *either* input.  It is settled only
+    if both inputs have exactly one row for each of slots 0..47 and no
+    half-hour both imports and exports.
+    """
+    readings_by_day: dict = {}
+    for r in readings:
+        readings_by_day.setdefault(r.dayIndex, []).append(r)
+    prices_by_day: dict = {}
+    for p in prices:
+        prices_by_day.setdefault(p.dayIndex, []).append(p)
+
+    anomalies: list = []
+    spends: dict = {}
+    all_slots = set(range(SLOTS_PER_DAY))
+
+    for day in sorted(set(readings_by_day) | set(prices_by_day)):
+        settled = True
+        per_input = (("readings", readings_by_day.get(day, [])),
+                     ("prices", prices_by_day.get(day, [])))
+        for label, rows in per_input:
+            counts: dict = {}
+            for row in rows:
+                counts[row.slot] = counts.get(row.slot, 0) + 1
+            duplicated = sorted(s for s, c in counts.items() if c > 1)
+            missing = sorted(all_slots - set(counts))
+            if duplicated:
+                settled = False
+                anomalies.append(Anomaly(
+                    DUPLICATE_SLOT, day,
+                    f"{label} has more than one row for slot(s) "
+                    f"{_fmt_slots(duplicated)}; day not settled"))
+            if missing:
+                settled = False
+                anomalies.append(Anomaly(
+                    INCOMPLETE_DAY, day,
+                    f"{label} missing {len(missing)} of {SLOTS_PER_DAY} "
+                    f"slot(s): {_fmt_slots(missing)}; day not settled"))
+
+        for r in sorted(readings_by_day.get(day, []), key=lambda x: x.slot):
+            if r.importMWh > 0 and r.exportMWh > 0:
+                settled = False
+                anomalies.append(Anomaly(
+                    INVALID_HALF_HOUR, day,
+                    f"slot {r.slot} imports {r.importMWh} mWh and exports "
+                    f"{r.exportMWh} mWh; day not settled"))
+
+        if not settled:
+            continue
+
+        price_at = {p.slot: p for p in prices_by_day[day]}
+        pairs = [(r, price_at[r.slot]) for r in readings_by_day[day]]
+        spends[day] = round_exact_to_milli_usd(exact_day_total(pairs))
+
+    settled_days = sorted(spends)
+    for earlier, later in zip(settled_days, settled_days[1:]):
+        if later - earlier > 1:
+            first, last = earlier + 1, later - 1
+            span = str(first) if first == last else f"{first}..{last}"
+            anomalies.append(Anomaly(
+                GAP, first,
+                f"no settled day in {span} ({last - first + 1} day(s)) between "
+                f"settled days {earlier} and {later}; contributes 0"))
+
+    return spends, anomalies
+
+
+def _fmt_slots(slots: Sequence[int]) -> str:
+    if len(slots) > 12:
+        return ",".join(map(str, slots[:12])) + f",... ({len(slots)} total)"
+    return ",".join(map(str, slots))
+
+
+# ---------------------------------------------------------------------------
+# Section 7 -- policy replay and regime selection
+# ---------------------------------------------------------------------------
+
+
+def regime_on(writes: Iterable[ReplayedWrite], day: int) -> Optional[ReplayedWrite]:
+    """Spec 7.3: among *surviving* writes whose derived effective day is
+    ``<= day``, the greatest effective day; on a tie, the higher seq.
+    Stateless: scans every write on every call."""
     best = None
-    for regime in schedule:
-        if regime.effectiveDay <= day:
-            if best is None or regime.sort_key > best.sort_key:
-                best = regime
+    for w in writes:
+        if not w.survives or w.derivedEffectiveFromDay > day:
+            continue
+        key = (w.derivedEffectiveFromDay, w.seq)
+        if best is None or key > (best.derivedEffectiveFromDay, best.seq):
+            best = w
     return best
 
 
-def build_policy_schedule(events: Iterable[PolicyEvent]) -> list:
-    """Replay the policy event log from genesis into a list of `Regime`.
+def replay_policy(events: Iterable[PolicyEvent]):
+    """Replay policy writes from genesis in seq order (spec 7.1, 7.2).
 
-    Implements enforcement-rule.md section 5 rules 1-6:
-
-    1/2. A write governs from its effective day until superseded; the regime on
-         day ``d`` is the applicable write with the greatest effective day
-         ``<= d``.
-    3.   A write that *lowers* the cap takes effect on the day it is made (its
-         ``effectiveFromDay``) and cancels every change already scheduled for a
-         strictly later day.
-    4.   A write that *raises* the cap takes effect at the next window boundary.
-    5.   Boundaries are multiples of ``windowDays`` from the epoch.
-    6.   Same effective day -> the later-emitted write wins.
-
-    The returned list is sorted by ``(effectiveDay, seq)``.
+    Returns ``(replayed, anomalies)``; ``replayed`` is in ascending seq and
+    includes cancelled writes (marked via ``cancelledBySeq``) so that the
+    deferral check (7.4) still covers them.
     """
     ordered = sorted(events, key=lambda e: e.seq)
-    seen_seq = set()
-    for event in ordered:
-        if event.seq in seen_seq:
-            raise ValueError(f"duplicate policy event seq {event.seq}; "
-                             "enforcement-rule.md section 2.2 says ties are impossible")
-        seen_seq.add(event.seq)
-        if event.windowDays < 1:
-            raise ValueError(f"policy event seq {event.seq} has windowDays "
-                             f"{event.windowDays}; enforcement-rule.md section 2.2 "
-                             "requires >= 1")
+    seen = set()
+    for e in ordered:
+        if e.seq in seen:
+            raise ValueError(f"duplicate policy seq {e.seq}")
+        seen.add(e.seq)
+        if e.windowDays < 1:
+            raise ValueError(f"policy seq {e.seq}: windowDays {e.windowDays} < 1")
 
-    schedule: list = []
-    for event in ordered:
-        current = _resolve_at(schedule, event.effectiveFromDay)
+    anomalies: list = []
+    replayed: list = []
+    latest_submitted: Optional[int] = None
 
+    for index, event in enumerate(ordered):
+        s = event.submittedOnDay
+        if latest_submitted is not None and s < latest_submitted:
+            anomalies.append(Anomaly(
+                POLICY_OUT_OF_ORDER, s,
+                f"seq {event.seq} submittedOnDay {s} is earlier than an "
+                f"earlier-seq write's submittedOnDay {latest_submitted}; "
+                "replayed in seq order regardless", seq=event.seq))
+        latest_submitted = s if latest_submitted is None else max(latest_submitted, s)
+
+        if index == 0:
+            replayed.append(ReplayedWrite(event, event.effectiveFromDay,
+                                          "genesis", None))
+            continue
+
+        current = regime_on(replayed, s)
         if current is None:
-            # Genesis (or a write effective before anything else governs).
-            # "Raise" is undefined with no incumbent cap to raise above, so
-            # rule 4 cannot bite; the write takes effect as written.
-            effective_day = event.effectiveFromDay
-            deferred = False
-            is_raise = False
+            # 7.2 is undefined without an incumbent.  Treated as not-a-raise:
+            # effective on s, cancelling later-effective writes.
+            anomalies.append(Anomaly(
+                NO_INCUMBENT_REGIME, s,
+                f"seq {event.seq}: no regime in force on submittedOnDay {s}, "
+                "so raise/not-raise is undefined; treated as not a raise "
+                "(effective on submittedOnDay)", seq=event.seq))
+            classification, derived, incumbent_seq = "no_incumbent", s, None
+        elif event.cap > current.cap:
+            classification = "raise"
+            derived = next_window_boundary(s, current.windowDays)
+            incumbent_seq = current.seq
         else:
-            is_raise = event.cap > current.cap
-            if is_raise:
-                # Rule 4 + rule 5.  The boundary that matters is a boundary of
-                # the window the agent has *already partly spent*, so it is
-                # measured with the window length currently in force, not the
-                # (possibly different) length this write is introducing.
-                effective_day = next_window_boundary(
-                    event.effectiveFromDay, current.windowDays
-                )
-                deferred = effective_day != event.effectiveFromDay
-            else:
-                # A lowering (or a cap-neutral write) applies at once.
-                effective_day = event.effectiveFromDay
-                deferred = False
+            classification, derived, incumbent_seq = "not_raise", s, current.seq
 
-        if not is_raise and current is not None:
-            # Rule 3: the owner's most recent instruction wins -- drop anything
-            # queued for a strictly later day so a stale raise cannot
-            # resurrect itself.  Same-day collisions are left to rule 6.
-            schedule = [r for r in schedule if r.effectiveDay <= effective_day]
+        if classification != "raise":
+            replayed = [
+                ReplayedWrite(w.event, w.derivedEffectiveFromDay,
+                              w.classification, w.incumbentSeq, event.seq)
+                if (w.survives and w.derivedEffectiveFromDay > s) else w
+                for w in replayed
+            ]
 
-        schedule.append(
-            Regime(
-                effectiveDay=effective_day,
-                seq=event.seq,
-                policyVersion=event.policyVersion,
-                cap=event.cap,
-                windowDays=event.windowDays,
-                requestedFromDay=event.effectiveFromDay,
-                deferred=deferred,
-            )
-        )
+        replayed.append(ReplayedWrite(event, derived, classification,
+                                      incumbent_seq))
 
-    schedule.sort(key=lambda r: r.sort_key)
-    return schedule
+    for w in replayed:
+        if not w.deferralOk:
+            anomalies.append(Anomaly(
+                DEFERRAL_MISMATCH, w.event.submittedOnDay,
+                f"seq {w.seq} ({w.classification}, cap {w.cap}): chain recorded "
+                f"effectiveFromDay {w.event.effectiveFromDay}, rule derives "
+                f"{w.derivedEffectiveFromDay}; derived day used. Finding about "
+                "the chain, not a breach by the agent", seq=w.seq))
 
-
-def regime_in_force(schedule: Sequence[Regime], day: int) -> Optional[Regime]:
-    """The regime governing ``day``, or ``None`` if no policy governs it yet."""
-    return _resolve_at(schedule, day)
+    return replayed, anomalies
 
 
 # ---------------------------------------------------------------------------
-# Section 4 -- the window sum
+# Section 6 -- the window sum
 # ---------------------------------------------------------------------------
 
 
-def window_sum(records: Sequence[DayRecord], day: int, window_days: int) -> int:
-    """Sum of ``netSpend`` over the inclusive day range ``[day - w + 1, day]``.
+def window_sum(spends: Mapping[int, int], day: int, window_days: int) -> int:
+    """Spec 6: sum of spend over the inclusive range ``[day - w + 1, day]``.
 
-    **Structural note (enforcement-rule.md section 4).**  This function is deliberately
-    stateless and self-contained.  It re-scans the *entire* record set on every
-    call and keeps nothing between calls.  It does not know, and cannot know,
-    what the previous day's answer was.  There is no accumulator to drift, no
-    expiry pointer to fall out of step, and no ordering assumption about
-    ``records``.  Calling it for the days of a ledger in reverse order, or for
-    one day in isolation, gives identical answers.
-
-    Days with no record contribute 0 simply by not matching the range test.
-    Paused days contribute 0 via :attr:`DayRecord.contribution` but *are* in
-    the range, so the window still advances across them.  Negative records
-    contribute their negative value: never clamped, never dropped, never
-    absolute-valued.
+    Scans the complete mapping of settled-day spends and keeps nothing
+    between calls.  Days absent from ``spends`` (not settled, gaps, before the
+    data) contribute 0 by not being present.  Negative spends are summed as
+    they are.
     """
     if window_days < 1:
         raise ValueError("windowDays must be >= 1")
-    first_day = day - window_days + 1
+    oldest = day - window_days + 1
     total = 0
-    for record in records:
-        if first_day <= record.dayIndex <= day:
-            total += record.contribution
+    for d, spend in spends.items():
+        if oldest <= d <= day:
+            total += spend
     return total
 
 
 # ---------------------------------------------------------------------------
-# Sections 6 / 6.1 / 6.2 -- the compliance test and the cross-check
+# Sections 8, 9 -- per-day verdicts
 # ---------------------------------------------------------------------------
 
 
-def _cap_by_policy_version(events: Sequence[PolicyEvent]) -> dict:
-    """Map policyVersion -> cap, taking the latest ``seq`` if it repeats."""
-    latest: dict = {}
-    for event in sorted(events, key=lambda e: e.seq):
-        latest[event.policyVersion] = event
-    return {version: ev.cap for version, ev in latest.items()}
+def verify(readings: Iterable[Reading], prices: Iterable[Price],
+           events: Iterable[PolicyEvent]) -> Report:
+    spends, anomalies = settle(readings, prices)
+    replayed, policy_anomalies = replay_policy(events)
+    anomalies.extend(policy_anomalies)
 
-
-def verify(records: Iterable[DayRecord],
-           events: Iterable[PolicyEvent]) -> VerificationReport:
-    """Verify every recorded day against the replayed policy history."""
-    records = list(records)
-    events = list(events)
-
-    anomalies: list = []
-
-    seen_days: dict = {}
-    for record in records:
-        if record.dayIndex in seen_days:
-            raise ValueError(
-                f"duplicate record for dayIndex {record.dayIndex}; enforcement-rule.md "
-                "section 2.1 specifies one row per calendar day"
-            )
-        seen_days[record.dayIndex] = record
-        if record.paused and record.netSpend != 0:
-            anomalies.append(Anomaly(
-                "paused_day_nonzero_netspend", record.dayIndex,
-                f"paused day carries netSpend {record.netSpend}; treated as 0 "
-                "for the window sum per enforcement-rule.md section 4",
-            ))
-
-    schedule = build_policy_schedule(events)
-    caps_by_version = _cap_by_policy_version(events)
-
-    results: list = []
-    for record in sorted(records, key=lambda r: r.dayIndex):
-        day = record.dayIndex
-
-        # Section 6.1, stated explicitly rather than left to fall out of the
-        # ordering: the day is judged against the regime in force ON THAT DAY.
-        # A later lowering never reaches back and convicts it.
-        regime = regime_in_force(schedule, day)
-
+    days: list = []
+    for d in sorted(spends):
+        regime = regime_on(replayed, d)
         if regime is None:
             anomalies.append(Anomaly(
-                "no_policy_in_force", day,
-                "no policy write is effective on or before this day; "
-                "compliance is undetermined",
-            ))
-            results.append(DayResult(
-                dayIndex=day,
-                netSpend=record.netSpend,
-                windowSum=None,
-                capInForce=None,
-                windowDaysInForce=None,
-                compliant=None,
-                policyVersionMismatch=None,
-                policyVersionInForce=None,
-                paused=record.paused,
-            ))
+                NO_REGIME, d,
+                "settled day earlier than every effective policy write; "
+                "compliance and authorisation undetermined"))
+            days.append(DayResult(d, spends[d], None, None, None, None,
+                                  None, None))
             continue
 
-        total = window_sum(records, day, regime.windowDays)
-        compliant = total <= regime.cap        # section 6: <= , equality passes
-
-        # Section 6.2 -- an entirely separate question from compliance.
-        mismatch: Optional[bool]
-        if record.policyVersion is None:
-            mismatch = None
-        elif record.policyVersion not in caps_by_version:
-            mismatch = True
-            anomalies.append(Anomaly(
-                "unknown_policy_version", day,
-                f"record is bound to policyVersion {record.policyVersion}, "
-                "which appears in no policy event",
-            ))
-        else:
-            bound_cap = caps_by_version[record.policyVersion]
-            mismatch = bound_cap != regime.cap
-            if mismatch:
-                anomalies.append(Anomaly(
-                    "policy_version_cap_mismatch", day,
-                    f"record bound to policyVersion {record.policyVersion} "
-                    f"(cap {bound_cap}) but the regime in force is version "
-                    f"{regime.policyVersion} (cap {regime.cap})",
-                ))
-
-        results.append(DayResult(
-            dayIndex=day,
-            netSpend=record.netSpend,
+        total = window_sum(spends, d, regime.windowDays)
+        next_regime = regime_on(replayed, d + 1)
+        authorised = None if next_regime is None else total <= next_regime.cap
+        days.append(DayResult(
+            dayIndex=d,
+            spendMilliUsd=spends[d],
             windowSum=total,
             capInForce=regime.cap,
             windowDaysInForce=regime.windowDays,
-            compliant=compliant,
-            policyVersionMismatch=mismatch,
             policyVersionInForce=regime.policyVersion,
-            paused=record.paused,
+            compliant=total <= regime.cap,
+            authorisedNextDay=authorised,
         ))
 
-    return VerificationReport(results=results, schedule=schedule,
-                              anomalies=anomalies)
+    policy = [PolicyRow(w.seq, w.policyVersion, w.event.submittedOnDay,
+                        w.derivedEffectiveFromDay, w.event.effectiveFromDay,
+                        w.deferralOk)
+              for w in replayed]
+    return Report(days=days, policy=policy, replay=replayed, spends=spends,
+                  anomalies=anomalies)
 
 
 # ---------------------------------------------------------------------------
 # CSV I/O
 # ---------------------------------------------------------------------------
 
-_TRUE = {"1", "true", "t", "yes", "y"}
-_FALSE = {"", "0", "false", "f", "no", "n"}
 
-# Accepted spellings for the net-spend column.  The generated daily-record
-# files in this repository call it ``spendMilliUsd``; enforcement-rule.md calls it
-# ``netSpend``.  Both are accepted, ``netSpend`` wins if both are present.
-_NET_SPEND_ALIASES = ("netSpend", "spendMilliUsd", "netSpendMilliUsd")
-
-
-def _parse_bool(value, what: str) -> bool:
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in _TRUE:
-        return True
-    if text in _FALSE:
-        return False
-    raise ValueError(f"{what} is not a boolean: {value!r}")
-
-
-def _optional(row: dict, key: str):
-    value = row.get(key)
-    if value is None:
-        return None
-    value = value.strip() if isinstance(value, str) else value
-    return None if value == "" else value
-
-
-def read_records_csv(path: str, agent_id: Optional[str] = None) -> list:
-    """Read a day-record CSV.
-
-    Required column: ``dayIndex`` plus one of ``netSpend`` / ``spendMilliUsd``.
-    Optional columns: ``policyVersion``, ``paused``, ``agentId``.
-    """
+def _read_rows(path: str, required: Sequence[str]):
     with open(path, newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"{path}: empty file")
-        fields = set(reader.fieldnames)
-        if "dayIndex" not in fields:
-            raise ValueError(f"{path}: missing required column 'dayIndex'")
-        spend_col = next((c for c in _NET_SPEND_ALIASES if c in fields), None)
-        if spend_col is None:
-            raise ValueError(
-                f"{path}: missing a net-spend column (one of "
-                f"{', '.join(_NET_SPEND_ALIASES)})"
-            )
-
-        records = []
-        agents = set()
-        for line_no, row in enumerate(reader, start=2):
-            row_agent = _optional(row, "agentId")
-            if row_agent is not None:
-                agents.add(row_agent)
-                if agent_id is not None and row_agent != agent_id:
-                    continue
-            try:
-                version = _optional(row, "policyVersion")
-                paused_raw = _optional(row, "paused")
-                records.append(DayRecord(
-                    dayIndex=_to_int_exact(row["dayIndex"], "dayIndex"),
-                    netSpend=to_int_milli_usd(row[spend_col]),
-                    policyVersion=(None if version is None
-                                   else _to_int_exact(version, "policyVersion")),
-                    paused=(False if paused_raw is None
-                            else _parse_bool(paused_raw, "paused")),
-                ))
-            except (ValueError, TypeError) as exc:
-                raise ValueError(f"{path}:{line_no}: {exc}") from exc
-
-    if agent_id is None and len(agents) > 1:
-        raise ValueError(
-            f"{path}: contains {len(agents)} distinct agentId values; pass "
-            "--agent to select one (the rule is per-agent)"
-        )
-    return records
-
-
-def read_policy_events_csv(path: str) -> list:
-    """Read a policy-event CSV.
-
-    Required columns: ``seq``, ``policyVersion``, ``cap``, ``windowDays``,
-    ``effectiveFromDay``.  Optional: ``setBy``.
-    """
-    required = ["seq", "policyVersion", "cap", "windowDays", "effectiveFromDay"]
-    with open(path, newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            raise ValueError(f"{path}: empty file")
-        missing = [c for c in required if c not in set(reader.fieldnames)]
+        names = [n.strip() for n in reader.fieldnames]
+        missing = [c for c in required if c not in names]
         if missing:
             raise ValueError(f"{path}: missing column(s) {', '.join(missing)}")
-
-        events = []
-        for line_no, row in enumerate(reader, start=2):
-            try:
-                events.append(PolicyEvent(
-                    seq=_to_int_exact(row["seq"], "seq"),
-                    policyVersion=_to_int_exact(row["policyVersion"],
-                                                "policyVersion"),
-                    cap=to_int_milli_usd(row["cap"]),
-                    windowDays=_to_int_exact(row["windowDays"], "windowDays"),
-                    effectiveFromDay=_to_int_exact(row["effectiveFromDay"],
-                                                   "effectiveFromDay"),
-                    setBy=(_optional(row, "setBy") or ""),
-                ))
-            except (ValueError, TypeError) as exc:
-                raise ValueError(f"{path}:{line_no}: {exc}") from exc
-    if not events:
-        raise ValueError(f"{path}: no policy events; enforcement-rule.md section 5 needs "
-                         "at least a genesis write")
-    return events
+        reader.fieldnames = names
+        return [(line_no, row) for line_no, row in enumerate(reader, start=2)]
 
 
-RESULT_COLUMNS = [
-    "dayIndex", "netSpend", "windowSum", "capInForce", "windowDaysInForce",
-    "compliant", "policyVersionMismatch",
-]
+def _slot(value, what):
+    slot = parse_int(value, what)
+    if not 0 <= slot < SLOTS_PER_DAY:
+        raise ValueError(f"{what} {slot} outside 0..{SLOTS_PER_DAY - 1}")
+    return slot
 
 
-def _cell(value):
+def _non_negative(value, what):
+    n = parse_int(value, what)
+    if n < 0:
+        raise ValueError(f"{what} must be >= 0, got {n}")
+    return n
+
+
+def read_readings_csv(path: str) -> list:
+    out = []
+    for line_no, row in _read_rows(path, ["dayIndex", "slot", "importMWh", "exportMWh"]):
+        try:
+            out.append(Reading(parse_int(row["dayIndex"], "dayIndex"),
+                               _slot(row["slot"], "slot"),
+                               _non_negative(row["importMWh"], "importMWh"),
+                               _non_negative(row["exportMWh"], "exportMWh")))
+        except ValueError as exc:
+            raise ValueError(f"{path}:{line_no}: {exc}") from exc
+    return out
+
+
+def read_prices_csv(path: str) -> list:
+    out = []
+    for line_no, row in _read_rows(path, ["dayIndex", "slot", "importPrice", "exportPrice"]):
+        try:
+            out.append(Price(parse_int(row["dayIndex"], "dayIndex"),
+                             _slot(row["slot"], "slot"),
+                             parse_int(row["importPrice"], "importPrice"),
+                             parse_int(row["exportPrice"], "exportPrice")))
+        except ValueError as exc:
+            raise ValueError(f"{path}:{line_no}: {exc}") from exc
+    return out
+
+
+def read_policy_csv(path: str) -> list:
+    required = ["seq", "policyVersion", "cap", "windowDays",
+                "submittedOnDay", "effectiveFromDay"]
+    out = []
+    for line_no, row in _read_rows(path, required):
+        try:
+            window = parse_int(row["windowDays"], "windowDays")
+            if window < 1:
+                raise ValueError(f"windowDays must be >= 1, got {window}")
+            out.append(PolicyEvent(
+                seq=parse_int(row["seq"], "seq"),
+                policyVersion=parse_int(row["policyVersion"], "policyVersion"),
+                cap=parse_int(row["cap"], "cap"),
+                windowDays=window,
+                submittedOnDay=parse_int(row["submittedOnDay"], "submittedOnDay"),
+                effectiveFromDay=parse_int(row["effectiveFromDay"], "effectiveFromDay"),
+                setBy=(row.get("setBy") or "").strip(),
+            ))
+        except ValueError as exc:
+            raise ValueError(f"{path}:{line_no}: {exc}") from exc
+    return out
+
+
+DAY_COLUMNS = ["dayIndex", "spendMilliUsd", "windowSum", "capInForce",
+               "windowDaysInForce", "policyVersionInForce", "compliant",
+               "authorisedNextDay"]
+POLICY_COLUMNS = ["seq", "policyVersion", "submittedOnDay",
+                  "derivedEffectiveFromDay", "emittedEffectiveFromDay",
+                  "deferralOk"]
+
+
+def _cell(value) -> str:
     if value is None:
         return "NA"
     if isinstance(value, bool):
@@ -636,15 +588,56 @@ def _cell(value):
     return str(value)
 
 
-def write_results_csv(report: VerificationReport, handle) -> None:
+def write_days_csv(report: Report, handle) -> None:
     writer = csv.writer(handle, lineterminator="\n")
-    writer.writerow(RESULT_COLUMNS)
-    for r in report.results:
-        writer.writerow([
-            _cell(r.dayIndex), _cell(r.netSpend), _cell(r.windowSum),
-            _cell(r.capInForce), _cell(r.windowDaysInForce),
-            _cell(r.compliant), _cell(r.policyVersionMismatch),
-        ])
+    writer.writerow(DAY_COLUMNS)
+    for r in report.days:
+        writer.writerow([_cell(getattr(r, c)) for c in DAY_COLUMNS])
+
+
+def write_policy_csv(report: Report, handle) -> None:
+    writer = csv.writer(handle, lineterminator="\n")
+    writer.writerow(POLICY_COLUMNS)
+    for p in report.policy:
+        writer.writerow([_cell(getattr(p, c)) for c in POLICY_COLUMNS])
+
+
+def summary_dict(report: Report) -> dict:
+    by_category: dict = {}
+    for a in report.anomalies:
+        by_category[a.category] = by_category.get(a.category, 0) + 1
+    days = report.days
+    settled = sorted(report.spends)
+    return {
+        "settledDays": len(settled),
+        "firstSettledDay": settled[0] if settled else None,
+        "lastSettledDay": settled[-1] if settled else None,
+        "totalSpendMilliUsd": sum(report.spends.values()),
+        "compliantDays": sum(1 for r in days if r.compliant is True),
+        "breachDays": sum(1 for r in days if r.compliant is False),
+        "undeterminedDays": sum(1 for r in days if r.compliant is None),
+        "authorisedNextDayTrue": sum(1 for r in days if r.authorisedNextDay is True),
+        "authorisedNextDayFalse": sum(1 for r in days if r.authorisedNextDay is False),
+        "breaches": [r.dayIndex for r in days if r.compliant is False],
+        "notAuthorisedNextDay": [r.dayIndex for r in days
+                                 if r.authorisedNextDay is False],
+        "anomalyCount": len(report.anomalies),
+        "anomaliesByCategory": by_category,
+        "anomalies": [{"category": a.category, "dayIndex": a.dayIndex,
+                       "seq": a.seq, "detail": a.detail}
+                      for a in report.anomalies],
+        "policyReplay": [{
+            "seq": w.seq, "policyVersion": w.policyVersion, "cap": w.cap,
+            "windowDays": w.windowDays,
+            "submittedOnDay": w.event.submittedOnDay,
+            "emittedEffectiveFromDay": w.event.effectiveFromDay,
+            "derivedEffectiveFromDay": w.derivedEffectiveFromDay,
+            "classification": w.classification,
+            "incumbentSeq": w.incumbentSeq,
+            "cancelledBySeq": w.cancelledBySeq,
+            "deferralOk": w.deferralOk,
+        } for w in report.replay],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -652,86 +645,63 @@ def write_results_csv(report: VerificationReport, handle) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _summary(report: VerificationReport) -> dict:
-    return {
-        "days": len(report.results),
-        "compliant": sum(1 for r in report.results if r.compliant is True),
-        "breaches": len(report.breaches),
-        "policyVersionMismatches": len(report.version_mismatches),
-        "undetermined": len(report.undetermined),
-        "anomalies": len(report.anomalies),
-        "regimes": [
-            {
-                "effectiveDay": g.effectiveDay,
-                "requestedFromDay": g.requestedFromDay,
-                "deferredToBoundary": g.deferred,
-                "seq": g.seq,
-                "policyVersion": g.policyVersion,
-                "cap": g.cap,
-                "windowDays": g.windowDays,
-            }
-            for g in report.schedule
-        ],
-    }
+def _open_out(path: str):
+    if path == "-":
+        return None
+    return open(path, "w", newline="", encoding="utf-8")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="verify.py",
-        description="Independent verifier for the rolling-window spending cap "
-                    "(implemented from docs/spec/enforcement-rule.md).",
-    )
-    parser.add_argument("--records", required=True,
-                        help="day-record CSV (dayIndex, netSpend/spendMilliUsd"
-                             "[, policyVersion, paused, agentId])")
+        description="Independent verifier for the rolling-window energy "
+                    "spending cap (docs/spec/enforcement-rule.md, version 2).")
+    parser.add_argument("--readings", required=True,
+                        help="CSV: dayIndex,slot,importMWh,exportMWh")
+    parser.add_argument("--prices", required=True,
+                        help="CSV: dayIndex,slot,importPrice,exportPrice")
     parser.add_argument("--policy", required=True,
-                        help="policy-event CSV (seq, policyVersion, cap, "
-                             "windowDays, effectiveFromDay[, setBy])")
-    parser.add_argument("--out", default="-",
-                        help="per-day results CSV; '-' for stdout (default)")
-    parser.add_argument("--agent", default=None,
-                        help="agentId to select when the records file holds "
-                             "more than one agent")
+                        help="CSV: seq,policyVersion,cap,windowDays,"
+                             "submittedOnDay,effectiveFromDay[,setBy]")
+    parser.add_argument("--out", required=True,
+                        help="per-settled-day CSV ('-' for stdout)")
+    parser.add_argument("--policy-report", default=None,
+                        help="per-policy-write CSV")
     parser.add_argument("--summary-json", default=None,
-                        help="write a JSON summary (incl. the replayed policy "
-                             "schedule) to this path")
-    parser.add_argument("--quiet", action="store_true",
-                        help="suppress the human-readable summary on stderr")
+                        help="JSON summary including every anomaly")
     args = parser.parse_args(argv)
 
     try:
-        records = read_records_csv(args.records, agent_id=args.agent)
-        events = read_policy_events_csv(args.policy)
-        report = verify(records, events)
+        report = verify(read_readings_csv(args.readings),
+                        read_prices_csv(args.prices),
+                        read_policy_csv(args.policy))
     except (OSError, ValueError) as exc:
-        print(f"verify.py: error: {exc}", file=sys.stderr)
+        print(f"verify.py: input error: {exc}", file=sys.stderr)
         return 2
 
-    if args.out == "-":
-        write_results_csv(report, sys.stdout)
+    handle = _open_out(args.out)
+    if handle is None:
+        write_days_csv(report, sys.stdout)
     else:
-        with open(args.out, "w", newline="", encoding="utf-8") as handle:
-            write_results_csv(report, handle)
-
-    summary = _summary(report)
+        with handle:
+            write_days_csv(report, handle)
+    if args.policy_report:
+        with open(args.policy_report, "w", newline="", encoding="utf-8") as h:
+            write_policy_csv(report, h)
+    summary = summary_dict(report)
     if args.summary_json:
-        with open(args.summary_json, "w", encoding="utf-8") as handle:
-            json.dump(summary, handle, indent=2)
-            handle.write("\n")
+        with open(args.summary_json, "w", encoding="utf-8") as h:
+            json.dump(summary, h, indent=2)
+            h.write("\n")
 
-    if not args.quiet:
-        print(
-            "days={days} compliant={compliant} breaches={breaches} "
-            "versionMismatches={policyVersionMismatches} "
-            "undetermined={undetermined} anomalies={anomalies}".format(**summary),
-            file=sys.stderr,
-        )
-        for anomaly in report.anomalies[:20]:
-            print(f"  [{anomaly.kind}] day={anomaly.dayIndex} "
-                  f"{anomaly.detail}", file=sys.stderr)
-        if len(report.anomalies) > 20:
-            print(f"  ... {len(report.anomalies) - 20} further anomalies",
-                  file=sys.stderr)
+    for a in report.anomalies:
+        where = "" if a.dayIndex is None else f" day={a.dayIndex}"
+        print(f"ANOMALY [{a.category}]{where} {a.detail}", file=sys.stderr)
+    print("settledDays={settledDays} totalSpendMilliUsd={totalSpendMilliUsd} "
+          "compliant={compliantDays} breaches={breachDays} "
+          "undetermined={undeterminedDays} "
+          "authorisedNextDayFalse={authorisedNextDayFalse} "
+          "anomalies={anomalyCount}".format(**summary), file=sys.stderr)
 
     return 0 if report.ok else 1
 

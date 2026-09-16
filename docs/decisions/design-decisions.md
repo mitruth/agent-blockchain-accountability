@@ -932,13 +932,84 @@ returns `NoSessionKey`, `AgentPaused`, `SettlementStale`, `OverCap` or
 `Authorized`. The evaluation needs to say *why* an agent was refused, and a
 bare `false` would hide whether it was the cap or a stale meter.
 
+
+### D7.16 — The differential replays real days through settlement, and is itself mutation-tested
+
+**Decision.** The chain side of the differential settles each arm's 364 real UTC
+days through the real path — oracle publication, meter signature, `settleDay` —
+and writes its verdict to files. The verifier, rewritten blind from spec
+version 2, gets the same readings, prices and captured policy events. Compared
+per day: spend, window sum, cap and window length in force, the policy version
+the chain bound against the version the verifier finds in force, compliance as
+the contract emitted it, and authorisation on the next day. Per policy write:
+whether the chain's effective day matches the day the rule derives.
+
+**Result.** Zero disagreements across six scenarios — B0, B1 and B2 at a
+100,000 milli-USD cap, B2 at 18,096, B2 with the cap exactly equal to its
+largest window, and 60 real days under ten policy writes built to hit every
+clause of spec section 7 — covering 1,880 settled days and 15 policy writes. On
+every day, settled spend is within 0.5 milli-USD of the simulator's own float
+energy cost.
+
+**Why a clean run was not accepted on its own.** Twelve mutations were applied to
+the chain and the whole differential re-run for each. Ten were detected first
+time. The other two were each a different kind of result, and both are recorded:
+
+- *Equality at the cap refused* went unnoticed because no real day's window sum
+  ever landed exactly on the cap. A scenario was added whose cap equals B2's
+  largest window, reached once, on day 19349. The same pass showed the
+  harness had been recomputing compliance itself rather than reading the
+  contract's verdict; it now reads `DaySettled`, and a mutation of the
+  contract's compliance comparison is detected.
+- *A lowering that does not remove the cancelled raise* is invisible at the rule
+  level: `regimeAt` walks newest-first, so the lowering is always met before the
+  stale raise, and every answer is unchanged. What breaks is storage hygiene —
+  the history keeps dead entries and stops being ordered by effective day, which
+  D4.6 relies on. The differential cannot see that by construction, so a
+  Solidity test now asserts it.
+
+**What a clean differential does not show.** The two implementations agree with
+the spec and with each other. They do not show the spec's rules are the right
+rules; see Q8 to Q11, which the verifier author raised against version 2.
+
 ---
 
 ## Open questions
 
 Not yet decided. Listed so they are not silently resolved.
 
-- **Q7 — Three further defects the verifier author raised**, none yet acted on.
+- **Q8 — Does deferring a raise to a window boundary achieve its purpose?**
+  *(raised by the version 2 verifier author)* D4.1 defers a raise so the agent
+  is not handed capacity part-way through a window it has already spent. But
+  the window is rolling: it never resets on a boundary, so on the boundary day
+  it still contains six days of spend made under the old cap. Deferring to a
+  multiple of `windowDays` delays the raise by an arbitrary 1 to `windowDays`
+  days without guaranteeing that. If the intent is that old spend has left the
+  window before new capacity arrives, the rule is `submittedOnDay + windowDays`.
+  Changing it changes D4.1, D4.2, both implementations and the spec together.
+
+- **Q9 — A window-length-only change is never deferred.** Classification
+  compares caps only (D4.1, spec 7.2). A write that keeps the cap but shortens
+  the window drops spent days from the sum at once — a loosening that takes
+  effect immediately, which is what the deferral exists to prevent. Only the
+  owner can make such a write, so it is not an agent exploit, but it is
+  inconsistent with the principle the deferral encodes.
+
+- **Q10 — Is next-day authorisation computed on the right window?**
+  Authorisation on day d+1 uses the window ending at the last settled day d,
+  with d's window length, against d+1's cap (D7.5, spec section 9). Both sides
+  agree on this, and it is the only thing that can be computed before d+1 is
+  settled. But on d+1 the oldest day of that window has already dropped out.
+  The rule is deliberately conservative by one day; that should be a stated
+  choice rather than an unexamined one.
+
+- **Q11 — `submittedOnDay` is recorded by the chain it is used to check.** The
+  deferral check (spec 7.4) catches a chain that miscomputes the effective day,
+  but trusts the submission day in the same event. An external evidence tool
+  should cross-check it against the timestamp of the block the event was mined
+  in — data a real event log carries and the verifier's CSV input does not.
+
+- **Q7 — Three further defects the verifier author raised** *(resolved by spec version 2, section 12)*.
   §6.2 prescribes a *cap* comparison to detect a *version identity* failure, so
   a write changing only `windowDays` produces two versions sharing a cap and
   passes a check aimed at exactly that case. §7's rounding rule has no

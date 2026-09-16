@@ -1,3 +1,0 @@
-seq,policyVersion,cap,windowDays,effectiveFromDay,setBy
-1,1,1000,7,0,0xowner
-2,2,5000,7,4,0xowner

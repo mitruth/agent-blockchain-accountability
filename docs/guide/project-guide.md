@@ -2,8 +2,9 @@
 
 What every file does, and how to run everything yourself.
 
-For *why* a design choice was made, see `docs/decisions/design-decisions.md`. This file is the map and
-the runbook.
+For *why* a design choice was made, see `docs/decisions/design-decisions.md`.
+For what comes next, see `docs/plan/roadmap.md`. This file is the map and the
+runbook.
 
 ---
 
@@ -12,335 +13,254 @@ the runbook.
 A home energy agent decides when to buy electricity from the grid, when to sell
 back, and when to charge or discharge a battery. The owner delegates spending
 authority to it. **This repository is the layer that makes that delegation
-safe:** an on-chain policy the agent operates under and cannot change, plus
-evidence that every action stayed inside it.
+safe:** a spending cap the agent cannot change, spend the agent cannot
+misreport, and evidence that anyone can recheck.
 
-The enforced rule is narrow on purpose:
+The rule:
 
 ```
-windowSum(day) = sum of net spend over [day - 6, day]        (7 days, both ends included)
-require( windowSum(day) <= cap )
+spend(day)     = Σ over 48 half-hours (import × import price − export × export price)
+windowSum(day) = Σ spend over [day − 6, day]              (7 days, both ends included)
+the agent may act only while windowSum(last settled day) ≤ cap in force today
 ```
 
-Net spend is **signed**. On a sunny day the house can earn more from exporting
-than it spends importing, and that credit reduces the rolling sum.
+Spend is **signed**: on a sunny day the house can earn more from exporting than
+it pays for importing, and that credit reduces the window.
 
-Per-transaction limits are not the point — anyone can do those. The contribution
-is **sequence-level** enforcement: catching cumulative exposure built out of
-individually legal transactions.
+Per-transaction limits are not the point. The contribution is **sequence-level**
+enforcement: catching cumulative exposure built out of individually legal
+actions.
 
-### The three keys
+### Who does what
 
-The whole security argument rests on these being three different keys.
+Five keys. The security argument rests on their being different.
 
+| Key | Does | Cannot |
+|---|---|---|
+| **Owner** | Sets the cap and window; chooses the meter and price oracle; installs modules; allowlists ledger writers; revokes the agent; unpauses after a delay | — |
+| **Agent** (session key) | Transfers through the account, **only while authorised** | Change policy, install anything, write the ledger, pause, sign meter readings, publish prices |
+| **Guardian** | Pauses spending and the agent | Change any setting, unpause, write the ledger |
+| **Meter** | Signs each day's import and export readings | Anything else; can never be the agent's key |
+| **Price publisher** | Publishes each day's prices, once | Anything else |
 
-| Key                     | Can                                                                                                                 | Cannot                                                                            |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **Owner**               | Change the policy, install/uninstall modules, set who may write the ledger, revoke the agent, unpause after a delay | —                                                                                 |
-| **Agent** (session key) | Submit one daily spend record                                                                                       | Touch the policy, install or uninstall anything, write the ledger directly, pause |
-| **Guardian**            | Pause spending and pause the agent                                                                                  | Change any config value, unpause, write the ledger                                |
+In this project the meter and the price publisher are **simulated**: the HEMS
+simulator plays the meter, and a script publishes the real CAISO prices from the
+dataset. Enforcement is sound *provided the meter and the publisher are honest*
+— neither is the agent, and a real deployment would have both.
 
+### How the audited version failed, and what changed
 
-The original student version used **one** key as both owner and agent, so the
-agent could raise its own spending cap. That was audit finding F1 and it is the
-reason this rebuild exists — a policy the agent can change is not delegated
-authority, and no number measured on that version means anything.
+The student's original let one key act as owner and agent, so the agent could
+raise its own cap (F1). The first rebuild separated the keys but still had the
+agent **report its own daily spend** — so the cap bounded what the agent chose
+to report (F8). The current design takes spend out of the agent's hands
+entirely: it is computed on-chain from the meter's readings and the oracle's
+prices.
 
 ### The proposer is never trusted
 
-The governing principle. Every output is checked against a reference the thing
-being checked does not control. This is why there are **two independent
-implementations** of the same rule — the Solidity, and a Python verifier written
-by someone who never saw the Solidity. If they only ever agree, one of them is
-probably just a copy of the other, and neither is evidence.
+Every result is checked against a reference the thing being checked does not
+control. That is why the rule is implemented **twice** — in Solidity, and in a
+Python verifier written by an author who was never allowed to see the Solidity
+— and the two are run against the same real data.
 
 ---
 
+## 2. How a day flows
 
+```
+end of day d
+   │
+   ├── price publisher ── PriceOracle.publishDay(d, 48 import prices, 48 export prices)
+   │                         stores a hash, emits the prices
+   │
+   ├── meter ───────────── signs (d, 48 import mWh, 48 export mWh)
+   │
+   └── anyone ──────────── SpendValidator.settleDay(readings + signature, prices)
+                              ├─ day d has ended, and is the next unsettled day
+                              ├─ prices match the oracle's hash
+                              ├─ readings signed by the registered meter
+                              ├─ spend = exact integer total, rounded once
+                              └─ SpendLedger records it — even if over the cap
 
-## 2. Two generations of code in here
+day d+1, the agent tries to transfer
+   └── SmartAccount.execute ── asks SpendValidator.authorization()
+                                  NoSessionKey | AgentPaused | SettlementStale | OverCap | Authorized
+```
 
-This matters for reading the repo, and it is the main thing that will confuse
-you.
-
-- **The student's original** — built around a single contract,
-`SpendingLimitModule`, with one key doing everything. That contract and its
-tooling were deleted in the rebuild. All of it is preserved at commit
-`1f49b7e` if you ever need to look.
-- **The rebuild** — `contracts/`, `test/`, `verifier/`, `differential/`. This is
-the live code. It runs entirely on your machine; no testnet, no gas, no keys.
-
-The audited original is preserved at commit `1f49b7e` if you ever need it.
+Two things worth noticing. An over-cap day is **recorded**, not refused —
+refusing it used to leave a gap that counted as zero and handed the agent more
+headroom after a breach. And **anyone** can settle a day, so an agent cannot hide
+a bad day by not reporting it; if settlement stalls for more than two days, the
+agent loses authority anyway.
 
 ---
-
-
 
 ## 3. File and folder map
 
+### `contracts/` — the on-chain system
 
+| File | Lines | What it does |
+|---|---|---|
+| `PolicyConfig.sol` | 441 | The cap and window, their history, pause state, and the registry of keys: owner, agent, guardian, meter, price oracle. Every policy change is versioned and emitted with the day it was made and the day it applies from. Lowering applies at once; raising waits for a window boundary. |
+| `PriceOracle.sol` | 115 | One UTC day of 48 import and 48 export prices, published once, never amended. Stores a hash, emits the prices. |
+| `MeterReadings.sol` | 110 | Library. Checks a meter signature over a day's readings (EIP-712), bound to this chain and this ledger. |
+| `SpendMath.sol` | 69 | Library. Daily spend from readings and prices, exact, rounded once half away from zero. |
+| `SpendValidator.sol` | 325 | Settles days, computes the window, and decides whether the agent is authorised. Holds no durable state, so it can be replaced without resetting anyone's window. |
+| `SpendLedger.sol` | 271 | One signed spend figure per day, in a ring holding the last 365 days. Deployed once, never replaced. Only allowlisted writers may write. |
+| `SmartAccount.sol` | 176 | Holds the money. The owner or the agent may transfer; every installed validator must agree. Refuses everything if no validator is selected. |
+| `interfaces/` | 26 | `IModule`, `IValidator`. |
 
-### `contracts/` — the on-chain enforcement layer (live)
+### `test/` — Solidity tests, 144 in all
 
+Run on a local simulated chain. No network, no keys, no cost.
 
-| File                        | Lines | What it does                                                                                                                                                                                                                                               |
-| --------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PolicyConfig.sol`          | 369   | Holds the cap, the window length, pause state, and who the three keys are. Owner-only writes. Every change bumps a version and emits the full new state plus the day it applies from, so anyone can reconstruct the cap on any past day from events alone. |
-| `SpendLedger.sol`           | 177   | The accounting. One signed record per day. **Deployed once, never redeployed** — so its storage layout is permanent. Who may write to it is an explicit owner-controlled list, deliberately *not* "whoever is an installed module".                        |
-| `SpendValidator.sol`        | 155   | The rule itself. Reads the config, writes the ledger, enforces `windowSum <= cap`. Holds no durable state, so it can be swapped without resetting anyone's spending window. This is the upgradeable piece.                                                 |
-| `SmartAccount.sol`          | 166   | The account that holds funds. Owner-only. Runs every installed validator before letting a transfer through, and refuses to run at all if no validator is selected.                                                                                         |
-| `interfaces/IModule.sol`    | 10    | Install/uninstall/type hooks a module must expose.                                                                                                                                                                                                         |
-| `interfaces/IValidator.sol` | 16    | The `validateTransaction` hook the account calls.                                                                                                                                                                                                          |
+| File | Tests | What it proves |
+|---|---|---|
+| `Authorization.t.sol` | 30 | The permission table, one test per row, including the escalation paths. |
+| `PriceOracle.t.sol` | 18 | Only the publisher publishes; a day is final; a price vector cannot be passed off for another day or altered by one unit. |
+| `MeterReadings.t.sol` | 21 | Only the meter's signature verifies; any change to readings, day, chain or ledger breaks it; the digest matches an independent EIP-712 encoder. |
+| `Settlement.t.sol` | 22 | Spend on a real simulator day matches the simulator; rounding at the exact half in both signs; wrong signer, altered price, skipped day, unfinished day all refused; an over-cap day is recorded. |
+| `Enforcement.t.sol` | 34 | Authorisation: over the cap, stale settlement, pause, revocation; the window rule; cap changes; upgrades; the regression test for the old breach-creates-headroom defect. |
+| `Retention.t.sol` | 13 | The one-year ring: eviction frees a slot, a year-old record never reads as current, the window can never reach past it. |
+| `Differential.t.sol` | 6 | Not assertions: replays real days through settlement and writes the chain's verdict for comparison. |
 
+### `verifier/` — the independent second implementation
 
-**How they fit together:** `PolicyConfig` says what the rule *is*. `SpendLedger`
-records what *happened*. `SpendValidator` compares the two. `SmartAccount` holds
-the money and calls the validator. Config and ledger are permanent; the
-validator can be replaced.
+Python, standard library only. Written from `docs/spec/enforcement-rule.md` by
+an author who was blocked from reading any Solidity.
 
-### `test/` — local tests (live, this is where to look first)
+| File | What it does |
+|---|---|
+| `verify.py` | The verifier and its CLI. Recomputes every day's window from scratch over all settled days — deliberately unlike the chain's incremental walk. |
+| `test_verify.py` | 53 tests written against the spec. |
+| `fixtures/` | Small policy files for trying the CLI. |
 
-Solidity tests, run on a local simulated chain. No network, no keys, no cost.
+### `differential/` — running both and comparing them
 
+| File | What it does |
+|---|---|
+| `build_settlement_inputs.py` | Turns each arm's HEMS step log into what the meter and publisher would publish: 364 UTC days of readings and prices. Needs the sibling `Demo_PlanApplyEvaluate` repo. |
+| `run_diff.py` | Builds inputs if missing, runs the chain replay, runs the verifier on the same data, compares day by day and policy write by policy write. |
+| `data/` | Generated inputs and outputs. Not committed. |
 
-| File                  | Lines | What it proves                                                                                                                                                                                                                  |
-| --------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Authorization.t.sol` | 440   | The permission table above, **one test per row**. Every "cannot" is a real test, including the sneaky escalation paths — if the agent could uninstall the validator, the cap is gone and restricting the policy never mattered. |
-| `Enforcement.t.sol`   | 379   | The rule. Equality at the cap passes; one over fails; the oldest day counts and drops out a day later; export credit reduces the sum; a paused day is a zero not a gap; swapping the validator does not reset the window.       |
-| `Differential.t.sol`  | 243   | Replays scenarios through the real contracts and prints the chain's verdict as CSV, for comparison against the Python verifier.                                                                                                 |
-| `ArmData.sol`         | 35    | **Generated.** A year of real daily spend for each simulation arm, packed as bytes so the tests can replay actual data. Regenerate with `differential/gen_arm_data.py`.                                                         |
+### `docs/`
 
+| Folder | Holds |
+|---|---|
+| `guide/` | This file. |
+| `plan/` | `roadmap.md` — status and next phases. |
+| `decisions/` | `design-decisions.md` — every non-obvious choice, why, what was rejected, and open questions. |
+| `spec/` | `enforcement-rule.md` — the rule as behaviour; both implementations follow it. |
+| `verifier/` | `implementation-notes.md` — the verifier author's notes and **ambiguity list**. Worth reading: it is where the spec was challenged. |
 
+### Everything else
 
+| Item | What it is |
+|---|---|
+| `scripts/keys/` | `generate_roles.js` makes the owner, agent and guardian keys; `generate_destination.js` makes a throwaway payee. |
+| `records_B0/B1/B2.csv` | The earlier per-day records (agent-reported era, degradation included, local days). Superseded by `differential/data/inputs/`; kept until caps are recalibrated. |
+| `hardhat.config.js` | Build config. Loads separate keys, never one. Lets Solidity tests read and write `differential/data` only. |
+| `remappings.txt` | Points `forge-std/` at `node_modules`. |
+| `.env.example` | Template. The real `.env` holds keys and is gitignored. |
 
-### `verifier/` — the independent second implementation (live)
-
-Python. Written from `enforcement-rule.md` alone by an author that was blocked from reading
-any Solidity. That isolation is the entire value: it can *disagree*.
-
-
-| File             | Lines | What it does                                                                                                                                                               |
-| ---------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `verify.py`      | 740   | The implementation, plus a CLI. Recomputes every day's window from scratch over the whole record set — no running total — precisely because the chain uses a running walk. |
-| `test_verify.py` | 597   | 58 tests, written against the spec.                                                                                                                                        |
-| `fixtures/`      | —     | Small hand-made inputs for the CLI.                                                                                                                                        |
-
-
-Its two documents live under `docs/`: the specification it was written from is
-`docs/spec/enforcement-rule.md`, and its notes and ambiguity list are
-`docs/verifier/implementation-notes.md`.
-
-### `differential/` — running both and diffing them (live)
-
-
-| File              | What it does                                                                                                                                                           |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run_diff.py`     | The main event. Runs the Solidity tests, captures the chain's verdict, feeds the same policy events to the Python verifier, and reports every day where they disagree. |
-| `gen_arm_data.py` | Regenerates `test/ArmData.sol` from the record CSVs.                                                                                                                   |
-| `data/`           | Scratch output, regenerated every run, gitignored.                                                                                                                     |
-
-
-
-
-### `scripts/` — key generation (live)
-
-
-| File                           | What it does                                                                         |
-| ------------------------------ | ------------------------------------------------------------------------------------ |
-| `keys/generate_roles.js`       | Generates the three keys — owner, agent, guardian — with a note on what each may do. |
-| `keys/generate_destination.js` | Generates a throwaway address to receive test transfers.                             |
-
-
-The student's original testnet tooling lived here: deploy scripts, limit
-readers, an LLM agent that proposed new spending limits, and five "tests" that
-ran against live Base Sepolia, spent real gas, waited on network sync and
-printed results rather than asserting them. All of it was built around
-`SpendingLimitModule` and a single key holding both owner and agent authority.
-The contract was deleted in the rebuild and the scripts were removed with it;
-they are preserved at commit `1f49b7e`.
-
-**There is currently no deployment path for the rebuilt contracts.** The old
-scripts could not have provided one — they deploy a contract that no longer
-exists, and the new wiring needs three keys plus an explicit ledger allowlist
-step the old flow had no concept of.
-
-### `docs/` — all documentation, one folder per category
-
-
-| Folder            | Holds                                                                                                                                                          |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/guide/`     | This file. The map and the runbook.                                                                                                                            |
-| `docs/decisions/` | `design-decisions.md` — every non-obvious choice, why it was taken, what was rejected, and the open questions.                                                 |
-| `docs/spec/`      | `enforcement-rule.md` — the rule as behaviour. Both implementations are written from this; neither is derived from the other.                                  |
-| `docs/verifier/`  | `implementation-notes.md` — **read the ambiguity list.** 22 places the spec was under-determined and 7 the author judged wrong. The most useful document here. |
-
-
-New documentation goes in a category folder under `docs/`, never at the
-repository root. Add a folder when a genuinely new category appears —
-`docs/security/` and `docs/evaluation/` are the two expected next.
-
-### Data and config
-
-
-| File                                                 | What it is                                                                                                                                                                                                                                                                                                                 |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `records_B0.csv`, `records_B1.csv`, `records_B2.csv` | One simulated year (365 days) of the same house under three different controllers. `B0` = simple if-then rules. `B1` = optimal with perfect foresight (unrealistic best case). `B2` = optimal using forecasts (realistic). The column that matters is `spendMilliUsd` — daily net cost in thousandths of a dollar, signed. |
-| `hardhat.config.js`                                  | Build and network config. Loads three separate keys, never one.                                                                                                                                                                                                                                                            |
-| `remappings.txt`                                     | Points `forge-std/` at `node_modules`.                                                                                                                                                                                                                                                                                     |
-| `.env.example`                                       | Template. The real `.env` holds private keys and is gitignored.                                                                                                                                                                                                                                                            |
-
+The audited original is preserved at commit `1f49b7e`.
 
 ---
 
-
-
 ## 4. Runbook
 
-Nothing below needs a network, a wallet, or any money. It all runs locally.
+Nothing below needs a network, a wallet or any money.
 
-### One-time setup
+### Setup, once
 
 ```bash
 npm install
 ```
 
-Python needs nothing beyond the standard library. Check you have it:
+The differential also needs `pandas` for building inputs:
 
 ```bash
-python --version
+python -m pip install pandas
 ```
-
-
 
 ### The four commands that matter
 
-**1. Run the Solidity tests.** This is the main one.
+**1. Solidity tests.** Expect **144 passing**, in about a minute.
 
 ```bash
 npm test
 ```
 
-Expect **73 passing**: 30 authorization, 24 enforcement, 13 retention, and
-6 differential scenarios. Takes a minute or two; the first run downloads the
-compiler.
-
-**2. Run the Python verifier's own tests.**
+**2. Verifier tests.** Expect **53 tests, OK**.
 
 ```bash
-python -m unittest discover -s verifier -p "test_*.py" -v
+python -m unittest discover -s verifier -p "test_*.py"
 ```
 
-Expect **58 tests, OK**.
-
-**3. Run the differential.** The interesting one — runs both implementations and
-diffs them.
+**3. The differential.** Builds inputs if needed, replays real days on the
+chain, runs the verifier on the same data, compares. Expect a table with
+**0 disagreements** and **0 deferral findings**.
 
 ```bash
 python differential/run_diff.py
 ```
 
-Expect a table, and **28 disagreements**, all in the `churn` scenario. That is
-the known open defect (F7), not a regression. The three real data arms should
-show **0**.
-
-**4. Try the verifier by hand on a small example.**
+**4. The verifier by hand**, on a real year of B2 readings (after command 3 has
+built the inputs):
 
 ```bash
-python verifier/verify.py --records verifier/fixtures/records_example.csv --policy verifier/fixtures/policy_example.csv --out -
+python verifier/verify.py --readings differential/data/inputs/B2.readings.csv --prices differential/data/inputs/prices.csv --policy verifier/fixtures/policy_genesis_w7.csv --out -
 ```
 
-You will see one breach on day 5 and a negative day on day 2 reducing the
-window.
+The first line is a summary: 364 settled days, 728,421 milli-USD, 26 breaches at
+that fixture's 50,000 cap.
 
-### Useful extras
+### Reading the differential table
 
-Compile without testing:
+| Column | Meaning |
+|---|---|
+| `days` | Settled days compared |
+| `writes` | Policy writes, including genesis |
+| `breaches` | Days over the cap. Not errors — tight caps are meant to bind |
+| `unauth` | Days after which the agent lost authority |
+| `disagree` | **The number that matters.** Any day where chain and verifier differ |
+| `deferral` | Policy writes whose effective day the chain got wrong |
+| `max \|chain-sim\|` | Largest gap between on-chain spend and the simulator's own cost; stays under 0.5 milli-USD |
 
-```bash
-npx hardhat compile
-```
+### Proving the tests can fail
 
-Generate three fresh keys:
+A passing suite means nothing if it cannot fail. Try one:
 
-```bash
-node scripts/keys/generate_roles.js
-```
+In `contracts/SpendMath.sol`, change `if (2 * absR >= d) {` to `if (false) {`.
+That turns rounding into truncation. Run `npm test` — **3 tests fail**. Then run
+`python differential/run_diff.py --differential-only` — **thousands of
+disagreements** across every scenario. Undo the change.
 
-See the rebuilt daily records reproduce byte-for-byte from the simulation (run
-from the *other* repo, `Demo_PlanApplyEvaluate`):
-
-```bash
-python scripts/export_records.py
-```
+`--differential-only` runs just the chain replay, so a deliberately broken
+contract still gets compared instead of stopping at the failing suite.
 
 ---
 
+## 5. Current state
 
+| Finding | Status |
+|---|---|
+| F1 — agent could change its own cap | **Fixed.** Separate keys, permission table asserted. |
+| F2 — no independent verifier | **Fixed.** Blind verifier, differential clean on real data and mutation-tested. |
+| F3 — negative days had no credit path | **Fixed.** Signed end to end. |
+| F4 — rounding claimed but untested | **Fixed.** Once, on-chain, half away from zero, tested at the exact half both sides. |
+| F5 — agent could empty the window alone | **Fixed.** The agent no longer settles days; days are consecutive and meter-signed. |
+| F6 — validated and recorded numbers differ | **Fixed.** Spend is metered; transfers are gated, not counted. |
+| F7 — policy event lacked the submission day | **Fixed.** Deferral now checked, not trusted. |
+| F8 — agent reported its own spend | **Fixed.** Spend computed from meter readings and oracle prices. |
 
-## 5. How to read the output
+**Open:** four rule questions raised by the verifier author (Q8–Q11, Phase B),
+owner key rotation (Q5), cap recalibration (Q3), deployment, adversarial
+evaluation.
 
+**What is fair to say now:** contract implemented; spend computed from measured
+inputs rather than reported by the agent; test suite present; an independent
+verifier agreeing on real data; defects found and specified.
 
-
-### `npm test`
-
-Test names are written to be read as sentences. `test_agent_mayNotWritePolicyConfig`
-is the F1 finding in test form. `test_oldestDayIsIncludedInWindow` pins one of
-the two classic off-by-one errors.
-
-A failure prints the contract, the line, and the revert reason.
-
-### `differential/run_diff.py`
-
-The table has one row per scenario:
-
-- `days` — day-rows compared
-- `policy` — how many policy changes that scenario made
-- `breaches(chain)` — days the chain judged over the cap. Not errors; the strict
-cap is *meant* to bind.
-- `disagreements` — **this is the number that matters.** Anything other than the
-known 28 in `churn` is new and worth investigating.
-
-
-
-### Proving the tests actually work
-
-A passing suite means nothing if the tests cannot fail. Break something on
-purpose and confirm a test catches it — change `<=` to `<` on the cap comparison
-in `contracts/SpendValidator.sol` (`sumAfter > regime.cap` → `sumAfter >= regime.cap`),
-run `npm test`, and expect 4 failures. Then undo it.
-
-Storage has its own version of this. In `contracts/SpendLedger.sol`, change
-`netSpendOf`'s guard from `if (!slot.recorded || slot.dayIndex != dayIndex)` to
-just `if (!slot.recorded)`. That makes a year-old record in a wrapped ring slot
-read as though it were today's — a wrong window sum with nothing erroring. Three
-tests should fail.
-
-This is the discipline the whole project runs on, and step 4 automates it as a
-mutation suite.
-
----
-
-
-
-## 6. Current state
-
-Steps 1–3 of the rebuild are done and committed.
-
-
-| Finding                                    | Status                                                                                          |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| F1 — agent could change its own cap        | **Fixed.** Three keys, permission table asserted.                                               |
-| F2 — no independent verifier               | **Fixed.** Python verifier, written blind, differential running.                                |
-| F3 — negative days had no credit path      | **Fixed.** Signed `int256` end to end.                                                          |
-| F4 — rounding claimed but untested         | Half-done. Correct in `export_records.py`; asserted in the verifier; no contract-side path yet. |
-| F5 — agent could empty the window alone    | **Fixed.** Day index derived on-chain from block time.                                          |
-| F6 — validated and recorded numbers differ | **Open.** A decision, not a bug — see `docs/decisions/design-decisions.md` Q2.                  |
-| F7 — event lacks the submission day        | **Open.** Found by the differential; needs a contract change.                                   |
-
-
-**What is fair to say right now:** contract implemented, test suite present, two
-independent implementations agreeing on 1,095 days of real data, one schema
-defect found and specified.
-
-**What is not yet fair to say:** that enforcement is validated. The evaluation is
-not finished, and F6, F7 and the cap calibration are all open.
+**Not yet fair to say:** that enforcement is validated.

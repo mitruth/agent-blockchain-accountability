@@ -454,6 +454,25 @@ contract EnforcementTest is Test {
         assertEq(found, 2);
     }
 
+    /// A cancelled raise is removed from storage, not merely shadowed. Found by
+    /// running a chain mutation through the differential: without the removal,
+    /// every observable answer is unchanged, because regimeAt walks newest-first
+    /// and meets the lowering before the stale raise. What changes is the stored
+    /// history -- it keeps the dead epoch and stops being ordered by effective
+    /// day, which D4.6 relies on to keep that walk short.
+    function test_loweringRemovesTheCancelledRaiseFromStorage() public {
+        assertEq(config.capEpochCount(), 1);
+
+        vm.prank(owner);
+        config.setPolicy(CAP * 5, WINDOW_DAYS); // pending raise
+        assertEq(config.capEpochCount(), 2);
+
+        vm.prank(owner);
+        config.setPolicy(2000, WINDOW_DAYS); // lowering cancels it
+        assertEq(config.capEpochCount(), 2, "the raise was removed and the lowering added");
+        assertEq(config.capEpochAt(1).cap, 2000);
+    }
+
     function test_loweringCancelsPendingRaise() public {
         uint64 boundary = config.nextWindowBoundary(ANCHOR_DAY, WINDOW_DAYS);
 

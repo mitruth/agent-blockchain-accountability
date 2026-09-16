@@ -83,6 +83,14 @@ contract DifferentialTest is Test {
         _run("B2strict", "B2", 18096, 7, 364, false);
     }
 
+    /// The cap equals B2's largest 7-day window sum, 107,036 milli-USD, reached
+    /// on day 19349 and nowhere else. One real day sits exactly at the cap, so
+    /// the equality rule is exercised on real data. Added after a chain mutation
+    /// refusing equality went unnoticed: no other scenario ever lands on it.
+    function test_diff_B2_atCap() public {
+        _run("B2atCap", "B2", 107036, 7, 364, false);
+    }
+
     /// Real B2 days under a schedule of policy writes aimed at every clause of
     /// spec section 7. See _churn.
     function test_diff_churn() public {
@@ -135,8 +143,8 @@ contract DifferentialTest is Test {
                 _churn(d.index + 1 - firstDay, policyPath);
             }
 
-            _settle(d);
-            _writeDay(daysPath, d.index);
+            bool compliant = _settle(d);
+            _writeDay(daysPath, d.index, compliant);
         }
     }
 
@@ -157,19 +165,28 @@ contract DifferentialTest is Test {
         vm.stopPrank();
     }
 
-    function _settle(Day memory d) internal {
+    /// Returns the contract's own compliance verdict, taken from DaySettled.
+    function _settle(Day memory d) internal returns (bool compliant) {
         vm.prank(publisher);
         oracle.publishDay(d.index, d.pi, d.pe);
 
         bytes32 hash = MeterReadings.digest(block.chainid, address(ledger), d.index, d.imp, d.exp);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(meterKey, hash);
 
-        // Recording is restarted before each policy write, which discards the
-        // settlement logs buffered since; they are never copied into memory.
+        vm.recordLogs();
         validator.settleDay(
             SpendValidator.DayReadings(d.index, d.imp, d.exp, abi.encodePacked(r, s, v)),
             SpendValidator.DayPrices(d.pi, d.pe)
         );
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length == 0 || logs[i].topics[0] != SpendValidator.DaySettled.selector) continue;
+            (,,, compliant,) = abi.decode(logs[i].data, (int256, int256, int256, bool, uint256));
+            found = true;
+        }
+        require(found, "Differential: DaySettled not captured");
     }
 
     // ------------------------------------------------------------------
@@ -247,10 +264,11 @@ contract DifferentialTest is Test {
         require(captured > 0, "Differential: no PolicyUpdated captured; event signature drift?");
     }
 
-    /// One row per settled day. authorisedNextDay is read immediately after
-    /// settling the day, standing on the following day with that day's policy
-    /// writes already applied.
-    function _writeDay(string memory daysPath, uint64 day) internal {
+    /// One row per settled day. `compliant` is the contract's verdict from
+    /// DaySettled, not recomputed here. authorisedNextDay is read immediately
+    /// after settling the day, standing on the following day with that day's
+    /// policy writes already applied.
+    function _writeDay(string memory daysPath, uint64 day, bool compliant) internal {
         SpendLedger.DayRecord memory rec = ledger.recordOf(day);
         int256 sum = validator.windowSum(day);
         int256 cap = config.capAt(day);
@@ -260,7 +278,7 @@ contract DifferentialTest is Test {
         );
         string memory tail = string.concat(
             vm.toString(cap), ",", vm.toString(uint256(config.windowDaysAt(day))), ",",
-            vm.toString(rec.policyVersion), ",", sum <= cap ? "true" : "false", ",",
+            vm.toString(rec.policyVersion), ",", compliant ? "true" : "false", ",",
             validator.isAgentAuthorized() ? "true" : "false"
         );
         vm.writeLine(daysPath, string.concat(head, tail));

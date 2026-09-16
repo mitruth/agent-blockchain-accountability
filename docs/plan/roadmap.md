@@ -8,194 +8,151 @@ Update this file as phases close. For why each choice was made, see
 
 ## Where we are
 
-The handoff defined six sequential steps. Status as of `9d181ce`:
+Phase A is complete. The agent no longer reports its own spend: daily spend is
+computed on-chain from meter readings and oracle prices, every settled day is
+recorded, and the agent's authority is withdrawn while it is over the cap.
 
+| Handoff step | Status |
+|---|---|
+| 1. Key separation | **Done.** Owner, agent, guardian, plus the meter and price publisher; the meter can never be the agent's key. |
+| 2. Config/ledger split | **Done.** `PolicyConfig`, `SpendLedger` (one-year ring, raw data only), `SpendValidator`, `PriceOracle`. |
+| 3. Independent verifier | **Done.** Blind verifier rewritten for spec version 2; differential clean on 1,880 real settled days and 15 policy writes, and itself mutation-tested (D7.16). |
+| 4. Mutation suite | **Run by hand, not yet tooling.** About 95 mutations across all stages; every gap found was closed. Scripts live outside the repo. |
+| 5. F3 / F4 | **Done in substance.** Signed spend end to end; rounding happens once, on-chain, half away from zero, tested at the exact half in both signs on both sides. |
+| 6. Adversarial evaluation | **Not started.** |
 
-| Step                      | Status                                                                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| 1. Key separation         | **Done.** Three keys; permission table asserted row by row (F1, F5 closed).                                                    |
-| 2. Config/ledger split    | **Done.** `PolicyConfig`, `SpendLedger` (bounded one-year ring), `SpendValidator`.                                             |
-| 3. Independent verifier   | **Done, one defect open.** Blind Python verifier; differential agrees on 1,095 real days; 28 disagreements traced to F7.       |
-| 4. Mutation suite         | **Not started as a suite.** Ad-hoc negative controls only (12 mutations run by hand, one hole found and closed).               |
-| 5. F3 / F4                | **F3 done.** F4 half-done: rounding correct in `export_records.py`, asserted in the verifier, never tested on the export side. |
-| 6. Adversarial evaluation | **Not started.**                                                                                                               |
-
-
-Test counts: 73 Solidity, 58 verifier. Differential: 28 known disagreements.
+Test counts: 144 Solidity, 53 verifier. Differential: 0 disagreements.
 
 ---
 
+## Phase A — Measured inputs — **done**
 
+Decided with Dan on 2026-09-15; `docs/decisions/design-decisions.md` section 7.
 
-## Phase A — Measured inputs (in progress)
-
-**Why first.** Everything after this measures the contracts, and the contracts
-are changing shape: the agent no longer reports its spend (D7.1). The ledger is
-deployed once and never again, so its layout has to be final before any
-deployment.
-
-Decided with Dan on 2026-09-15; see `docs/decisions/design-decisions.md`
-section 7. Implemented in this order, one commit per stage, suite green at each:
-
-| #  | Stage | Status |
+| #  | Stage | Commit |
 | -- | ----- | ------ |
-| A1 | **Price oracle.** `PriceOracle` with a publisher key; one day of 48 import and 48 export prices, committed by hash, emitted in full (D7.2). | **Done** `356170a` |
-| A2 | **Meter.** Owner registers the meter address; the meter signs a day's 96 readings; anyone relays (D7.3). | **Done** `42689ed` |
-| A3 | **On-chain spend.** Settlement computes `Σ imp×p_imp − exp×p_exp` in exact integers, rounds once to milli-USD, records consecutive past days only (D7.8–D7.10). Degradation excluded (D7.4). | **Done** `e10733d` |
-| A4 | **Record, then restrict.** Every settled day is recorded; over-cap or stale settlement withdraws the agent's authorisation; `execute` is the gated action; `submitDay` is removed (D7.5, D7.6, D7.11). | **Done** |
-| A5 | **Verifier.** Revise the spec for the new inputs, fold in F7 and the Q7 defects, re-slice the data to UTC days, send the verifier author back blind. | Next |
+| A1 | **Price oracle.** Publisher key; one day of 96 prices, committed by hash, emitted in full. | `356170a` |
+| A2 | **Meter.** EIP-712 signed readings, anyone relays; meter never the session key. | `42689ed` |
+| A3 | **On-chain spend.** `settleDay`: exact integer total, one rounding, consecutive past days only; degradation excluded. | `e10733d` |
+| A4 | **Record, then restrict.** `submitDay` removed; `execute` gated by `authorization()`; F6 closed. | `e938192` |
+| A5 | **Verifier.** F7 (`submittedOnDay`), real-data inputs, spec version 2, blind verifier rewrite, differential on real days. | `869f5b4` … |
 
-Still open, not blocking A1–A4:
-
-- **F7** — `PolicyUpdated` gains `submittedOnDay`. Lands with A5, since both sides change together.
-- **Q5** — owner key rotation.
-
-Resolved by the redesign: Q1 (D7.6), Q2 / F6 (D7.5), and the record-contents
-question — a record carries the day's measured spend; the readings and prices
-are in the event log.
+Resolved on the way: F6, F7, F8, Q1, Q2, Q4, Q7. The old Phase B (close the
+verifier loop) was absorbed into A5.
 
 ---
 
-## Phase B — Close the verifier loop
+## Phase B — Decide the open rule questions
 
-**Depends on:** A3, and A1 (the paused-day rule changes the spec).
+**New.** The version 2 verifier author challenged the rules themselves, not only
+their wording. Both implementations follow the spec; these ask whether the spec
+is right. Each changes the spec, both implementations and the differential
+together, so they are decided before the mutation suite freezes the rules.
 
+| #  | Question | Who decides | Size |
+| -- | -------- | ----------- | ---- |
+| B1 | **Q8.** A rolling window never resets, so deferring a raise to a multiple of `windowDays` does not keep new capacity out of a partly spent window. Keep it, or defer to `submittedOnDay + windowDays`? | Dan | Decision, then medium |
+| B2 | **Q9.** A write that keeps the cap and shortens the window loosens at once. Treat a shorter window as a raise? | Dan | Decision, then small |
+| B3 | **Q10.** Next-day authorisation is conservative by one day. State it as a choice, or change it? | Dan | Decision |
+| B4 | **Q5.** Owner key: immutable, or a two-step transfer? | Dan | Decision, then small |
 
-| #   | Item                                                                                                                                                                                                                                         | Size           |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| B1  | Revise the spec: fold in A1, A3, and the three defects the verifier author raised (Q7): §6.2 compares caps where it means version identity; §7 never names where rounding applies; §5 says nothing about days before the first policy write. | Small          |
-| B2  | Send the verifier author back, again blind to the Solidity, to implement the revised spec.                                                                                                                                                   | Medium (agent) |
-| B3  | Re-run the differential. Target: 0 disagreements on `churn`. Any disagreement that remains is a finding, not something to patch until green.                                                                                                 | Small          |
-| B4  | Add differential scenarios for everything §5 never exercised on real data: a raise on a boundary day, a `windowDays` change mid-window, ring eviction, a paused agent.                                                                       | Medium         |
-
-
-**Done when:** the differential is clean on scenarios built to break it, and
-every remaining disagreement is written up.
-
----
-
-
-
-## Phase C — Mutation suite (handoff step 4)
-
-**Depends on:** A and B. Mutating unstable code measures nothing.
-
-
-| #   | Item                                                                                                                                                                                                                                                                  | Size   |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| C1  | A script that applies one mutation at a time, reports **three states** (caught / not caught / invalid mutant, per D5.4), and names the catching tests. Restores the file on any exit.                                                                                 | Medium |
-| C2  | The ten handoff mutations: `<=`→`<`; boundary shifted a day; oldest day excluded; half-even rounding; `abs()` on netSpend; credit clamped to zero; `capAt` returns latest; raise immediate; paused day treated as missing; ledger writer derived from install status. | Medium |
-| C3  | Add the ring-buffer mutations R1–R5 and the accumulation mutation.                                                                                                                                                                                                    | Small  |
-| C4  | Run each mutation against **both** implementations. A mutation the verifier catches and the Solidity tests miss, or the reverse, is the most informative result this phase can produce.                                                                               | Medium |
-| C5  | Widen coverage where a mutation dies to a single test (Q6: boundary shift, `capAt`-latest, raise-immediate).                                                                                                                                                          | Small  |
-
-
-**Done when:** every mutation is caught by at least two independent tests, or
-the gap is written down as a known limitation.
-
-**Changed by Phase A.** "Paused day treated as missing" no longer applies — a pause no longer touches accounting (D7.6). Add instead: import and export swapped, export sign dropped, per-half-hour rounding instead of once per day, settlement allowed to skip a day, and a signature over the wrong chain or ledger accepted.
+**Done when:** each is decided and recorded, and any rule change has gone
+through spec, both implementations and the differential.
 
 ---
 
+## Phase C — Mutation suite as tooling (handoff step 4)
 
+**Depends on:** B. Mutating rules that are about to change measures nothing.
 
-## Phase D — Finish F4 (handoff step 5)
+| #  | Item | Size |
+| -- | ---- | ---- |
+| C1 | Commit the mutation runner and its lists: one mutation at a time, three outcomes (caught / not caught / invalid), catching tests named, file restored on any exit. Two runners already exist in scratch form — one against the Solidity suite, one against the differential. | Small |
+| C2 | Fold in every mutation already run (oracle, meter, settlement, authorisation, ring, differential) and the handoff's list, updated for measured inputs. | Small |
+| C3 | Run each mutation against **both** implementations and report the cross-table. A mutation one side catches and the other misses is the most informative result. | Medium |
+| C4 | Widen coverage where a mutation dies to a single test. | Small |
 
-**Depends on:** nothing technical; can run in parallel with B or C.
-
-
-| #   | Item                                                                                                                    | Size  |
-| --- | ----------------------------------------------------------------------------------------------------------------------- | ----- |
-| D1  | Tests for `export_records.py` rounding: `+2.5 → 3`, `-2.5 → -3`, and neighbours, in the HEMS repo.                      | Small |
-| D2  | A cross-check: the same float-to-integer conversions through the export script and the verifier must agree bit for bit. | Small |
-| D3  | Confirm no float reaches the contract boundary on the replay path.                                                      | Small |
-
-
-**Done when:** half-away-from-zero is asserted on both sides, and the `.5`
-cases are tested in both signs.
+**Done when:** a single command reproduces the mutation table, and every
+non-equivalent mutation is caught by at least one test on each side or written
+down as a known limitation.
 
 ---
 
+## Phase D — Rounding (handoff step 5) — **largely done**
 
+Rounding moved on-chain in A3 (D7.10). Half away from zero on the exact daily
+total is tested at the exact half in both signs in `Settlement.t.sol` and in the
+verifier, and a real day is checked against the simulator.
+
+| #  | Item | Size |
+| -- | ---- | ---- |
+| D1 | `build_settlement_inputs.py` rounds readings and prices at the meter and publisher. Add a unit test for its `.5` cases, since that script now stands in for two real devices. | Small |
+
+---
 
 ## Phase E — Recalibrate the caps (Q3)
 
-**Depends on:** D. Caps are computed from the rounded records.
+**Depends on:** B (the rule), D.
 
-The current permissive cap is B0's own rolling maximum, so it binds on zero
-days for every arm. It is not a policy. Strict binds on 54/50/51 days, and
-nothing sits between them.
+The old caps were computed from spend that included degradation, on local days.
+Spend is now energy cost only, on UTC days, with more negative days (12/31/20
+across B0/B1/B2, up from 9/16/10). The old permissive cap bound on zero days for
+every arm.
 
-
-| #   | Item                                                                                                              | Who decides | Size     |
-| --- | ----------------------------------------------------------------------------------------------------------------- | ----------- | -------- |
-| E1  | Choose the calibration principle, for example percentiles of B0 or B2 rolling sums, or a fraction of annual cost. | Dan         | Decision |
-| E2  | Produce a small grid of caps, not two, so the evaluation can show enforcement cost against cap tightness.         | —           | Small    |
-
+| #  | Item | Who decides | Size |
+| -- | ---- | ----------- | ---- |
+| E1 | Choose the calibration principle, for example percentiles of B0 or B2 rolling sums, or a fraction of annual cost. | Dan | Decision |
+| E2 | Produce a small grid of caps from the settled chain output, so the evaluation can show enforcement cost against cap tightness. | — | Small |
 
 ---
-
-
 
 ## Phase F — Deploy
 
-**Depends on:** A. Can run in parallel with C–E.
+**Depends on:** B. Can run in parallel with C–E.
 
-
-| #   | Item                                                                                                                                                                                   | Size   |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| F1  | A deploy script for the rebuilt contracts using three keys: deploy, install, select validator, allowlist the ledger writer, then verify each role on-chain. No such script exists now. | Medium |
-| F2  | Deploy to Base Sepolia, and record addresses, commit hash and bytecode match.                                                                                                          | Small  |
-| F3  | Measure gas per record and per check. Local measurements are sufficient for gas. State the block-time assumption with a citation; do not measure wall time.                            | Small  |
-
+| #  | Item | Size |
+| -- | ---- | ---- |
+| F1 | Deploy script for the rebuilt system: price oracle, config, ledger, account, validator; register oracle and meter; install and select the validator; allowlist the ledger writer; verify each role on-chain. None exists. | Medium |
+| F2 | Simulated meter and publisher processes for testnet: sign and publish from `differential/data/inputs/`, relay settlements daily. | Medium |
+| F3 | Deploy to Base Sepolia; record addresses, commit hash and bytecode match. | Small |
+| F4 | Gas per record and per check. Measured locally so far: publish a day 137,266; meter signature check 44,751; settle a day 311,284; ring write 95,753 cold, 7,700 steady. State the block-time assumption with a citation. | Small |
 
 ---
-
-
 
 ## Phase G — Adversarial evaluation (handoff step 6)
 
-**Depends on:** A–E. On a mechanism that is not yet final, adversarial results
-say nothing.
+**Depends on:** B–E.
 
-
-| #   | Item                                                                                                                                                                                                 | Size   |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| G1  | **Over-cap agent.** An agent that actively tries to exceed the window.                                                                                                                               | Medium |
-| G2  | **Prompt injection.** Scenarios aimed at `setPolicy`, module uninstall, allowlist changes and pause. Recover the Groq wiring from `1f49b7e` (`scripts/agent/llm_agent.js`) rather than rewriting it. | Medium |
-| G3  | **Duty-cycling.** Sit just under the bound across windows, including around boundary-day raises.                                                                                                     | Medium |
-| G4  | **The counterfactual.** Run the same sequences against per-transaction limits alone and report what sequence-level enforcement catches that per-transaction checks structurally cannot.              | Medium |
-| G5  | **LLM arms.** Run A0/A1 through enforcement, and score against B2, not B1. About 48 of the 70 USD/year gap is forecast error. A1 has not been run.                                                   | Large  |
-
+| #  | Item | Size |
+| -- | ---- | ---- |
+| G1 | **Over-cap agent.** An agent that tries to exceed the window, and what `authorization()` does to it. | Medium |
+| G2 | **Prompt injection.** Scenarios aimed at `setPolicy`, module uninstall, allowlist changes, pause, and now meter and oracle registration. Recover the Groq wiring from `1f49b7e` (`scripts/agent/llm_agent.js`). | Medium |
+| G3 | **Withholding and duty-cycling.** Stop settlement, sit just under the bound, act around boundary-day raises. | Medium |
+| G4 | **The counterfactual.** Same sequences against per-transaction limits alone. | Medium |
+| G5 | **LLM arms.** Run A0/A1 through the simulated meter and oracle; score against B2, not B1. A1 has not been run. | Large |
 
 ---
-
-
 
 ## Phase H — Write-up
 
-
-| #   | Item                                                                                                                                    | Folder             |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| H1  | Security analysis: threat model, trust assumptions, the bounded `moduleList` iteration, pause and griefing analysis, and ring eviction. | `docs/security/`   |
-| H2  | Evaluation: mutation results, differential results, gas, adversarial results, and the counterfactual.                                   | `docs/evaluation/` |
-
+| #  | Item | Folder |
+| -- | ---- | ------ |
+| H1 | Security analysis: threat model, and the trust assumptions now explicit — honest meter, honest price publisher, publisher distinct from the agent (D7.12) — plus pause and griefing, ring eviction, withholding. | `docs/security/` |
+| H2 | Evaluation: mutation cross-table, differential, gas, adversarial results, counterfactual. | `docs/evaluation/` |
 
 **Reporting discipline, until G is done:** what is defensible is *contract
-implemented, test suite present, independent verifier agreeing on real data,
-defects found and specified.* Not "enforcement validated".
+implemented; spend computed from measured inputs rather than reported by the
+agent; test suite present; independent verifier agreeing on real data; defects
+found and specified.* Not "enforcement validated".
 
 ---
-
-
 
 ## Dependency picture
 
 ```
-A (settle contracts) ──┬── B (verifier loop) ── C (mutation suite) ──┐
-                       │                                             ├── G (adversarial) ── H (write-up)
-                       ├── F (deploy)                                │
-D (F4) ── E (caps) ────┴─────────────────────────────────────────────┘
+A (done) ── B (rule questions) ──┬── C (mutation tooling) ──┐
+                                 ├── F (deploy)             ├── G (adversarial) ── H (write-up)
+D (rounding) ── E (caps) ────────┴──────────────────────────┘
 ```
 
-A and D can start now. A needs decisions from Dan; D does not.
+B needs decisions from Dan. D1 and C1 can start without them.

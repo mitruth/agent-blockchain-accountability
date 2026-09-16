@@ -83,13 +83,19 @@ def ensure_inputs() -> None:
         raise SystemExit("input build failed")
 
 
-def run_chain() -> None:
+def run_chain(differential_only: bool) -> None:
     CHAIN.mkdir(parents=True, exist_ok=True)
     for stale in CHAIN.glob("*"):
         stale.unlink()
-    print("running the Solidity suite to capture the chain's verdict ...")
+    command = ["npx", "hardhat", "test", "solidity"]
+    if differential_only:
+        # For mutation runs: a mutated contract fails the ordinary suite, but
+        # the differential scenarios only record what the chain does, and what
+        # a mutated chain does is exactly the thing to compare.
+        command.append("test/Differential.t.sol")
+    print("running Solidity tests to capture the chain's verdict ...")
     proc = subprocess.run(
-        ["npx", "hardhat", "test", "solidity"],
+        command,
         cwd=ROOT, capture_output=True, text=True, shell=(os.name == "nt"),
     )
     if proc.returncode != 0:
@@ -192,11 +198,13 @@ def quantisation(scenario_arm: str, chain_rows: list[dict]) -> float | None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-chain", action="store_true", help="reuse differential/data/chain/")
+    ap.add_argument("--differential-only", action="store_true",
+                    help="run only test/Differential.t.sol (for mutation runs)")
     args = ap.parse_args()
 
     ensure_inputs()
     if not args.skip_chain:
-        run_chain()
+        run_chain(args.differential_only)
 
     metas = sorted(CHAIN.glob("*.meta.csv"))
     if not metas:
