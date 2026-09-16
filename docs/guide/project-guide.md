@@ -144,6 +144,15 @@ an author who was blocked from reading any Solidity.
 | `run_diff.py` | Builds inputs if missing, runs the chain replay, runs the verifier on the same data, compares day by day and policy write by policy write. |
 | `data/` | Generated inputs and outputs. Not committed. |
 
+The differential runs six scenarios, all on real simulator days:
+
+| Scenario | Days | Cap (milli-USD, 7-day) | What it exercises |
+|---|---|---|---|
+| `B0`, `B1`, `B2` | 364 each | 100,000 | A full year per controller; a handful of breaches |
+| `B2strict` | 364 | 18,096 | A tight cap: 51 breach days, authority withdrawn after each |
+| `B2atCap` | 364 | 107,036 | The cap equals B2's largest window, reached once on day 19349 — the only scenario where equality at the cap actually occurs |
+| `churn` | 60 | starts at 14,000 | Ten policy writes aimed at every cap-change rule: raises deferred to a boundary, a raise made on a boundary, a lowering cancelling a pending raise, an unchanged cap, a window-length-only change |
+
 ### `docs/`
 
 | Folder | Holds |
@@ -214,7 +223,15 @@ python verifier/verify.py --readings differential/data/inputs/B2.readings.csv --
 ```
 
 The first line is a summary: 364 settled days, 728,421 milli-USD, 26 breaches at
-that fixture's 50,000 cap.
+that fixture's 50,000 cap. Add `--policy-report report.csv` to see, for each
+policy write, the effective day the rule derives next to the one the chain
+recorded.
+
+Exit codes: **0** clean, **1** at least one anomaly (an incomplete day, a gap, a
+deferral mismatch, and similar — details on stderr), **2** unreadable input.
+**Breaches do not change the exit code** — they are results, not anomalies — so
+read the output rather than relying on the exit status. Try
+`verifier/fixtures/policy_deferral_mismatch.csv` to see exit 1.
 
 ### Reading the differential table
 
@@ -242,7 +259,56 @@ contract still gets compared instead of stopping at the failing suite.
 
 ---
 
-## 5. Current state
+## 5. What the checks have shown
+
+### The two implementations agree on real data
+
+| | |
+|---|---|
+| Settled days compared | 1,880 across six scenarios |
+| Policy writes checked | 15 |
+| Disagreements | **0** |
+| On-chain spend vs the simulator's own cost | within 0.5 milli-USD on every day — the most one rounding per day allows |
+| Annual totals vs the simulator | within 1.3 cents |
+
+### The differential can see a broken chain
+
+A clean comparison is only worth something if it can fail, so the contracts were
+broken on purpose, one mutation at a time, and the whole differential re-run.
+Of twelve mutations, ten were detected straight away — rounding truncated,
+exports ignored, a raise applied immediately, the oldest window day dropped,
+and so on. The other two taught something:
+
+- **Refusing equality at the cap** went unseen because no real day's window
+  landed exactly on the cap. That is why `B2atCap` exists.
+- **A lowering that leaves the cancelled raise in storage** changes no answer at
+  all — the lookup meets the lowering first — so no comparison of results can
+  see it. A Solidity test checks the stored history instead.
+
+Across all stages 74 distinct mutations have been run — against the Solidity
+tests, and through the differential. Every gap they found was closed before the
+stage was committed; the details are in each
+commit message and in `docs/decisions/design-decisions.md`.
+
+### Gas
+
+Measured on the local chain. Printed by the tests whose names start
+`test_reportGas`.
+
+| Operation | Gas |
+|---|---|
+| Publish one day of 96 prices | 137,266 |
+| Check a meter signature over one day of readings | 44,751 |
+| Settle one day — both checks, the spend, the record, the window | 310,888 |
+| Ledger write, first use of a ring slot | 95,226 |
+| Ledger write, once the one-year ring has filled | 7,218 |
+
+These are execution gas only. On Base the cost of calldata posted to Ethereum
+comes on top, and a settlement carries 96 readings and 96 prices.
+
+---
+
+## 6. Current state
 
 | Finding | Status |
 |---|---|
@@ -255,9 +321,17 @@ contract still gets compared instead of stopping at the failing suite.
 | F7 — policy event lacked the submission day | **Fixed.** Deferral now checked, not trusted. |
 | F8 — agent reported its own spend | **Fixed.** Spend computed from meter readings and oracle prices. |
 
-**Open:** four rule questions raised by the verifier author (Q8–Q11, Phase B),
-owner key rotation (Q5), cap recalibration (Q3), deployment, adversarial
-evaluation.
+**Open, needing decisions (roadmap Phase B):**
+
+- **Q8** — a raise waits for a window boundary, but the window rolls and never
+  resets, so the wait does not keep new capacity out of a partly spent window
+- **Q9** — shortening the window without changing the cap loosens at once
+- **Q10** — next-day authorisation is conservative by one day
+- **Q5** — owner key rotation
+
+**Open, later:** Q11, cross-checking each policy write's submission day
+against block time in an external evidence tool; cap recalibration (Q3);
+deployment; adversarial evaluation.
 
 **What is fair to say now:** contract implemented; spend computed from measured
 inputs rather than reported by the agent; test suite present; an independent

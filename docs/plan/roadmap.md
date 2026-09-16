@@ -17,7 +17,7 @@ recorded, and the agent's authority is withdrawn while it is over the cap.
 | 1. Key separation | **Done.** Owner, agent, guardian, plus the meter and price publisher; the meter can never be the agent's key. |
 | 2. Config/ledger split | **Done.** `PolicyConfig`, `SpendLedger` (one-year ring, raw data only), `SpendValidator`, `PriceOracle`. |
 | 3. Independent verifier | **Done.** Blind verifier rewritten for spec version 2; differential clean on 1,880 real settled days and 15 policy writes, and itself mutation-tested (D7.16). |
-| 4. Mutation suite | **Run by hand, not yet tooling.** About 95 mutations across all stages; every gap found was closed. Scripts live outside the repo. |
+| 4. Mutation suite | **Run by hand, not yet tooling.** 74 distinct mutations across all stages; every gap found was closed. Scripts live outside the repo. |
 | 5. F3 / F4 | **Done in substance.** Signed spend end to end; rounding happens once, on-chain, half away from zero, tested at the exact half in both signs on both sides. |
 | 6. Adversarial evaluation | **Not started.** |
 
@@ -115,7 +115,7 @@ every arm.
 | F1 | Deploy script for the rebuilt system: price oracle, config, ledger, account, validator; register oracle and meter; install and select the validator; allowlist the ledger writer; verify each role on-chain. None exists. | Medium |
 | F2 | Simulated meter and publisher processes for testnet: sign and publish from `differential/data/inputs/`, relay settlements daily. | Medium |
 | F3 | Deploy to Base Sepolia; record addresses, commit hash and bytecode match. | Small |
-| F4 | Gas per record and per check. Measured locally so far: publish a day 137,266; meter signature check 44,751; settle a day 311,284; ring write 95,753 cold, 7,700 steady. State the block-time assumption with a citation. | Small |
+| F4 | Gas per record and per check. Measured locally so far: publish a day 137,266; meter signature check 44,751; settle a day 310,888; ring write 95,226 cold, 7,218 steady. Execution gas only; Base's L1 data fee for 192 values of calldata per settlement comes on top. State the block-time assumption with a citation. | Small |
 
 ---
 
