@@ -1,19 +1,25 @@
-"""Step 3: run both implementations against the same records, report the
-disagreement set.
+"""Run both implementations on the same real days and report where they disagree.
 
-The on-chain side is test/Differential.t.sol, which replays scenarios into the
-real contracts and prints its verdict as CSV. The off-chain side is
-verifier/verify.py, written from docs/spec/enforcement-rule.md by an author who never saw
-the Solidity.
+Chain side: test/Differential.t.sol replays each scenario through the real
+contracts -- oracle publication, meter signature, on-chain settlement -- and
+writes its verdict to differential/data/chain/.
 
-Disagreements are the output of this script. A clean run is a weaker result
-than it looks: it is at least as likely to mean the two sides share an
-assumption as that both are right. Read the ambiguity list in
-docs/verifier/implementation-notes.md alongside whatever this prints.
+Verifier side: verifier/verify.py, written from docs/spec/enforcement-rule.md
+by an author who never saw the Solidity, is given the same readings, prices
+and captured policy events.
 
-Usage:
-    python differential/run_diff.py            # runs hardhat, then compares
-    python differential/run_diff.py --from-file out.txt
+Compared, per settled day: spend, window sum, cap and window length in force,
+the policy version the chain bound against the version the verifier finds in
+force, compliance, and authorisation on the next day. Per policy write: whether
+the chain's effective day matches the day the rule derives.
+
+Disagreements are the output. A clean run is a weaker result than it looks: it
+is at least as likely to mean the two sides share an assumption as that both
+are right. Read docs/verifier/implementation-notes.md alongside it.
+
+usage:
+    python differential/run_diff.py                # build inputs if missing, run chain, compare
+    python differential/run_diff.py --skip-chain   # reuse differential/data/chain/
 """
 
 from __future__ import annotations
@@ -28,168 +34,224 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "differential" / "data"
+INPUTS = DATA / "inputs"
+CHAIN = DATA / "chain"
+VERIFY = DATA / "verify"
 VERIFIER = ROOT / "verifier" / "verify.py"
+BUILDER = ROOT / "differential" / "build_settlement_inputs.py"
 
-DAY_COLS = [
-    "scenario", "dayIndex", "netSpend", "windowSum",
-    "capInForce", "windowDaysInForce", "compliant", "policyVersion", "paused",
+DAY_FIELDS = [
+    # (chain column, verifier column)
+    ("spendMilliUsd", "spendMilliUsd"),
+    ("windowSum", "windowSum"),
+    ("capInForce", "capInForce"),
+    ("windowDaysInForce", "windowDaysInForce"),
+    ("policyVersion", "policyVersionInForce"),
+    ("compliant", "compliant"),
+    ("authorisedNextDay", "authorisedNextDay"),
 ]
-POLICY_COLS = [
-    "scenario", "seq", "policyVersion", "cap",
-    "windowDays", "effectiveFromDay", "setBy",
-]
 
 
-def run_hardhat() -> str:
-    print("running hardhat solidity tests to capture the on-chain verdict ...")
+def read_csv(path: Path) -> list[dict]:
+    with io.open(path, encoding="utf-8", newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def write_csv(path: Path, header: list[str], rows) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with io.open(path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh, lineterminator="\n")
+        writer.writerow(header)
+        writer.writerows(rows)
+
+
+def norm(value: str) -> str:
+    v = str(value).strip()
+    return v.lower() if v.lower() in ("true", "false", "na") else v
+
+
+# ----------------------------------------------------------------------------
+# Stages
+# ----------------------------------------------------------------------------
+
+def ensure_inputs() -> None:
+    if (INPUTS / "prices.csv").exists():
+        return
+    print("building settlement inputs from the HEMS step logs ...")
+    proc = subprocess.run([sys.executable, str(BUILDER)], cwd=ROOT)
+    if proc.returncode != 0:
+        raise SystemExit("input build failed")
+
+
+def run_chain() -> None:
+    CHAIN.mkdir(parents=True, exist_ok=True)
+    for stale in CHAIN.glob("*"):
+        stale.unlink()
+    print("running the Solidity suite to capture the chain's verdict ...")
     proc = subprocess.run(
         ["npx", "hardhat", "test", "solidity"],
         cwd=ROOT, capture_output=True, text=True, shell=(os.name == "nt"),
     )
-    if "DAY," not in proc.stdout:
+    if proc.returncode != 0:
         sys.stderr.write(proc.stdout[-4000:] + "\n" + proc.stderr[-4000:] + "\n")
-        raise SystemExit("hardhat produced no DAY rows; see output above")
-    return proc.stdout
+        raise SystemExit("Solidity suite failed; the chain verdict is not trustworthy")
 
 
-def parse(text: str):
-    days, policies = [], []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("DAY,"):
-            days.append(dict(zip(DAY_COLS, line[4:].split(","))))
-        elif line.startswith("POLICY,"):
-            policies.append(dict(zip(POLICY_COLS, line[7:].split(","))))
-    return days, policies
+def run_verifier(scenario: str, arm: str, first: int, last: int) -> tuple[dict, list[dict], str]:
+    """Slice this scenario's inputs, run the verifier, return (days, policy report, stderr)."""
+    out_dir = VERIFY / scenario
+    out_dir.mkdir(parents=True, exist_ok=True)
 
+    readings = [r for r in read_csv(INPUTS / f"{arm}.readings.csv") if first <= int(r["dayIndex"]) <= last]
+    prices = [r for r in read_csv(INPUTS / "prices.csv") if first <= int(r["dayIndex"]) <= last]
+    write_csv(out_dir / "readings.csv", ["dayIndex", "slot", "importMWh", "exportMWh"],
+              ([r["dayIndex"], r["slot"], r["importMWh"], r["exportMWh"]] for r in readings))
+    write_csv(out_dir / "prices.csv", ["dayIndex", "slot", "importPrice", "exportPrice"],
+              ([r["dayIndex"], r["slot"], r["importPrice"], r["exportPrice"]] for r in prices))
 
-def write_scenario_inputs(scenario: str, days, policies) -> tuple[Path, Path]:
-    d = DATA / scenario
-    d.mkdir(parents=True, exist_ok=True)
+    policy_in = CHAIN / f"{scenario}.policy.csv"
+    days_out = out_dir / "days.csv"
+    policy_out = out_dir / "policy_report.csv"
+    summary_out = out_dir / "summary.json"
+    # Delete previous output first. A verifier that fails must never leave the
+    # last good run in place to be compared as though it were this one (D5.4).
+    for stale in (days_out, policy_out, summary_out):
+        if stale.exists():
+            stale.unlink()
 
-    rec_path = d / "records.csv"
-    with io.open(rec_path, "w", encoding="utf-8", newline="") as fh:
-        w = csv.writer(fh, lineterminator="\n")
-        w.writerow(["dayIndex", "netSpend", "policyVersion", "paused"])
-        for row in days:
-            w.writerow([
-                row["dayIndex"], row["netSpend"], row["policyVersion"],
-                "true" if row["paused"] == "1" else "false",
-            ])
-
-    pol_path = d / "policy.csv"
-    with io.open(pol_path, "w", encoding="utf-8", newline="") as fh:
-        w = csv.writer(fh, lineterminator="\n")
-        w.writerow(["seq", "policyVersion", "cap", "windowDays", "effectiveFromDay", "setBy"])
-        for row in policies:
-            w.writerow([
-                row["seq"], row["policyVersion"], row["cap"],
-                row["windowDays"], row["effectiveFromDay"], row["setBy"],
-            ])
-    return rec_path, pol_path
-
-
-def run_verifier(scenario: str, rec_path: Path, pol_path: Path):
-    out_path = DATA / scenario / "verifier_results.csv"
     proc = subprocess.run(
         [sys.executable, str(VERIFIER),
-         "--records", str(rec_path), "--policy", str(pol_path),
-         "--out", str(out_path), "--quiet"],
+         "--readings", str(out_dir / "readings.csv"),
+         "--prices", str(out_dir / "prices.csv"),
+         "--policy", str(policy_in),
+         "--out", str(days_out),
+         "--policy-report", str(policy_out),
+         "--summary-json", str(summary_out)],
         cwd=ROOT, capture_output=True, text=True,
     )
-    if not out_path.exists():
+    # Non-zero is expected when the verifier reports anomalies. No output file
+    # means it did not run to completion, which is a failure of the harness.
+    if not days_out.exists() or not policy_out.exists():
         sys.stderr.write(proc.stdout + "\n" + proc.stderr + "\n")
-        raise SystemExit(f"verifier produced no output for scenario {scenario}")
-    with io.open(out_path, encoding="utf-8") as fh:
-        return {int(r["dayIndex"]): r for r in csv.DictReader(fh)}, proc.stderr
+        raise SystemExit(f"verifier produced no output for {scenario} (exit {proc.returncode})")
+
+    days = {int(r["dayIndex"]): r for r in read_csv(days_out)}
+    return days, read_csv(policy_out), proc.stderr
 
 
-def norm_bool(v: str) -> str:
-    return str(v).strip().lower() in ("1", "true", "yes")
+# ----------------------------------------------------------------------------
+# Comparison
+# ----------------------------------------------------------------------------
 
-
-def compare(scenario: str, chain_days, verifier_rows):
-    """Compare the two verdicts day by day. Returns a list of disagreements."""
-    out = []
-    for row in chain_days:
+def compare_days(chain_rows: list[dict], verifier_days: dict) -> list[tuple]:
+    diffs = []
+    seen = set()
+    for row in chain_rows:
         day = int(row["dayIndex"])
-        v = verifier_rows.get(day)
+        seen.add(day)
+        v = verifier_days.get(day)
         if v is None:
-            out.append((day, "missing", "row present", "no row from verifier"))
+            diffs.append((day, "row", "present", "missing"))
             continue
+        for chain_col, verifier_col in DAY_FIELDS:
+            a, b = norm(row[chain_col]), norm(v.get(verifier_col, "<absent>"))
+            if a != b:
+                diffs.append((day, chain_col, a, b))
+    for day in sorted(set(verifier_days) - seen):
+        diffs.append((day, "row", "missing", "present"))
+    return diffs
 
-        checks = [
-            ("windowSum", row["windowSum"], v.get("windowSum")),
-            ("capInForce", row["capInForce"], v.get("capInForce")),
-            ("windowDaysInForce", row["windowDaysInForce"], v.get("windowDaysInForce")),
-        ]
-        for name, a, b in checks:
-            if b in (None, "", "NA"):
-                out.append((day, name, a, f"verifier: {b!r}"))
-                continue
-            if int(a) != int(b):
-                out.append((day, name, a, b))
 
-        a_ok = norm_bool(row["compliant"])
-        b_raw = v.get("compliant")
-        if b_raw in (None, "", "NA"):
-            out.append((day, "compliant", a_ok, f"verifier: {b_raw!r}"))
-        elif a_ok != norm_bool(b_raw):
-            out.append((day, "compliant", a_ok, norm_bool(b_raw)))
-    return out
+def deferral_findings(chain_policy: list[dict], report: list[dict]) -> list[tuple]:
+    findings = []
+    by_seq = {int(r["seq"]): r for r in report}
+    for event in chain_policy:
+        seq = int(event["seq"])
+        r = by_seq.get(seq)
+        if r is None:
+            findings.append((seq, "missing from verifier report", "", ""))
+            continue
+        if norm(r["deferralOk"]) != "true":
+            findings.append((seq, "deferral mismatch", r["emittedEffectiveFromDay"], r["derivedEffectiveFromDay"]))
+    return findings
+
+
+def quantisation(scenario_arm: str, chain_rows: list[dict]) -> float | None:
+    path = INPUTS / f"{scenario_arm}.simulator.csv"
+    if not path.exists():
+        return None
+    sim = {int(r["dayIndex"]): float(r["simulatorEnergyCostMilliUsd"]) for r in read_csv(path)}
+    worst = 0.0
+    for row in chain_rows:
+        day = int(row["dayIndex"])
+        if day in sim:
+            worst = max(worst, abs(int(row["spendMilliUsd"]) - sim[day]))
+    return worst
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--from-file", help="parse a saved hardhat output file instead of re-running")
+    ap.add_argument("--skip-chain", action="store_true", help="reuse differential/data/chain/")
     args = ap.parse_args()
 
-    text = io.open(args.from_file, encoding="utf-8", errors="replace").read() \
-        if args.from_file else run_hardhat()
+    ensure_inputs()
+    if not args.skip_chain:
+        run_chain()
 
-    days, policies = parse(text)
-    scenarios = sorted({r["scenario"] for r in days})
-    if not scenarios:
-        raise SystemExit("no scenarios found in the on-chain output")
+    metas = sorted(CHAIN.glob("*.meta.csv"))
+    if not metas:
+        raise SystemExit("no chain scenarios found in differential/data/chain/")
 
-    print(f"\nscenarios: {', '.join(scenarios)}\n")
-    print(f"{'scenario':<12} {'days':>6} {'policy':>7} {'breaches(chain)':>16} "
-          f"{'disagreements':>14}")
-    print("-" * 62)
+    header = (f"{'scenario':<10} {'days':>5} {'writes':>6} {'breaches':>8} {'unauth':>6} "
+              f"{'disagree':>8} {'deferral':>8} {'max |chain-sim| mUSD':>21}")
+    print("\n" + header)
+    print("-" * len(header))
 
-    total_disagreements = 0
+    total = 0
     details = []
+    for meta_path in metas:
+        meta = read_csv(meta_path)[0]
+        scenario, arm = meta["scenario"], meta["arm"]
+        first, last = int(meta["firstDay"]), int(meta["lastDay"])
 
-    for scenario in scenarios:
-        s_days = [r for r in days if r["scenario"] == scenario]
-        s_pol = [r for r in policies if r["scenario"] == scenario]
-        s_days.sort(key=lambda r: int(r["dayIndex"]))
-        s_pol.sort(key=lambda r: int(r["seq"]))
+        chain_rows = read_csv(CHAIN / f"{scenario}.days.csv")
+        chain_policy = read_csv(CHAIN / f"{scenario}.policy.csv")
+        verifier_days, report, stderr = run_verifier(scenario, arm, first, last)
 
-        rec_path, pol_path = write_scenario_inputs(scenario, s_days, s_pol)
-        v_rows, _ = run_verifier(scenario, rec_path, pol_path)
-        diffs = compare(scenario, s_days, v_rows)
+        diffs = compare_days(chain_rows, verifier_days)
+        deferrals = deferral_findings(chain_policy, report)
+        breaches = sum(1 for r in chain_rows if norm(r["compliant"]) == "false")
+        unauth = sum(1 for r in chain_rows if norm(r["authorisedNextDay"]) == "false")
+        quant = quantisation(arm, chain_rows)
 
-        breaches = sum(1 for r in s_days if not norm_bool(r["compliant"]))
-        print(f"{scenario:<12} {len(s_days):>6} {len(s_pol):>7} {breaches:>16} {len(diffs):>14}")
+        print(f"{scenario:<10} {len(chain_rows):>5} {len(chain_policy):>6} {breaches:>8} {unauth:>6} "
+              f"{len(diffs):>8} {len(deferrals):>8} {quant if quant is not None else float('nan'):>21.6f}")
 
-        total_disagreements += len(diffs)
+        total += len(diffs) + len(deferrals)
+        if diffs or deferrals or stderr.strip():
+            details.append((scenario, diffs, deferrals, stderr))
+
+    print("-" * len(header))
+    print(f"total disagreements and deferral findings: {total}\n")
+
+    for scenario, diffs, deferrals, stderr in details:
+        print(f"=== {scenario} ===")
+        if stderr.strip():
+            lines = stderr.strip().splitlines()
+            print(f"verifier stderr ({len(lines)} lines):")
+            for line in lines[:15]:
+                print(f"  {line}")
         if diffs:
-            details.append((scenario, diffs))
-
-    print("-" * 62)
-    print(f"total disagreements: {total_disagreements}\n")
-
-    for scenario, diffs in details:
-        print(f"=== {scenario}: {len(diffs)} disagreements ===")
-        print(f"{'day':>8} {'field':<20} {'chain':>14} {'verifier':>14}")
-        for day, field, a, b in diffs[:40]:
-            print(f"{day:>8} {field:<20} {str(a):>14} {str(b):>14}")
-        if len(diffs) > 40:
-            print(f"  ... and {len(diffs) - 40} more")
+            print(f"{'day':>8} {'field':<20} {'chain':>14} {'verifier':>14}")
+            for day, field, a, b in diffs[:40]:
+                print(f"{day:>8} {field:<20} {a:>14} {b:>14}")
+            if len(diffs) > 40:
+                print(f"  ... and {len(diffs) - 40} more")
+        for seq, kind, emitted, derived in deferrals:
+            print(f"  policy seq {seq}: {kind} (chain {emitted}, rule {derived})")
         print()
 
-    return 1 if total_disagreements else 0
+    return 1 if total else 0
 
 
 if __name__ == "__main__":
