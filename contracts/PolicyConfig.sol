@@ -80,10 +80,20 @@ contract PolicyConfig {
     ///         compromised owner key from instantly undoing a live guardian pause.
     uint32 public unpauseDelaySeconds;
 
+    /// @notice Every policy write, with the full resulting regime.
+    ///
+    /// Both days are explicit. `effectiveFromDay` says when the write applies;
+    /// `submittedOnDay` says when it was made. Without the second, a verifier
+    /// reading the log can either trust `effectiveFromDay` -- and then cannot
+    /// notice a chain that stopped deferring raises -- or re-derive it from an
+    /// already-deferred day and defer it twice. Measured in step 3: the first
+    /// missed a mutated chain entirely, the second flagged seven false
+    /// breaches on a correct one (F7, D6.1).
     event PolicyUpdated(
         uint256 indexed policyVersion,
         int256 cap,
         uint32 windowDays,
+        uint64 submittedOnDay,
         uint64 effectiveFromDay,
         address setBy
     );
@@ -151,7 +161,9 @@ contract PolicyConfig {
             })
         );
 
-        emit PolicyUpdated(1, initialCap, initialWindowDays, 0, msg.sender);
+        // Genesis applies from day 0 whenever it was submitted: there is no
+        // earlier regime for it to raise or lower.
+        emit PolicyUpdated(1, initialCap, initialWindowDays, todayIndex(), 0, msg.sender);
         emit PauseTimingUpdated(1, pauseExpirySeconds_, unpauseDelaySeconds_, msg.sender);
         emit GuardianUpdated(address(0), guardian_);
         emit SessionKeyUpdated(address(0), sessionKey_);
@@ -290,7 +302,7 @@ contract PolicyConfig {
             );
         }
 
-        emit PolicyUpdated(nextVersion, newCap, newWindowDays, effectiveFromDay, msg.sender);
+        emit PolicyUpdated(nextVersion, newCap, newWindowDays, today, effectiveFromDay, msg.sender);
     }
 
     function setPauseTiming(uint32 pauseExpirySeconds_, uint32 unpauseDelaySeconds_)

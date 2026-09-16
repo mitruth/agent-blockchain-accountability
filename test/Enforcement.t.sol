@@ -2,6 +2,7 @@
 pragma solidity ^0.8.23;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {PolicyConfig} from "../contracts/PolicyConfig.sol";
 import {SpendLedger} from "../contracts/SpendLedger.sol";
 import {SpendValidator} from "../contracts/SpendValidator.sol";
@@ -422,6 +423,35 @@ contract EnforcementTest is Test {
         assertEq(config.capAt(today), CAP, "raise not in force today");
         assertEq(config.capAt(boundary), CAP * 5, "raise in force from the boundary");
         authorizationIs(SpendValidator.Authorization.OverCap);
+    }
+
+    /// F7: the event says when a write was made as well as when it applies,
+    /// so a reader of the log can check the deferral rather than trust it.
+    function test_policyEventCarriesSubmissionAndEffectiveDay() public {
+        bytes32 sig = keccak256("PolicyUpdated(uint256,int256,uint32,uint64,uint64,address)");
+        uint64 today = config.todayIndex();
+
+        vm.recordLogs();
+        vm.prank(owner);
+        config.setPolicy(CAP * 2, WINDOW_DAYS); // a raise
+        vm.prank(owner);
+        config.setPolicy(CAP / 2, WINDOW_DAYS); // a lowering
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] != sig) continue;
+            (int256 cap,, uint64 submitted, uint64 effective,) =
+                abi.decode(logs[i].data, (int256, uint32, uint64, uint64, address));
+            assertEq(submitted, today, "submitted today");
+            if (cap == CAP * 2) {
+                assertEq(effective, config.nextWindowBoundary(today, WINDOW_DAYS), "raise deferred");
+            } else {
+                assertEq(effective, today, "lowering immediate");
+            }
+            found++;
+        }
+        assertEq(found, 2);
     }
 
     function test_loweringCancelsPendingRaise() public {

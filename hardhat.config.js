@@ -20,6 +20,13 @@ export default {
     sources: "contracts",
     tests: { solidity: "test" },
   },
+  test: {
+    solidity: {
+      fsPermissions: {
+        dangerouslyReadWriteDirectory: ["differential/data"],
+      },
+    },
+  },
   networks: {
     baseSepolia: {
       type: "http",
