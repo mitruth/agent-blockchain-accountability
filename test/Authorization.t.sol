@@ -19,8 +19,8 @@ import {SmartAccount} from "../contracts/SmartAccount.sol";
 /// | Owner EOA     | write PolicyConfig; install/uninstall modules;| --                                   |
 /// |               | set ledger writer allowlist; unpause after   |                                      |
 /// |               | delay; revoke session key immediately        |                                      |
-/// | Agent session | submit daily records through the validator   | call setPolicy; install or uninstall |
-/// | key           | (covered in step 2, with the validator)      | any module; write the ledger         |
+/// | Agent session | transfer through the account while authorised| call setPolicy; install or uninstall |
+/// | key           | (Enforcement.t.sol; spend is metered, D7.1)  | any module; write the ledger         |
 /// |               |                                              | directly; alter the allowlist        |
 /// | Guardian      | pause spends and agent                       | change any config value; unpause;    |
 /// |               |                                              | write the ledger                     |
@@ -224,7 +224,7 @@ contract AuthorizationTest is Test {
     function test_agent_mayNotWriteLedgerDirectly() public {
         vm.prank(agent);
         vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
-        ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 5000, 1);
 
         assertFalse(ledger.isRecorded(ANCHOR_DAY));
     }
@@ -311,7 +311,7 @@ contract AuthorizationTest is Test {
     function test_guardian_mayNotWriteLedger() public {
         vm.prank(guardian);
         vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
-        ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 5000, 1);
     }
 
     function test_guardian_mayNotAlterLedgerAllowlist() public {
@@ -364,7 +364,7 @@ contract AuthorizationTest is Test {
 
         vm.prank(address(module));
         vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
-        ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 5000, 1);
     }
 
     /// And the converse: revoking the allowlist entry stops ledger writes even
@@ -378,7 +378,7 @@ contract AuthorizationTest is Test {
         vm.stopPrank();
 
         vm.prank(address(module));
-        ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 5000, 1);
         assertTrue(ledger.isRecorded(ANCHOR_DAY));
 
         vm.prank(owner);
@@ -388,7 +388,7 @@ contract AuthorizationTest is Test {
 
         vm.prank(address(module));
         vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
-        ledger.recordDay(ANCHOR_DAY + 1, 5000, 1, false);
+        ledger.recordDay(ANCHOR_DAY + 1, 5000, 1);
     }
 
     // ------------------------------------------------------------------
@@ -410,7 +410,7 @@ contract AuthorizationTest is Test {
 
         vm.prank(stranger);
         vm.expectRevert(SpendLedger.SpendLedger_NotAWriter.selector);
-        ledger.recordDay(ANCHOR_DAY, 1, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 1, 1);
     }
 
     /// The test contract deployed nothing as itself. It must hold no authority,

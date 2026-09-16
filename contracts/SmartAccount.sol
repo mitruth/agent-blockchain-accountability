@@ -40,6 +40,7 @@ contract SmartAccount {
     event TransactionRejected(address indexed to, uint256 value, string reason);
 
     error SmartAccount_OnlyOwner();
+    error SmartAccount_NotOwnerOrAgent();
     error SmartAccount_AlreadyInstalled();
     error SmartAccount_NotInstalled();
     error SmartAccount_InsufficientBalance();
@@ -118,11 +119,20 @@ contract SmartAccount {
     // Execution
     // ------------------------------------------------------------------
 
-    /// @notice Owner-only transfer gated by pause + every installed validator.
+    /// @notice Transfer from the account, by the owner or by the agent.
+    ///
+    /// This is the action enforcement gates. The agent's session key may call
+    /// it, and every installed validator decides: the spend validator lets the
+    /// agent through only while it is authorised -- window within the cap,
+    /// settlement current, no pause (D7.5). The owner is the principal and is
+    /// stopped here only by a spend pause.
+    ///
     /// @param to    Recipient.
-    /// @param value Prospective spend in ledger minor units (milli-USD), also
-    ///              used as the wei amount transferred in this demo account.
-    function execute(address to, uint256 value) external onlyOwner {
+    /// @param value Wei to transfer. Not spend: spend is metered (F6).
+    function execute(address to, uint256 value) external {
+        if (msg.sender != owner && msg.sender != policyConfig.sessionKey()) {
+            revert SmartAccount_NotOwnerOrAgent();
+        }
         if (address(this).balance < value) revert SmartAccount_InsufficientBalance();
         if (policyConfig.spendsCurrentlyPaused()) revert SmartAccount_SpendsPaused();
         if (spendValidator == address(0) || !installedModules[spendValidator]) {

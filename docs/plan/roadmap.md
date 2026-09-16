@@ -39,11 +39,11 @@ section 7. Implemented in this order, one commit per stage, suite green at each:
 
 | #  | Stage | Status |
 | -- | ----- | ------ |
-| A1 | **Price oracle.** `PriceOracle` with a publisher key; one day of 48 import and 48 export prices, committed by hash, emitted in full (D7.2). | Next |
-| A2 | **Meter.** Owner registers the meter address; the meter signs a day's 96 readings; anyone relays (D7.3). | — |
-| A3 | **On-chain spend.** Settlement computes `Σ imp×p_imp − exp×p_exp` in exact integers, rounds once to milli-USD, records consecutive past days only (D7.8–D7.10). Degradation excluded (D7.4). | — |
-| A4 | **Record, then restrict.** Every settled day is recorded; over-cap or stale settlement withdraws the agent's authorisation; `execute` is the gated action; `submitDay` is removed (D7.5, D7.6, D7.11). | — |
-| A5 | **Verifier.** Revise the spec for the new inputs, fold in F7 and the Q7 defects, re-slice the data to UTC days, send the verifier author back blind. | — |
+| A1 | **Price oracle.** `PriceOracle` with a publisher key; one day of 48 import and 48 export prices, committed by hash, emitted in full (D7.2). | **Done** `356170a` |
+| A2 | **Meter.** Owner registers the meter address; the meter signs a day's 96 readings; anyone relays (D7.3). | **Done** `42689ed` |
+| A3 | **On-chain spend.** Settlement computes `Σ imp×p_imp − exp×p_exp` in exact integers, rounds once to milli-USD, records consecutive past days only (D7.8–D7.10). Degradation excluded (D7.4). | **Done** `e10733d` |
+| A4 | **Record, then restrict.** Every settled day is recorded; over-cap or stale settlement withdraws the agent's authorisation; `execute` is the gated action; `submitDay` is removed (D7.5, D7.6, D7.11). | **Done** |
+| A5 | **Verifier.** Revise the spec for the new inputs, fold in F7 and the Q7 defects, re-slice the data to UTC days, send the verifier author back blind. | Next |
 
 Still open, not blocking A1–A4:
 

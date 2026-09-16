@@ -3,10 +3,10 @@ pragma solidity ^0.8.23;
 
 import {IModule} from "./IModule.sol";
 
-/// @notice Spend / policy validator hooked by SmartAccount.execute.
-/// @dev `value` is the prospective spend in ledger minor units (milli-USD),
-///      encoded as uint256. It is not an ETH denomination. Callers must ensure
-///      it fits in int256 before the validator casts it.
+/// @notice Policy validator hooked by SmartAccount.execute.
+/// @dev `from` is the caller of execute: the owner or the agent's session key.
+///      `value` is the wei being transferred. It is not spend -- spend is what
+///      the meter measured -- and a validator must not treat it as such (F6).
 interface IValidator is IModule {
     function validateTransaction(
         address from,

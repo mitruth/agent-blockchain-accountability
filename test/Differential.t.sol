@@ -113,14 +113,16 @@ contract DifferentialTest is Test {
                     ",", vm.toString(uint256(w)),
                     ",", (sum <= cap ? "1" : "0"),
                     ",", vm.toString(rec.policyVersion),
-                    ",", (rec.paused ? "1" : "0")
+                    // Records no longer carry a pause flag (D7.6); the
+                    // column stays so run_diff.py keeps its format until A5.
+                    ",", "0"
                 )
             );
         }
     }
 
     function _record(uint64 day, int256 netSpend) internal {
-        ledger.recordDay(day, netSpend, config.regimeAt(day).policyVersion, false);
+        ledger.recordDay(day, netSpend, config.regimeAt(day).policyVersion);
     }
 
     // ------------------------------------------------------------------
@@ -220,34 +222,5 @@ contract DifferentialTest is Test {
 
         _emitPolicyEvents("churn");
         _emitDays("churn", start, start + 20);
-    }
-
-    // ------------------------------------------------------------------
-    // Scenario: pause
-    //
-    // A paused day must read as a zero-spend day, not a missing day, and the
-    // window must advance across it.
-    // ------------------------------------------------------------------
-
-    function test_diff_pausedDays() public {
-        uint64 start = 20000;
-        warpToDay(start);
-
-        vm.recordLogs();
-        _deploy(10000, 7);
-
-        for (uint256 i = 0; i < 10; i++) {
-            uint64 d = start + uint64(i);
-            bool paused = (i == 3 || i == 4);
-            ledger.recordDay(
-                d,
-                paused ? int256(0) : int256(1500),
-                config.regimeAt(d).policyVersion,
-                paused
-            );
-        }
-
-        _emitPolicyEvents("paused");
-        _emitDays("paused", start, start + 9);
     }
 }

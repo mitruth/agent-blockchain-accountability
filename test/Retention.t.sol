@@ -98,11 +98,11 @@ contract RetentionTest is Test {
         uint64 newer = ANCHOR_DAY + uint64(ledger.RETENTION_DAYS());
         assertEq(older % ledger.RETENTION_DAYS(), newer % ledger.RETENTION_DAYS(), "same slot");
 
-        ledger.recordDay(older, 5000, 1, false);
+        ledger.recordDay(older, 5000, 1);
         assertTrue(ledger.isRecorded(older));
         assertEq(ledger.netSpendOf(older), 5000);
 
-        ledger.recordDay(newer, 111, 1, false);
+        ledger.recordDay(newer, 111, 1);
 
         // The newer day is live.
         assertTrue(ledger.isRecorded(newer));
@@ -118,17 +118,17 @@ contract RetentionTest is Test {
         uint64 older = ANCHOR_DAY;
         uint64 newer = ANCHOR_DAY + uint64(ledger.RETENTION_DAYS());
 
-        ledger.recordDay(older, 5000, 1, false);
+        ledger.recordDay(older, 5000, 1);
 
         vm.expectEmit(true, true, false, false, address(ledger));
         emit SpendLedger.DayEvicted(older, newer);
-        ledger.recordDay(newer, 111, 1, false);
+        ledger.recordDay(newer, 111, 1);
     }
 
     /// Writing a fresh day into a slot that was never used emits no eviction.
     function test_noEvictionEventOnAVirginSlot() public {
         vm.recordLogs();
-        ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 5000, 1);
 
         bytes32 sig = keccak256("DayEvicted(uint64,uint64)");
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -148,13 +148,13 @@ contract RetentionTest is Test {
 
         // A year ago: seven consecutive heavy days.
         for (uint64 i = 0; i < 7; i++) {
-            ledger.recordDay(ANCHOR_DAY + i, 90000, 1, false);
+            ledger.recordDay(ANCHOR_DAY + i, 90000, 1);
         }
         assertEq(validator.windowSum(ANCHOR_DAY + 6), 630000);
 
         // A year later, one light day landing on the first of those slots.
         uint64 newDay = ANCHOR_DAY + retention;
-        ledger.recordDay(newDay, 10, 1, false);
+        ledger.recordDay(newDay, 10, 1);
 
         // The other six year-old records are still in the ring, at slots the
         // new window covers. They must not be counted.
@@ -163,8 +163,8 @@ contract RetentionTest is Test {
 
     function test_evictedDaysReadAsAbsentInRecordRange() public {
         uint64 retention = uint64(ledger.RETENTION_DAYS());
-        ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
-        ledger.recordDay(ANCHOR_DAY + retention, 111, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 5000, 1);
+        ledger.recordDay(ANCHOR_DAY + retention, 111, 1);
 
         SpendLedger.DayRecord[] memory rows = ledger.recordRange(ANCHOR_DAY, ANCHOR_DAY + 1);
         assertFalse(rows[0].recorded, "evicted day must report recorded = false");
@@ -182,7 +182,7 @@ contract RetentionTest is Test {
     function test_dayZeroIsDistinguishableFromAnEmptySlot() public {
         assertFalse(ledger.isRecorded(0), "nothing recorded yet");
 
-        ledger.recordDay(0, 1234, 1, false);
+        ledger.recordDay(0, 1234, 1);
 
         assertTrue(ledger.isRecorded(0), "day 0 is a real day");
         assertEq(ledger.netSpendOf(0), 1234);
@@ -199,12 +199,12 @@ contract RetentionTest is Test {
     function test_retentionHorizonReported() public {
         uint64 retention = uint64(ledger.RETENTION_DAYS());
 
-        ledger.recordDay(ANCHOR_DAY, 100, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 100, 1);
         assertEq(ledger.oldestRetainedDay(), ANCHOR_DAY, "nothing evicted yet");
         assertTrue(ledger.isWithinRetention(ANCHOR_DAY));
 
         uint64 far = ANCHOR_DAY + retention + 10;
-        ledger.recordDay(far, 100, 1, false);
+        ledger.recordDay(far, 100, 1);
 
         assertEq(ledger.oldestRetainedDay(), far + 1 - retention);
         assertFalse(ledger.isWithinRetention(ANCHOR_DAY), "a year and ten days back is gone");
@@ -224,7 +224,7 @@ contract RetentionTest is Test {
         uint64 total = retention * 3;
 
         for (uint64 i = 0; i < total; i++) {
-            ledger.recordDay(ANCHOR_DAY + i, int256(uint256(i)) + 1, 1, false);
+            ledger.recordDay(ANCHOR_DAY + i, int256(uint256(i)) + 1, 1);
         }
 
         uint64 lastDay = ANCHOR_DAY + total - 1;
@@ -259,11 +259,11 @@ contract RetentionTest is Test {
         uint64 retention = uint64(ledger.RETENTION_DAYS());
 
         uint256 before = gasleft();
-        ledger.recordDay(ANCHOR_DAY, 5000, 1, false);
+        ledger.recordDay(ANCHOR_DAY, 5000, 1);
         uint256 coldWrite = before - gasleft();
 
         before = gasleft();
-        ledger.recordDay(ANCHOR_DAY + retention, 5000, 1, false);
+        ledger.recordDay(ANCHOR_DAY + retention, 5000, 1);
         uint256 warmWrite = before - gasleft();
 
         console.log("gas, first write to a virgin ring slot:");

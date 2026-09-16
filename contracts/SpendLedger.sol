@@ -40,16 +40,21 @@ contract SpendLedger {
     /// biases the sum upward, so the cap would bind earlier than it should --
     /// an error in the direction that flatters the mechanism.
     ///
-    /// Field order is chosen for packing, not for presentation: dayIndex,
-    /// paused and recorded share one slot, so a record costs 3 slots rather
-    /// than the 4 the spec's declaration order would have cost.
+    /// Field order is chosen for packing, not for presentation: dayIndex and
+    /// recorded share one slot, so a record costs 3 slots.
+    ///
+    /// The record is raw data only. There is no pause flag -- a pause gates the
+    /// agent's actions and no longer changes a day's spend (D7.6) -- and no
+    /// over-cap flag: whether a day breached is derived from the window and the
+    /// cap, it is in the validator's DaySettled event, and storing a derived
+    /// value in a ledger that is never redeployed would make any validator bug
+    /// in it permanent (D7.14).
     ///
     /// `dayIndex` is not redundant with the ring position. It is what
     /// distinguishes a live slot from a wrapped leftover, and `recorded`
     /// distinguishes a genuine record for day 0 from an untouched slot.
     struct DayRecord {
         uint64 dayIndex; // days since Unix epoch, UTC
-        bool paused; // true = zero-spend day imposed by pause
         bool recorded; // false = this slot was never written
         uint256 policyVersion; // version checked against
         int256 netSpend; // minor units; positive = net import cost, negative = net export credit
@@ -85,7 +90,6 @@ contract SpendLedger {
         int256 netSpendDelta,
         int256 netSpendTotal,
         uint256 policyVersion,
-        bool paused,
         address indexed writer
     );
 
@@ -132,9 +136,6 @@ contract SpendLedger {
     /// implementation and it is preserved deliberately: several settlements may
     /// land on one calendar day and each must count.
     ///
-    /// A paused day is a zero-spend day, not a missing day. It is written like
-    /// any other record so the window still advances across it.
-    ///
     /// A day that was never submitted is left absent rather than written as an
     /// explicit zero. It already contributes zero to every window sum, so a
     /// fabricated zero would change no arithmetic while asserting that the
@@ -142,8 +143,7 @@ contract SpendLedger {
     function recordDay(
         uint64 dayIndex,
         int256 netSpend,
-        uint256 policyVersion,
-        bool paused
+        uint256 policyVersion
     ) external onlyWriter {
         if (_hasAnyRecord && dayIndex < lastRecordedDay) revert SpendLedger_DayWentBackward();
 
@@ -156,14 +156,12 @@ contract SpendLedger {
             total = slot.netSpend + netSpend;
             slot.netSpend = total;
             slot.policyVersion = policyVersion;
-            slot.paused = paused;
         } else {
             if (slot.recorded) {
                 emit DayEvicted(slot.dayIndex, dayIndex);
             }
             total = netSpend;
             slot.dayIndex = dayIndex;
-            slot.paused = paused;
             slot.recorded = true;
             slot.policyVersion = policyVersion;
             slot.netSpend = netSpend;
@@ -178,7 +176,7 @@ contract SpendLedger {
             lastRecordedDay = dayIndex;
         }
 
-        emit DayRecorded(dayIndex, netSpend, total, policyVersion, paused, msg.sender);
+        emit DayRecorded(dayIndex, netSpend, total, policyVersion, msg.sender);
     }
 
     // ------------------------------------------------------------------
@@ -220,7 +218,6 @@ contract SpendLedger {
         if (!slot.recorded || slot.dayIndex != dayIndex) {
             return DayRecord({
                 dayIndex: dayIndex,
-                paused: false,
                 recorded: false,
                 policyVersion: 0,
                 netSpend: 0
@@ -264,8 +261,7 @@ contract SpendLedger {
             } else {
                 out[i] = DayRecord({
                     dayIndex: day,
-                    paused: false,
-                    recorded: false,
+                        recorded: false,
                     policyVersion: 0,
                     netSpend: 0
                 });

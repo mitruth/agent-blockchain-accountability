@@ -887,6 +887,51 @@ or 28 changes nothing observable: the recovery precompile already returns the
 zero address for any other `v`, and the zero-signer check rejects it with the
 same error. The explicit check stays for readability; it is not a test gap.
 
+
+### D7.14 — The ledger record holds raw data only: no pause flag, no breach flag
+
+**Decision.** `DayRecord` is `dayIndex`, `recorded`, `policyVersion`,
+`netSpend`. The `paused` field is removed and not replaced.
+
+**Why no pause flag.** A pause no longer changes a day's spend (D7.6), so the
+flag would describe nothing about the record.
+
+**Why not reuse the slot as an over-cap flag.** It was considered, and would
+have cost nothing in storage. Rejected because whether a day breached is derived
+— from the window and the cap in force — rather than measured. It is already in
+the validator's `DaySettled` event and recomputable from the log. The ledger is
+never redeployed, so a derived value stored there would make any validator bug
+in computing it permanent. D1.2 already committed the ledger to raw days; this
+keeps to it.
+
+### D7.15 — The agent calls `execute`; the validator decides; the owner is unconstrained
+
+**Decision.** `SmartAccount.execute` accepts the owner or the current session
+key and refuses anyone else. `SpendValidator.validateTransaction` returns true
+for the owner, the agent's authorisation state for the session key, and false
+for anyone else. A spend pause still stops the owner at the account.
+
+**Why the agent is now a caller.** Enforcement has to act on something the agent
+does. With spend metered rather than reported, the agent no longer submits
+anything, so its transfers through the account are the action enforcement
+gates.
+
+**Why the owner is not gated by the cap.** The cap is delegated authority. The
+owner is the principal delegating it, and the household's own money is not
+subject to the agent's budget.
+
+**Two layers, both tested.** The account refuses strangers before any validator
+runs, and the validator refuses them too. A mutation showed the second layer was
+untested — a validator admitting anyone passed every test, because the account
+stopped strangers first — so the validator's refusal is now asserted directly.
+A validator is a module, and must not rely on the account it happens to be
+installed on.
+
+**Authorisation reasons are reported, not only a boolean.** `authorization()`
+returns `NoSessionKey`, `AgentPaused`, `SettlementStale`, `OverCap` or
+`Authorized`. The evaluation needs to say *why* an agent was refused, and a
+bare `false` would hide whether it was the cap or a stale meter.
+
 ---
 
 ## Open questions
