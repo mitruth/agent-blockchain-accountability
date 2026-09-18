@@ -9,6 +9,9 @@ root except the project `README.md` itself.
 
 New to the project — read these in order:
 
+0. **[guide/hands-on-tour.md](guide/hands-on-tour.md)** — about an hour of
+   running the project, following real days, and breaking it on purpose to see
+   what catches it. The quickest way in.
 1. **[guide/project-guide.md](guide/project-guide.md)** — what every file and
    folder does, and a runbook of commands you can run locally. Start here.
 2. **[verifier/implementation-notes.md](verifier/implementation-notes.md)** —
@@ -22,7 +25,7 @@ New to the project — read these in order:
 
 | Folder | Holds | Current contents |
 |---|---|---|
-| `guide/` | Orientation and runbooks — how to find things and how to run them | `project-guide.md` |
+| `guide/` | Orientation and runbooks — how to find things and how to run them | `project-guide.md`, `hands-on-tour.md` |
 | `decisions/` | The design decision log. Append-only: a reversal gets a new entry marked **Superseded**, never an edit | `design-decisions.md` |
 | `spec/` | Specifications. What a thing must do, written so an implementation can be checked against it rather than derived from it | `enforcement-rule.md` |
 | `plan/` | Where the work stands and what comes next, in dependency order | `roadmap.md` |

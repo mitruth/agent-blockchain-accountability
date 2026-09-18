@@ -2,6 +2,9 @@
 
 What every file does, and how to run everything yourself.
 
+**New to the project?** Start with `docs/guide/hands-on-tour.md` — an hour of
+running it, looking at real days, and breaking it on purpose.
+
 For *why* a design choice was made, see `docs/decisions/design-decisions.md`.
 For what comes next, see `docs/plan/roadmap.md`. This file is the map and the
 runbook.
@@ -142,6 +145,7 @@ an author who was blocked from reading any Solidity.
 |---|---|
 | `build_settlement_inputs.py` | Turns each arm's HEMS step log into what the meter and publisher would publish: 364 UTC days of readings and prices. Needs the sibling `Demo_PlanApplyEvaluate` repo. |
 | `run_diff.py` | Builds inputs if missing, runs the chain replay, runs the verifier on the same data, compares day by day and policy write by policy write. |
+| `show_day.py` | Shows one real day end to end: its 48 half-hours, the spend worked out step by step, and what the simulator, the chain and the verifier each concluded. `python differential/show_day.py B2 19158` |
 | `data/` | Generated inputs and outputs. Not committed. |
 
 The differential runs six scenarios, all on real simulator days:
