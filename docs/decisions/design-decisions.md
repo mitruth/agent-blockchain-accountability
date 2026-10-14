@@ -1338,9 +1338,54 @@ refuses a trade outside either limit price (entry 2.43), so those trades would b
 rejected. Its structure is kept: sort, then match one pair at a time for the
 smaller quantity.
 
-**Result.** `npm run demo:flow` runs a full day: four trades, 4.3 kWh, one
-penalty of 0.09 EUR for an 80% delivery; every lock released at the end, and
-the ledger agrees with the prosumer contracts slot by slot.
+**Result.** See entry 2.58 for the day the flow now runs.
+
+### 2.58 — The demo day: closing at 12:00 Brussels time, an order every hour
+
+**Status.** Settled by Dan ("close at 12:00, place orders for every hour of the
+next day for both alice bob and carol and match all").
+
+**Decision.** `flow.js` opens a day-ahead session as the European day-ahead
+market does:
+
+- **Delivery** is a whole day on the Brussels clock, 00:00 to 24:00.
+- **Trading closes** at 12:00 Brussels time the day before.
+- **The day chosen** is the first delivery day whose closing time is still
+  ahead. Run after 12:00, the script trades the day after tomorrow.
+- **Summer and winter time.** The script converts with the time zone
+  `Europe/Brussels`, so CET and CEST are both handled. A clock-change day is a
+  session of 23 or 25 slots. The contracts see only UTC slot numbers; the time
+  zone exists only in the script.
+
+Every prosumer places an order for every hour, in one call per side:
+
+| Prosumer | How | Orders |
+| -------- | --- | ------ |
+| Alice | Agent, through the gate | Bids every hour: 0.6 kWh at night, 1.2 in the morning, 0.8 by day, 1.5 in the evening; 0.24 EUR/kWh, 0.27 from 17:00 to 21:00 |
+| Bob | Directly, no agent | Offers every hour: PV 2.0 kWh at 0.18 from 08:00 to 17:00, the battery 0.8 kWh at 0.22 otherwise |
+| Carol | Agent, through the gate | Offers 0.7 kWh at 0.17 from 09:00 to 16:00; bids 0.4 kWh at 0.23 otherwise |
+
+Alice's agent then modifies her 19:00 bid. The cancel step of the earlier flow
+is dropped so that every hour keeps its orders.
+
+**Why these numbers.** Each prosumer has a part in every hour's matching:
+
+- Carol's PV is cheaper than Bob's, so she sells first at midday.
+- Bob covers the rest of the day.
+- Alice's evening price is the highest, so the matcher serves her before Carol.
+
+**Result.**
+
+- **Matching.** 41 trades and 20.4 kWh, with a trade in all 24 hours. Alice's
+  24-order batch is one call of 24 legs, about 7.2 million gas, well under the
+  48-leg limit and the block gas limit.
+- **Ledger.** It agrees with the prosumer contracts in every hour, for both
+  agents.
+- **Settlement.**
+  - Bob delivers 80% at 19:00 and pays 0.048 EUR.
+  - Every other hour settles without penalty.
+  - Every lock is released.
+  - The payments sum to exactly the penalty the manager collected.
 
 ---
 

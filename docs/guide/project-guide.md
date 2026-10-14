@@ -801,20 +801,36 @@ npm run demo:flow
 
 What it does and prints, stage by stage:
 
-1. The operator opens tomorrow's day-ahead session: 24 hourly slots from
-   00:00 UTC, trading closing at 23:00 the day before.
-2. Alice's agent places four bids in one call through the gate (four legs);
-   Carol's agent places two offers; Bob places three offers himself, through
-   his account, with no agent.
-3. Alice's agent cancels one bid and modifies another (two legs).
-4. Time jumps to the close. An agent order is now refused, with the market's
+1. **The operator opens a day-ahead session.**
+   - Delivery is a whole day, 00:00 to 24:00 Brussels time.
+   - Trading closes at 12:00 the day before.
+   - The script takes the first day whose trading is still open, so a run after
+     12:00 trades the day after tomorrow.
+   - The day is 24 hourly slots, or 23 or 25 when the clocks change.
+2. **Every prosumer places an order for every hour**, one call per side.
+   - **Alice's agent** sends 24 bids through the gate in one call (24 legs).
+   - **Carol's agent** sends her midday offers and the rest of her day's bids.
+   - **Bob** offers every hour himself, through his account, with no agent.
+   - The day's profiles are in `flow.js` (`profiles`) and in decision log entry
+     2.58.
+3. **Alice's agent modifies her 19:00 bid.** This is two legs: a cancel, then a
+   place.
+4. **Time jumps to the close.** An agent order is now refused, with the market's
    own error: `MarketSession_Closed`.
-5. The matcher reads the session, matches it and finalises it.
-6. A keeper expires every unmatched remainder and reconciles the ledger. For
-   every slot the ledger is compared with the prosumer contracts' commitments.
-7. Time jumps past delivery. Each prosumer's sensor settles its slots; Bob
-   delivers 80% at 11:00 and pays a penalty.
-8. Final balances: who paid whom, and what the manager collected.
+5. **The matcher reads the session, matches it and finalises it.** The trades
+   are printed hour by hour: who bought from whom, how much, and at what price.
+6. **A keeper expires every unmatched remainder and reconciles the ledger.**
+   Then, for every hour, the ledger is compared with the prosumer contracts'
+   commitments.
+7. **Time jumps past delivery, and each prosumer's sensor settles its hours.**
+   - Bob delivers 80% at 19:00 and pays a penalty.
+   - The others deliver within 10% and pay none.
+   - The script prints each prosumer's day: bought, sold, paid, penalties.
+8. **Final balances:** who paid whom, and what the manager collected.
+
+The node's clock starts at the real time. The flow moves it forward, so a
+second run on the same node trades a later day. Restart the node to come back
+to today.
 
 Each run opens a new session, so the flow can be run again on the same
 deployment. A run that stops half-way leaves its session's orders locked;

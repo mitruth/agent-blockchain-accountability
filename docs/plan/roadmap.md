@@ -85,7 +85,7 @@ ledger.
 `npm run node`, `npm run demo:deploy`, `npm run demo:flow`: the market and the
 gate on a local Hardhat node, with three prosumers, two agents, a matcher, a
 keeper and sensors as separate programs, from opening a session to settlement.
-Decision log 2.54 to 2.57; the guide's runbook has the commands.
+Decision log 2.54 to 2.58; the guide's runbook has the commands.
 
 ---
 

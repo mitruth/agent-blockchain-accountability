@@ -5,26 +5,27 @@
 //   npm run demo:deploy
 //   npm run demo:flow
 //
-//   1  the operator opens tomorrow's day-ahead session: 24 hourly slots
-//   2  agents place batches for Alice and Carol through the gate; Bob places
-//      his own orders, without an agent
-//   3  Alice's agent cancels one bid and modifies another
+//   1  the operator opens the day-ahead session for the next delivery day:
+//      every hour from 00:00 to 24:00 Brussels time, trading closing at 12:00
+//      the day before, as on the European day-ahead market
+//   2  every prosumer places an order for every hour: Alice's and Carol's
+//      agents through the gate, Bob on his own, without an agent
+//   3  Alice's agent modifies one of her bids
 //   4  trading closes; an agent order is now refused
-//   5  the matcher matches the session and finalises it
+//   5  the matcher matches every hour and finalises the session
 //   6  a keeper expires what was not matched and reconciles the ledger
-//   7  delivery passes; each prosumer's sensor settles its slots
+//   7  the delivery day passes; each prosumer's sensor settles its hours
 //   8  final balances
 //
-// Run it again for another day: each run opens a new session.
+// Run it again for another day: each run opens the next session.
 
 import { parseUnits } from "viem";
 import { loadDeployment, send, read, calldata, events, now, warpTo, eur, kWh } from "./lib.js";
 import { runMatcher } from "./matcher.js";
 
-const BID = 0;
-const OFFER = 1;
 const ELECTRICITY = 0;
 const OPEN = 1;
+const TZ = "Europe/Brussels";
 const price = (s) => parseUnits(s, 6);
 const step = (n, text) => console.log(`\n── ${n}. ${text} ${"─".repeat(Math.max(0, 66 - text.length))}`);
 
@@ -32,22 +33,76 @@ const d = loadDeployment();
 const { token, manager, ledger, gate } = d.contracts;
 const P = d.prosumers;
 const SLOT = d.slotSeconds;
+const nameOf = Object.fromEntries(Object.entries(P).map(([name, p]) => [p.account.toLowerCase(), name]));
+
+// --- Brussels time ------------------------------------------------------------
+
+function wallClock(seconds) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  }).formatToParts(new Date(seconds * 1000));
+  const v = Object.fromEntries(parts.map((p) => [p.type, Number(p.value)]));
+  return { y: v.year, m: v.month, d: v.day, h: v.hour, min: v.minute };
+}
+
+/** UTC seconds of y-m-d h:00 on the Brussels wall clock (CET or CEST). */
+function brussels(day, hour) {
+  const naive = Date.UTC(day.y, day.m - 1, day.d, hour) / 1000;
+  let t = naive - 3600;
+  for (let i = 0; i < 3; i++) {
+    const w = wallClock(t);
+    t += naive - Date.UTC(w.y, w.m - 1, w.d, w.h, w.min) / 1000;
+  }
+  return t;
+}
+
+function addDays(day, n) {
+  const x = new Date(Date.UTC(day.y, day.m - 1, day.d + n));
+  return { y: x.getUTCFullYear(), m: x.getUTCMonth() + 1, d: x.getUTCDate() };
+}
+
+const label = (seconds) =>
+  new Intl.DateTimeFormat("en-GB", {
+    timeZone: TZ, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short",
+  }).format(new Date(seconds * 1000));
+const hhmm = (seconds) =>
+  new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(
+    new Date(seconds * 1000),
+  );
+
+// --- the prosumers' days ----------------------------------------------------
+//
+// Each returns, for an hour of the Brussels day, the order that prosumer
+// places: [side, Wh, EUR per kWh], or null.
+
+const profiles = {
+  // A household: buys every hour, more at the morning and evening peaks, and
+  // pays more for the evening peak.
+  alice: (h) => ["bid", h < 6 ? 600 : h < 9 ? 1200 : h < 17 ? 800 : h < 22 ? 1500 : 700, h >= 17 && h < 21 ? "0.27" : "0.24"],
+  // PV and a battery: sells PV through the day, the battery otherwise.
+  bob: (h) => (h >= 8 && h < 17 ? ["offer", 2000, "0.18"] : ["offer", 800, "0.22"]),
+  // A small PV roof: sells around midday, cheaper than Bob, and buys the rest
+  // of the day.
+  carol: (h) => (h >= 9 && h < 16 ? ["offer", 700, "0.17"] : ["bid", 400, "0.23"]),
+};
+
+// --- calls -----------------------------------------------------------------
 
 /** An agent's call through the gate: agent → PolicyGate → account → Prosumer. */
 async function viaAgent(name, fn, args) {
   const p = P[name];
   const receipt = await send(p.agent.keyIndex, gate, "PolicyGate", "submit", [p.account, p.prosumer, calldata("Prosumer", fn, args)]);
   const legs = events(receipt, "PolicyGate", "OrderSubmitted")[0].args.legs.length;
-  return { receipt, legs };
+  return { receipt, legs, gas: receipt.gasUsed };
 }
 
 /** The owner's own call, through its account, without an agent. */
-function viaOwner(name, fn, args) {
+async function viaOwner(name, fn, args) {
   const p = P[name];
-  return send(p.owner.keyIndex, p.account, "MiniAccount", "execute", [p.prosumer, 0n, calldata("Prosumer", fn, args)]);
+  const receipt = await send(p.owner.keyIndex, p.account, "MiniAccount", "execute", [p.prosumer, 0n, calldata("Prosumer", fn, args)]);
+  return { receipt, legs: null, gas: receipt.gasUsed };
 }
 
-const booked = (receipt) => events(receipt, "Prosumer", "OrderBooked").map((e) => e.args);
 const req = (slot, wh, eurPerKWh) => ({ slot, quantity: BigInt(wh), price: price(eurPerKWh) });
 
 async function balances() {
@@ -61,65 +116,94 @@ async function balances() {
 
 async function main() {
   // ── 1 ───────────────────────────────────────────────────────────────────
-  step(1, "The operator opens tomorrow's day-ahead session");
-  // Tomorrow from 00:00 UTC, closing an hour before: the next midnight whose
-  // closing time is still ahead.
+  step(1, "The operator opens the day-ahead session");
   const t = await now();
-  let day = Math.floor(t / 86400) + 1;
-  while (day * 86400 - 3600 <= t) day++;
-  const firstSlot = Math.floor((day * 86400) / SLOT);
-  const closesAt = firstSlot * SLOT - 3600;
-  const config = { energyType: ELECTRICITY, firstSlot, slotCount: 24, closesAt };
-  await send(d.roles.operator.keyIndex, manager, "MarketManager", "openSession", [config]);
+  let day = addDays(wallClock(t), 1);
+  let closesAt = brussels(addDays(day, -1), 12);
+  if (closesAt <= t) {
+    day = addDays(day, 1);
+    closesAt = brussels(addDays(day, -1), 12);
+  }
+  const start = brussels(day, 0);
+  const end = brussels(addDays(day, 1), 0);
+  const firstSlot = start / SLOT;
+  const slotCount = (end - start) / SLOT; // 24, or 23 / 25 on a clock-change day
+  const slotStart = (i) => (firstSlot + i) * SLOT;
+
+  await send(d.roles.operator.keyIndex, manager, "MarketManager", "openSession", [
+    { energyType: ELECTRICITY, firstSlot, slotCount, closesAt },
+  ]);
   const session = await read(manager, "MarketManager", "currentSession", [ELECTRICITY]);
-  const hour = (i) => new Date((firstSlot + i) * SLOT * 1000).toISOString().slice(11, 16);
-  console.log(`  session ${session}`);
-  const utc = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
-  console.log(`  delivery: ${utc(firstSlot * SLOT)} → ${utc((firstSlot + 24) * SLOT)}, 24 slots of ${SLOT / 3600} h`);
-  console.log(`  trading:  open now, closes ${utc(closesAt)}, ${(firstSlot * SLOT - closesAt) / 3600} h before delivery starts`);
+  console.log(`  session  ${session}`);
+  console.log(`  delivery ${label(start)} → ${label(end)}: ${slotCount} hourly slots`);
+  console.log(`  trading  open now (${label(t)}), closes ${label(closesAt)}`);
   console.log("\n  Balances before trading:");
   await balances();
 
   // ── 2 ───────────────────────────────────────────────────────────────────
-  step(2, "Orders: agents through the gate, Bob on his own");
-  const alice = await viaAgent("alice", "placeBids", [
-    ELECTRICITY,
-    [req(10, 2000, "0.25"), req(11, 1500, "0.26"), req(12, 1500, "0.24"), req(13, 1000, "0.25")],
-  ]);
-  const aliceBids = booked(alice.receipt);
-  console.log(`  alice's agent: 1 call, ${alice.legs} legs → ${aliceBids.length} bids for ${aliceBids.map((b) => hour(b.slot - firstSlot)).join(", ")}`);
-
-  const carol = await viaAgent("carol", "placeOffers", [ELECTRICITY, [req(10, 1000, "0.21"), req(13, 800, "0.23")]]);
-  console.log(`  carol's agent: 1 call, ${carol.legs} legs → ${booked(carol.receipt).length} offers`);
-
-  const bob = await viaOwner("bob", "placeOffers", [ELECTRICITY, [req(10, 1800, "0.20"), req(11, 2000, "0.22"), req(12, 1000, "0.27")]]);
-  console.log(`  bob, directly: ${booked(bob).length} offers (no gate, no agent)`);
-
-  const openA = await read(ledger, "PositionLedger", "openOrderCount", [P.alice.account]);
-  console.log(`  ledger: alice has ${openA} open orders booked`);
+  step(2, "Every prosumer places an order for every hour");
+  const placed = {};
+  for (const name of Object.keys(P)) {
+    const bids = [];
+    const offers = [];
+    for (let i = 0; i < slotCount; i++) {
+      const [side, wh, eurPerKWh] = profiles[name](wallClock(slotStart(i)).h);
+      (side === "bid" ? bids : offers).push(req(i, wh, eurPerKWh));
+    }
+    const how = P[name].agent ? "agent → gate" : "directly";
+    const call = P[name].agent ? viaAgent : viaOwner;
+    placed[name] = [];
+    for (const [fn, list] of [["placeBids", bids], ["placeOffers", offers]]) {
+      if (list.length === 0) continue;
+      const { receipt, legs, gas } = await call(name, fn, [ELECTRICITY, list]);
+      placed[name].push(...events(receipt, "Prosumer", "OrderBooked").map((e) => e.args));
+      const what = fn === "placeBids" ? "bids" : "offers";
+      console.log(
+        `  ${name.padEnd(6)} ${how.padEnd(12)} 1 call: ${`${String(list.length).padStart(2)} ${what},`.padEnd(11)}` +
+          (legs ? `${String(legs).padStart(2)} legs, ` : "         ") + `${gas.toLocaleString("en").padStart(9)} gas`,
+      );
+    }
+  }
+  for (const name of Object.keys(P).filter((n) => P[n].agent)) {
+    const open = await read(ledger, "PositionLedger", "openOrderCount", [P[name].account]);
+    console.log(`  ledger: ${name} has ${open} open orders booked`);
+  }
 
   // ── 3 ───────────────────────────────────────────────────────────────────
-  step(3, "Alice's agent cancels one bid and modifies another");
-  const bid12 = aliceBids.find((b) => b.slot === firstSlot + 12).id;
-  const bid13 = aliceBids.find((b) => b.slot === firstSlot + 13).id;
-  await viaAgent("alice", "cancelOrder", [bid12]);
-  console.log(`  cancelled the ${hour(12)} bid`);
-  const modify = await viaAgent("alice", "modifyOrder", [bid13, req(13, 800, "0.24")]);
-  console.log(`  modified the ${hour(13)} bid to 0.8 kWh at 0.24: ${modify.legs} legs (cancel, then place)`);
+  step(3, "Alice's agent modifies her 19:00 bid");
+  const evening = placed.alice.find((o) => wallClock(Number(o.slot) * SLOT).h === 19);
+  const modify = await viaAgent("alice", "modifyOrder", [evening.id, req(Number(evening.slot) - firstSlot, 1800, "0.28")]);
+  console.log(`  19:00: 1.5 kWh at 0.27 → 1.8 kWh at 0.28, ${modify.legs} legs (cancel, then place)`);
 
   // ── 4 ───────────────────────────────────────────────────────────────────
-  step(4, "Trading closes");
+  step(4, "Trading closes at 12:00 the day before delivery");
   await warpTo(closesAt);
   try {
-    await viaAgent("alice", "placeBids", [ELECTRICITY, [req(14, 500, "0.25")]]);
+    await viaAgent("alice", "placeBids", [ELECTRICITY, [req(0, 500, "0.25")]]);
     console.log("  !! an order after closing was accepted");
   } catch (error) {
     console.log(`  an agent order after closing is refused: ${error.message}`);
   }
 
   // ── 5 ───────────────────────────────────────────────────────────────────
-  step(5, "The matcher matches the session");
-  await runMatcher(d, session, { log: (line) => console.log("  " + line) });
+  step(5, "The matcher matches every hour");
+  const trades = await runMatcher(d, session, {
+    log: (line) => !line.startsWith("              ") && console.log("  " + line),
+  });
+  const bySlot = new Map();
+  for (const tr of trades) {
+    const bid = await read(session, "MarketSession", "orderOf", [tr.bidId]);
+    const offer = await read(session, "MarketSession", "orderOf", [tr.offerId]);
+    const slot = Number(bid.slot);
+    if (!bySlot.has(slot)) bySlot.set(slot, []);
+    bySlot.get(slot).push(
+      `${nameOf[bid.account.toLowerCase()]}←${nameOf[offer.account.toLowerCase()]} ${kWh(tr.quantity)} @${eur(tr.price).replace(" EUR", "")}`,
+    );
+  }
+  for (let i = 0; i < slotCount; i++) {
+    const s = firstSlot + i;
+    console.log(`  ${hhmm(slotStart(i))}  ${(bySlot.get(s) ?? ["no trade"]).join(";  ")}`);
+  }
 
   // ── 6 ───────────────────────────────────────────────────────────────────
   step(6, "A keeper expires the rest and reconciles the ledger");
@@ -138,60 +222,64 @@ async function main() {
   }
   console.log(`  expired ${expired} orders with an unmatched remainder`);
 
-  for (const name of ["alice", "carol"]) {
+  for (const name of Object.keys(P).filter((n) => P[n].agent)) {
     const p = P[name];
     for (const id of allIds) {
       const rec = await read(ledger, "PositionLedger", "recordOf", [p.account, p.prosumer, id]);
       if (rec.status === OPEN) await send(keeper, gate, "PolicyGate", "reconcile", [p.account, p.prosumer, id]);
     }
+    let agree = 0;
+    let differ = 0;
+    for (let i = 0; i < slotCount; i++) {
+      const c = await read(p.prosumer, "Prosumer", "commitmentOf", [firstSlot + i]);
+      const pos = await read(ledger, "PositionLedger", "positionOf", [p.account, firstSlot + i]);
+      if (pos.clearedBuyWh === c.boughtWh && pos.clearedSellWh === c.soldWh) agree++;
+      else differ++;
+    }
     const open = await read(ledger, "PositionLedger", "openOrderCount", [p.account]);
-    console.log(`  ${name}: ledger reconciled, ${open} orders left open`);
-  }
-
-  console.log("\n  Per slot, the ledger (enforcement) against the prosumer contract (market):");
-  const tradedSlots = [];
-  for (let i = 0; i < 24; i++) {
-    const line = [];
-    for (const name of Object.keys(P)) {
-      const c = await read(P[name].prosumer, "Prosumer", "commitmentOf", [firstSlot + i]);
-      if (c.boughtWh === 0n && c.soldWh === 0n) continue;
-      let text = `${name} bought ${kWh(c.boughtWh)} sold ${kWh(c.soldWh)}`;
-      if (P[name].agent) {
-        const pos = await read(ledger, "PositionLedger", "positionOf", [P[name].account, firstSlot + i]);
-        const agrees = pos.clearedBuyWh === c.boughtWh && pos.clearedSellWh === c.soldWh;
-        text += agrees ? " (ledger agrees)" : ` (LEDGER DIFFERS: ${pos.clearedBuyWh}/${pos.clearedSellWh})`;
-      }
-      line.push(text);
-    }
-    if (line.length) {
-      tradedSlots.push(i);
-      console.log(`  ${hour(i)}  ${line.join("; ")}`);
-    }
+    console.log(
+      `  ${name.padEnd(6)} ${open} orders left open; ledger and market agree in ${agree} of ${slotCount} hours` +
+        (differ ? `, DIFFER in ${differ}` : ""),
+    );
   }
 
   // ── 7 ───────────────────────────────────────────────────────────────────
-  step(7, "Delivery, then settlement by each prosumer's sensor");
-  const lastSlot = Math.max(...tradedSlots);
-  await warpTo((firstSlot + lastSlot + 1) * SLOT);
-  // What each sensor measures, as a share of the commitment: Bob falls short
-  // at 11:00 by more than 10%, everyone else delivers as committed.
-  const delivered = (name, i) => (name === "bob" && i === 11 ? 80n : name === "bob" ? 95n : 100n);
-  for (const i of tradedSlots) {
+  step(7, "The delivery day passes; sensors settle every hour");
+  await warpTo(end);
+  // Measured, as a share of the commitment: Bob's battery falls short at
+  // 19:00, by more than 10%; otherwise he delivers 95% and everyone else 100%.
+  const delivered = (name, h) => (name === "bob" ? (h === 19 ? 80n : 95n) : 100n);
+  const day_ = {};
+  for (const name of Object.keys(P)) day_[name] = { bought: 0n, sold: 0n, paid: 0n, received: 0n, penalty: 0n, settled: 0 };
+  for (let i = 0; i < slotCount; i++) {
+    const h = wallClock(slotStart(i)).h;
     for (const name of Object.keys(P)) {
       const p = P[name];
       const c = await read(p.prosumer, "Prosumer", "commitmentOf", [firstSlot + i]);
       if (c.boughtWh === 0n && c.soldWh === 0n) continue;
       const net = c.soldWh - c.boughtWh;
-      const share = delivered(name, i);
+      const share = delivered(name, h);
       const exported = net > 0n ? (net * share) / 100n : 0n;
       const imported = net < 0n ? (-net * share) / 100n : 0n;
       const receipt = await send(p.sensor.keyIndex, p.prosumer, "Prosumer", "settle", [firstSlot + i, exported, imported]);
       const s = events(receipt, "Prosumer", "Settled")[0].args;
-      console.log(
-        `  ${hour(i)} ${name.padEnd(6)} committed ${kWh(net)} net export, measured ${kWh(exported - imported)}` +
-          (s.penalty > 0n ? `  → penalty ${eur(s.penalty)}` : "  → within 10%"),
-      );
+      const tally = day_[name];
+      tally.bought += c.boughtWh;
+      tally.sold += c.soldWh;
+      tally.paid += c.paid;
+      tally.received += c.received;
+      tally.penalty += s.penalty;
+      tally.settled++;
+      if (s.penalty > 0n) {
+        console.log(`  ${hhmm(slotStart(i))} ${name}: committed ${kWh(net)}, measured ${kWh(exported - imported)} → penalty ${eur(s.penalty)}`);
+      }
     }
+  }
+  for (const [name, x] of Object.entries(day_)) {
+    console.log(
+      `  ${name.padEnd(6)} ${String(x.settled).padStart(2)} hours settled: bought ${kWh(x.bought)} for ${eur(x.paid)},` +
+        ` sold ${kWh(x.sold)} for ${eur(x.received)}, penalties ${eur(x.penalty)}`,
+    );
   }
 
   // ── 8 ───────────────────────────────────────────────────────────────────
