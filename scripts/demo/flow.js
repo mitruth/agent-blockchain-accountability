@@ -74,7 +74,9 @@ async function main() {
   const session = await read(manager, "MarketManager", "currentSession", [ELECTRICITY]);
   const hour = (i) => new Date((firstSlot + i) * SLOT * 1000).toISOString().slice(11, 16);
   console.log(`  session ${session}`);
-  console.log(`  24 slots from ${new Date(firstSlot * SLOT * 1000).toISOString()}, trading closes ${new Date(closesAt * 1000).toISOString()}`);
+  const utc = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+  console.log(`  delivery: ${utc(firstSlot * SLOT)} → ${utc((firstSlot + 24) * SLOT)}, 24 slots of ${SLOT / 3600} h`);
+  console.log(`  trading:  open now, closes ${utc(closesAt)}, ${(firstSlot * SLOT - closesAt) / 3600} h before delivery starts`);
   console.log("\n  Balances before trading:");
   await balances();
 
