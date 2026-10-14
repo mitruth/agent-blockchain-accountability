@@ -963,6 +963,77 @@ enforcement layer.
   batch (the session's slot count) instead of two.
 - The session's closing time is the gate time: unmatched orders expire there.
 
+### 2.32 — The token is built on OpenZeppelin's ERC-1155
+
+**Status.** Proposed.
+
+**Decision.** `contracts/market/LockableERC1155.sol` inherits OpenZeppelin
+5.6.1's `ERC1155`. OpenZeppelin is an explicit, pinned dependency.
+
+**Why.** DEDALUS's `ERC1155.sol` is a copy of OpenZeppelin 5.0 with its
+utilities. Using the audited original keeps the market's own code to what is
+specific to the market.
+
+### 2.33 — An energy token's id holds the slot's start time
+
+**Status.** Proposed. Adapts DEDALUS's `ERC1155TokenIdMasks`.
+
+**Decision.** Bit 255 marks an energy token; then the minter's address, the
+slot's start time in Unix seconds (40 bits), the energy type (4 bits) and a
+counter (51 bits). Id 0 is the payment token.
+
+**Why.** DEDALUS stored the hour of the day in five bits, enough for one
+24-hour session. Sessions now have any number of slots of any length (entry
+2.24).
+
+### 2.34 — Locks are tied to their owner, and an allowance is used once
+
+**Status.** Proposed. Fixes a flaw in the source (analysis, section 4).
+
+**Decision.** A lock is keyed by owner, locker and unlocker. Locking is an
+external function only: the owner locks its own balance, or a locker locks it
+within an allowance the owner granted, and each lock uses that much of the
+allowance up.
+
+**Why.** In DEDALUS `_lock` is public: anyone can lock anyone's balance with
+themselves as the unlocker, which also grants them an allowance, then release it
+to themselves. Allowances there are never used up, so one approval can be spent
+again and again.
+
+### 2.35 — Locked payment cannot move, by any route
+
+**Status.** Proposed. Fixes a flaw in the source.
+
+**Decision.** After every transfer, mint and burn, the token checks that the
+sender still holds at least its locked payment balance. Only `unlock`, which
+reduces the lock first, can move locked value.
+
+**Why.** In DEDALUS the owner's own transfers skip the locked-balance check, so
+collateral could be moved away while it was supposed to be locked. The check
+sits in `_update`, the one function every movement goes through, so no route
+around it exists.
+
+### 2.36 — Who mints
+
+**Status.** Proposed. Fixes a flaw in the source.
+
+**Decision.** The issuer, the deployer, mints payment tokens; in this project it
+stands for the settlement currency. The market manager, named once as the
+registrar, appoints energy minters: the registered prosumer contracts. Energy
+ids always have the top bit set, so no minter can mint payment.
+
+**Why.** In DEDALUS every mint function is public and accepts any id, id 0
+included: anyone could mint money.
+
+### 2.37 — The block-count timelock on locks is dropped
+
+**Status.** Proposed.
+
+**Decision.** A lock has no "releasable after block n" field.
+
+**Why.** Both source projects pass zero blocks (`blockNrForADay = 0`). When a
+lock may be released is decided by the market contracts that hold it.
+
 ---
 
 ## Open decisions
