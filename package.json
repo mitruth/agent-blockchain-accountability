@@ -8,7 +8,11 @@
     "test:sol": "npm test",
     "test:forge": "forge test",
     "test:accounts": "forge test --match-path \"test/accounts/*\"",
-    "compile": "hardhat compile"
+    "compile": "hardhat compile",
+    "node": "hardhat node",
+    "demo:deploy": "hardhat build --no-tests && node scripts/demo/deploy.js",
+    "demo:flow": "node scripts/demo/flow.js",
+    "demo:match": "node scripts/demo/matcher.js"
   },
   "keywords": [],
   "author": "",

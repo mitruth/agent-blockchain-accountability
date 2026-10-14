@@ -4,7 +4,7 @@ pragma solidity ^0.8.23;
 import {Test} from "forge-std/Test.sol";
 import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
-import {MiniAccount} from "./mocks/MiniAccount.sol";
+import {MiniAccount} from "../../contracts/demo/MiniAccount.sol";
 import {StubMarket, StubDecoder, CapPolicy} from "./mocks/GateMocks.sol";
 
 /// @notice One account with the gate installed and authorised to write the

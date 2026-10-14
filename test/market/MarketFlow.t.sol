@@ -587,6 +587,24 @@ contract MarketFlowTest is MarketFixture {
         vm.stopPrank();
     }
 
+    /// From an account to its prosumer contract, with no index or database:
+    /// one prosumer contract per account, found on chain.
+    function test_theManagerFindsAnAccountsProsumerContract() public {
+        assertEq(manager.prosumerOf(alice), address(aliceP));
+        assertEq(manager.prosumerOf(bob), address(bobP));
+
+        Prosumer second = new Prosumer(alice, manager);
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketManager.MarketManager_AccountHasProsumer.selector, alice, address(aliceP))
+        );
+        vm.prank(operator);
+        manager.registerProsumer(address(second), aliceSensor);
+
+        vm.prank(operator);
+        manager.deregisterProsumer(address(aliceP));
+        assertEq(manager.prosumerOf(alice), address(0));
+    }
+
     function test_onlyTheOperatorRunsTheManager() public {
         vm.startPrank(stranger);
         vm.expectRevert(abi.encodeWithSelector(MarketManager.MarketManager_OnlyOperator.selector, stranger));

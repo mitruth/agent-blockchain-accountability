@@ -7,7 +7,7 @@ import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
 import {Order, OrderKind, Side} from "../../contracts/gate/GateTypes.sol";
 import {MockEnergyMarket} from "./mocks/MockEnergyMarket.sol";
 import {MockMarketDecoder} from "./mocks/MockMarketDecoder.sol";
-import {MiniAccount} from "./mocks/MiniAccount.sol";
+import {MiniAccount} from "../../contracts/demo/MiniAccount.sol";
 
 /// Step 2 of the v0.1 build order: the order lifecycle.
 ///

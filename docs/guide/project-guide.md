@@ -401,6 +401,22 @@ configuration.
 | `MarketTypes.sol` | Session configuration, order requests, orders, trades, valuation |
 | `ProsumerDecoder.sol` | The gate's adapter to `Prosumer`: calls as legs, fills and expiry from the sessions |
 
+### `contracts/demo/`
+
+| File | What it is |
+| ---- | ---------- |
+| `MiniAccount.sol` | The smallest account that behaves like an ERC-7579 account where the gate needs it. For tests and the local system only: it stands in for a real account (Safe7579, Nexus, Kernel) and validates no signatures of its own |
+
+### `scripts/demo/`: the system on a local node
+
+| File | What it does |
+| ---- | ------------ |
+| `prosumers.json` | Who takes part: each prosumer's name, whether an agent trades for it, its starting funds; and the slot length, real-time price, leg limit and agent validity |
+| `deploy.js` | Deploys the market and the gate, then one smart account and prosumer contract per prosumer; registers them, funds them, sets every approval, installs the gate and registers the agent where there is one. Writes `deployments/local.json` |
+| `matcher.js` | The off-chain matching service. `matchOrders` is the rule, a pure function you can replace; `runMatcher` reads a closed session, registers the trades and finalises it |
+| `flow.js` | One market day, from opening the session to settlement, printing each stage |
+| `lib.js` | Connection to the node, test keys by index, compiled contracts, transactions that report the contract's own error when they revert |
+
 ### `contracts/interfaces/`
 
 
@@ -444,7 +460,7 @@ configuration.
 | `foundry.toml`      | Foundry build settings: Solidity 0.8.25, EVM `cancun`, optimizer 200 runs. Holds the import remappings ModuleKit needs |
 | `hardhat.config.js` | Hardhat build settings, same compiler settings. Loads three separate keys for Base Sepolia, never one                  |
 | `remappings.txt`    | One line, for `forge-std`. Both tools read it                                                                          |
-| `package.json`      | `npm test` runs the Hardhat suite. Dependencies: Hardhat 3, forge-std 1.9.6, ModuleKit 0.5.9                           |
+| `package.json`      | `npm test` runs the Hardhat suite; `npm run node`, `demo:deploy`, `demo:flow`, `demo:match` run the local system. Dependencies: Hardhat 3, viem, OpenZeppelin 5.6.1, forge-std 1.9.6, ModuleKit 0.5.9 |
 
 
 
@@ -674,9 +690,9 @@ address. "Root validator belongs to the owner alone" is a property of how the
 account is deployed, and no test here asserts it.
 - **Anything about policies limiting orders.** No order is checked against a
 policy until step 4.
-- **Matching and metering.** The matcher and the sensors are trusted roles
-played by test addresses. No matching algorithm and no meter are in the
-repository.
+- **Matching and metering, for real.** The matcher in `scripts/demo/` is a
+simple double auction, and the sensors report values the flow script makes up.
+No real meter is connected.
 - **The market on real accounts.** The market tests use `MiniAccount`; the
 real-account tests of `test/accounts/` do not yet trade.
 - **Behaviour on a network.** There is no deployment script and nothing is
@@ -756,6 +772,66 @@ if (_isForbiddenTarget(account, target)) revert PolicyGate_ForbiddenTarget(targe
 
 Run `npm test`. **Two tests fail:** `test_accountIsNeverATargetWhateverTheCall`
 and `test_gateIsNeverATargetWhateverTheCall`. Put the line back.
+
+### Running the system on a local node
+
+Everything above is tests. This runs the whole system as separate programs on
+a local Hardhat node: the operator, three prosumers with smart accounts, two of
+them with agents, the matcher, a keeper and the sensors. Test keys only, from
+Hardhat's public mnemonic; no network, no cost.
+
+In one terminal, start the node and leave it running:
+
+```bash
+npm run node
+```
+
+In another, deploy. This writes `deployments/local.json` with every address:
+it replaces the database of the earlier projects.
+
+```bash
+npm run demo:deploy
+```
+
+Then run one market day:
+
+```bash
+npm run demo:flow
+```
+
+What it does and prints, stage by stage:
+
+1. The operator opens tomorrow's day-ahead session: 24 hourly slots from
+   00:00 UTC, trading closing at 23:00 the day before.
+2. Alice's agent places four bids in one call through the gate (four legs);
+   Carol's agent places two offers; Bob places three offers himself, through
+   his account, with no agent.
+3. Alice's agent cancels one bid and modifies another (two legs).
+4. Time jumps to the close. An agent order is now refused, with the market's
+   own error: `MarketSession_Closed`.
+5. The matcher reads the session, matches it and finalises it.
+6. A keeper expires every unmatched remainder and reconciles the ledger. For
+   every slot the ledger is compared with the prosumer contracts' commitments.
+7. Time jumps past delivery. Each prosumer's sensor settles its slots; Bob
+   delivers 80% at 11:00 and pays a penalty.
+8. Final balances: who paid whom, and what the manager collected.
+
+Each run opens a new session, so the flow can be run again on the same
+deployment. A run that stops half-way leaves its session's orders locked;
+deploy again for a clean slate.
+
+The matcher can also be run on its own, for the current session once it has
+closed:
+
+```bash
+npm run demo:match
+```
+
+Finding things without a database: from an account,
+`MarketManager.prosumerOf(account)` gives its prosumer contract;
+`Prosumer.owner()` goes back; `PolicyGate.agentValidUntil(account, agent)`
+says whether an agent may act for it; the events `ProsumerRegistered` and
+`AgentRegistered` are indexed by account and by agent.
 
 ### The earlier design's checks
 

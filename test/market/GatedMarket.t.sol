@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {MarketFixture} from "./MarketFixture.sol";
-import {MiniAccount} from "../gate/mocks/MiniAccount.sol";
+import {MiniAccount} from "../../contracts/demo/MiniAccount.sol";
 import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
 import {Order, OrderKind, Side, FillState} from "../../contracts/gate/GateTypes.sol";

@@ -1,0 +1,11 @@
+{
+  "slotSeconds": 3600,
+  "realTimePricePerKWh": "0.30",
+  "maxLegs": 48,
+  "agentValidityDays": 30,
+  "prosumers": [
+    { "name": "alice", "agent": true, "fundsEUR": 1000 },
+    { "name": "bob", "agent": false, "fundsEUR": 1000 },
+    { "name": "carol", "agent": true, "fundsEUR": 1000 }
+  ]
+}

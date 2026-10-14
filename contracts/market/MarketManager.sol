@@ -49,6 +49,10 @@ contract MarketManager is ERC1155Holder {
     address public matcher;
 
     mapping(address prosumer => ProsumerEntry) public prosumers;
+
+    /// @notice The prosumer contract of an account: one per account, so that an
+    ///         agent or an indexer needs only the account to find it.
+    mapping(address account => address prosumer) public prosumerOf;
     mapping(MarketTypes.EnergyType => MarketSession) public currentSession;
     mapping(address => bool) public isSession;
 
@@ -69,6 +73,7 @@ contract MarketManager is ERC1155Holder {
     error MarketManager_ZeroSlotLength();
     error MarketManager_NoOwner(address prosumer);
     error MarketManager_AlreadyRegistered(address prosumer);
+    error MarketManager_AccountHasProsumer(address account, address prosumer);
     error MarketManager_NotRegistered(address prosumer);
     error MarketManager_BadSlotCount(uint16 slotCount);
     error MarketManager_ClosesInThePast(uint40 closesAt);
@@ -102,8 +107,12 @@ contract MarketManager is ERC1155Holder {
         if (prosumers[prosumer].registered) revert MarketManager_AlreadyRegistered(prosumer);
         address account = IProsumerOwner(prosumer).owner();
         if (account == address(0)) revert MarketManager_NoOwner(prosumer);
+        if (prosumerOf[account] != address(0)) {
+            revert MarketManager_AccountHasProsumer(account, prosumerOf[account]);
+        }
 
         prosumers[prosumer] = ProsumerEntry({registered: true, account: account, sensor: sensor});
+        prosumerOf[account] = prosumer;
         token.setMinter(prosumer, true);
         emit ProsumerRegistered(prosumer, account, sensor);
     }
@@ -111,6 +120,7 @@ contract MarketManager is ERC1155Holder {
     function deregisterProsumer(address prosumer) external onlyOperator {
         if (!prosumers[prosumer].registered) revert MarketManager_NotRegistered(prosumer);
         prosumers[prosumer].registered = false;
+        delete prosumerOf[prosumers[prosumer].account];
         token.setMinter(prosumer, false);
         emit ProsumerDeregistered(prosumer);
     }

@@ -1271,6 +1271,79 @@ Hardhat 328 passing; Foundry, with the real-account tests, 332 passed.
 
 ---
 
+## Running the system locally
+
+Built 14 October 2026, at Dan's request: a running system before step 3.
+
+### 2.54 — From an account to its prosumer contract, on chain
+
+**Status.** Proposed.
+
+**Decision.** `MarketManager.prosumerOf(account)` returns the account's
+prosumer contract. It is set when the operator registers the prosumer contract
+and cleared when it is deregistered. An account can have one prosumer contract;
+a second registration is refused.
+
+**Why.** The earlier projects kept a database of contracts, owners and user
+names. Every link is now on chain: `prosumerOf` from account to prosumer
+contract, `Prosumer.owner()` back, the manager's registry for the sensor, the
+gate's registry for the agent, and indexed events for each. An agent needs only
+its account's address. A database or indexer would be a cache of these, never
+the source.
+
+**Not used.** ERC-8004 (agent identity, reputation and validation registries)
+answers a different question: discovering an agent and its track record across
+organisations. The spec leaves it out of this build.
+
+### 2.55 — The minimal account moves to `contracts/demo/`
+
+**Status.** Proposed.
+
+**Decision.** `MiniAccount` moves from the test doubles to
+`contracts/demo/MiniAccount.sol`, so the local system can deploy it. It is
+marked as an account for tests and local demonstrations only.
+
+**Why.** Deploying Safe7579, Nexus or Kernel on a local node needs their
+factories and an EntryPoint: worth doing, not needed to run the market.
+
+### 2.56 — The off-chain programs are JavaScript, on a local Hardhat node
+
+**Status.** Settled by Dan.
+
+**Decision.** `scripts/demo/`: `deploy.js`, `matcher.js`, `flow.js` and
+`lib.js`, in JavaScript with viem, against `npx hardhat node`. Prosumers come
+from `prosumers.json`, as the earlier projects read apartments from a CSV. The
+deployment is written to `deployments/local.json` (git-ignored), which holds
+addresses and key indexes only. Every role uses a key of Hardhat's public test
+mnemonic, by index.
+
+**Consequence.** A transaction is simulated before it is sent, and a revert is
+decoded against every contract of the project, so a refusal deep in the call
+chain reads as the contract's own error.
+
+### 2.57 — The demo matcher: a double auction, best bid against best offer
+
+**Status.** Settled by Dan for the demo; the rule is meant to be replaced.
+
+**Decision.** Per slot, bids from the highest price, offers from the lowest,
+earlier first at equal price. The best bid trades with the best offer from a
+different account while the bid's price is at least the offer's, for the
+smaller remaining quantity, at the midpoint of the two prices rounded down.
+`matchOrders` is a pure function of the open orders; replacing it changes
+nothing else.
+
+**Why not the earlier Java matcher as it was.** `MatchingAlgorithmGreedy`
+sorted bids and offers by quantity and never compared prices. The session
+refuses a trade outside either limit price (entry 2.43), so those trades would be
+rejected. Its structure is kept: sort, then match one pair at a time for the
+smaller quantity.
+
+**Result.** `npm run demo:flow` runs a full day: four trades, 4.3 kWh, one
+penalty of 0.09 EUR for an 80% delivery; every lock released at the end, and
+the ledger agrees with the prosumer contracts slot by slot.
+
+---
+
 ## Open decisions
 
 Waiting for Dan. None blocks step 2.

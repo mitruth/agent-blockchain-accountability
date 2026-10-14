@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
-import {IERC7579Module} from "../../../contracts/interfaces/IERC7579.sol";
+import {IERC7579Module} from "../interfaces/IERC7579.sol";
 
 /// @notice The smallest account that behaves like an ERC-7579 account where it
-///         matters to PolicyGate. Test code only.
+///         matters to PolicyGate. For tests and local demonstrations only: it
+///         stands in for a real account (Safe7579, Nexus, Kernel) and has no
+///         signature validation of its own.
 ///
 /// `owner` stands in for the EntryPoint plus an owner-only root validator: a
 /// call from `owner` is a user operation the owner signed.
