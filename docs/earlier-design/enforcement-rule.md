@@ -1,5 +1,10 @@
 # Enforcement rule — specification for the independent verifier
 
+> **Earlier design.** This document describes the daily spend rule that came before
+> Policy Spec v0.1 (`PolicyConfig`, `SpendLedger`, `SpendValidator`). It is kept for
+> reference and is no longer maintained. The current project is described in
+> `docs/guide/project-guide.md`.
+
 **Version 2.** Supersedes version 1, which is in git history. Version 1
 described an agent that reported its own daily spend. In version 2 the agent
 reports nothing: daily spend is computed from meter readings and published
@@ -326,7 +331,7 @@ Tests written against this document. At minimum:
   as a deferral mismatch, not as a breach, and the derived day is used
 - authorisation on the next day uses the cap in force on the next day
 
-### 10.3 `docs/verifier/implementation-notes.md`
+### 10.3 `docs/earlier-design/verifier-implementation-notes.md`
 
 Replace the version 1 notes. How to run it, the input formats, and **a section
 listing every place this specification was ambiguous and what you assumed**.
@@ -344,7 +349,7 @@ believe part of this document is wrong or contradictory, say so plainly.
   `differential/` except the CSV inputs named below. They describe or implement
   the on-chain side.
 - You may read the version 1 verifier in `verifier/` and its notes in
-  `docs/verifier/implementation-notes.md`. It was written blind under the same
+  `docs/earlier-design/verifier-implementation-notes.md`. It was written blind under the same
   constraints, and reusing its structure is fine where version 2 has not
   changed the rule.
 - You may read `differential/data/inputs/prices.csv` and

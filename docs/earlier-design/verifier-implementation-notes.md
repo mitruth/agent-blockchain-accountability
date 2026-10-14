@@ -1,7 +1,12 @@
 # Independent verifier: rolling-window energy spending cap (version 2)
 
+> **Earlier design.** This document describes the daily spend rule that came before
+> Policy Spec v0.1 (`PolicyConfig`, `SpendLedger`, `SpendValidator`). It is kept for
+> reference and is no longer maintained. The current project is described in
+> `docs/guide/project-guide.md`.
+
 This verifier is a separate implementation of the rule in
-[`docs/spec/enforcement-rule.md`](../spec/enforcement-rule.md), **version 2**.
+[`docs/earlier-design/enforcement-rule.md`](../spec/enforcement-rule.md), **version 2**.
 It replaces the version 1 verifier, which checked daily spend reported by the
 agent. Version 2 works out daily spend itself from meter readings and prices.
 

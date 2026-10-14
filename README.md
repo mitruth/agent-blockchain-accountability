@@ -1,15 +1,25 @@
 # Delegated-authority enforcement for a home energy agent
 
-An on-chain spending policy an autonomous energy agent operates under and
-cannot change, plus evidence that every action stayed inside it.
+Owner-side policies an autonomous energy-trading agent operates under and cannot
+change. The prosumer's smart account checks every order before it reaches the
+market, through an ERC-7579 executor module, `PolicyGate`. The agent holds no
+key on the account.
+
+Step 1 of 6 is built: the gate, the key model and configuration. No policy
+checks an order yet.
 
 **Documentation is in [`docs/`](docs/README.md).** Start with
-[`docs/guide/project-guide.md`](docs/guide/project-guide.md) for what every file
-does and how to run everything locally.
+[`docs/guide/project-guide.md`](docs/guide/project-guide.md) for what the
+project contains today, what the tests prove and how to run everything.
 
 ---
 
-# Daily records for on-chain policy
+# Daily records from the HEMS simulation
+
+The records below come from the home energy simulation that supplies the
+honest-agent arms. They were produced for the earlier design
+(`docs/earlier-design/`) and are kept as its test data and as the source for cap
+calibration.
 
 These CSVs are a compressed, integer-only view of one simulated year of home energy
 control for `home_01` (2022). Each file is one way of running the same house.
@@ -35,8 +45,9 @@ guess sun and load. It already knows prices. The guess is often wrong, so this y
 more than B1.
 
 365 rows plus a header. `dayIndex` runs from 0 (2022-01-01) to 364. Built from each arm's
-`step_log.csv` by `scripts/export_records.py`. Caps for a 7-day spend policy are printed
-by `scripts/calibrate_policy.py`.
+step log by `export_records.py`. Caps for a 7-day spend policy are printed by
+`calibrate_policy.py`. Both scripts, and the step logs, are in the sibling repository
+`Demo_PlanApplyEvaluate`, under its `scripts/` folder, not in this one.
 
 ## Columns
 
@@ -57,7 +68,7 @@ per day.
 | `tasksMissed`   | count        | Flexible tasks that missed their deadline. 0 in these files       |
 
 
-Rebuild:
+Rebuild, from the root of `Demo_PlanApplyEvaluate`:
 
 ```powershell
 python scripts\export_records.py

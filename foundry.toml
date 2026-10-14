@@ -1,0 +1,35 @@
+[profile.default]
+src = "contracts"
+test = "test"
+out = "out"
+cache_path = "cache_forge"
+libs = ["node_modules"]
+solc_version = "0.8.25"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+# The differential replays real days and writes the chain's verdict there.
+fs_permissions = [{ access = "read-write", path = "differential/data" }]
+# ModuleKit's import prefixes. Kept here rather than in remappings.txt because
+# Hardhat also reads that file and rejects two of these.
+remappings = [
+    "modulekit/=node_modules/@rhinestone/modulekit/src/",
+    "erc4337-validation/=node_modules/@rhinestone/erc4337-validation/src/",
+    "sentinellist/=node_modules/@rhinestone/sentinellist/src/",
+    "@ERC4337/=node_modules/@ERC4337/",
+    "account-abstraction/=node_modules/@ERC4337/account-abstraction/contracts/",
+    "account-abstraction-v0.6/=node_modules/@ERC4337/account-abstraction-v0.6/contracts/",
+    "@openzeppelin/=node_modules/@openzeppelin/",
+    "ds-test/=node_modules/ds-test/src/",
+    "solady/=node_modules/solady/src/",
+    "solarray/=node_modules/solarray/src/",
+    "@prb/math/=node_modules/@prb/math/src/",
+    "ExcessivelySafeCall/=node_modules/excessively-safe-call/src/",
+]
+ignored_warnings_from = ["node_modules"]
+# ModuleKit deploys full account implementations (Safe7579, Nexus, Kernel) in tests.
+gas_limit = "18446744073709551615"
+memory_limit = 2147483648
+
+[lint]
+lint_on_build = false

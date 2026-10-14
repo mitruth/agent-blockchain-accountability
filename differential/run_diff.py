@@ -4,7 +4,7 @@ Chain side: test/Differential.t.sol replays each scenario through the real
 contracts -- oracle publication, meter signature, on-chain settlement -- and
 writes its verdict to differential/data/chain/.
 
-Verifier side: verifier/verify.py, written from docs/spec/enforcement-rule.md
+Verifier side: verifier/verify.py, written from docs/earlier-design/enforcement-rule.md
 by an author who never saw the Solidity, is given the same readings, prices
 and captured policy events.
 
@@ -15,7 +15,7 @@ the chain's effective day matches the day the rule derives.
 
 Disagreements are the output. A clean run is a weaker result than it looks: it
 is at least as likely to mean the two sides share an assumption as that both
-are right. Read docs/verifier/implementation-notes.md alongside it.
+are right. Read docs/earlier-design/verifier-implementation-notes.md alongside it.
 
 usage:
     python differential/run_diff.py                # build inputs if missing, run chain, compare
@@ -93,6 +93,11 @@ def run_chain(differential_only: bool) -> None:
         # the differential scenarios only record what the chain does, and what
         # a mutated chain does is exactly the thing to compare.
         command.append("test/Differential.t.sol")
+    else:
+        # Named files, not the whole tree: test/accounts/ uses ModuleKit, which
+        # builds under Foundry only, and Hardhat given no paths would try it.
+        for folder in ("test", "test/gate"):
+            command.extend(sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / folder).glob("*.t.sol")))
     print("running Solidity tests to capture the chain's verdict ...")
     proc = subprocess.run(
         command,

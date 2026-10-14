@@ -1,5 +1,10 @@
 # Hands-on tour
 
+> **Earlier design.** This document describes the daily spend rule that came before
+> Policy Spec v0.1 (`PolicyConfig`, `SpendLedger`, `SpendValidator`). It is kept for
+> reference and is no longer maintained. The current project is described in
+> `docs/guide/project-guide.md`.
+
 A guided way to learn this project by running it, looking at real data, and
 breaking it on purpose. About an hour. Every command and every expected result
 below was run on the current code before being written down.
@@ -7,7 +12,7 @@ below was run on the current code before being written down.
 Nothing here touches a network, a wallet or money. Every change you make is
 undone with one `git restore` command.
 
-For the reference map of files, see `docs/guide/project-guide.md`. This file is
+For the reference map of files, see `docs/earlier-design/project-guide.md`. This file is
 the walk-through.
 
 ---
@@ -456,17 +461,17 @@ question before moving on.
 | `contracts/SmartAccount.sol` | 176 | What happens if nobody selects a validator? |
 
 The answers are in the comments above each function, and the reasoning behind
-them is in `docs/decisions/design-decisions.md`, section 7.
+them is in `docs/earlier-design/design-decisions.md`, section 7.
 
 ---
 
 ## Part 8 — Where to go next
 
-- **`docs/decisions/design-decisions.md`** — why every choice was made, and what
+- **`docs/earlier-design/design-decisions.md`** — why every choice was made, and what
   was rejected. Start with section 7, "Measured inputs".
-- **`docs/spec/enforcement-rule.md`** — the rule written as behaviour. It is the
+- **`docs/earlier-design/enforcement-rule.md`** — the rule written as behaviour. It is the
   only document the verifier's author saw.
-- **`docs/verifier/implementation-notes.md`** — the verifier author's list of
+- **`docs/earlier-design/verifier-implementation-notes.md`** — the verifier author's list of
   every place the spec was unclear. It is where the rules were challenged.
-- **`docs/plan/roadmap.md`, Phase B** — four open questions about the rules
+- **`docs/earlier-design/roadmap.md`, Phase B** — four open questions about the rules
   themselves. After this tour you have enough context to decide them.

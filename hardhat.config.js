@@ -11,9 +11,10 @@ const accounts = [
 
 export default {
   solidity: {
-    version: "0.8.23",
+    version: "0.8.25",
     settings: {
       optimizer: { enabled: true, runs: 200 },
+      evmVersion: "cancun",
     },
   },
   paths: {

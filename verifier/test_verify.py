@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for verify.py (version 2), written against docs/spec/enforcement-rule.md.
+"""Tests for verify.py (version 2), written against docs/earlier-design/enforcement-rule.md.
 
 pytest is not installed here; the suite is plain unittest and runs under either::
 

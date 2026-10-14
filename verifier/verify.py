@@ -2,10 +2,10 @@
 """
 Independent verifier for the rolling-window energy spending cap -- version 2.
 
-Implemented solely from ``docs/spec/enforcement-rule.md`` (version 2).  No
+Implemented solely from ``docs/earlier-design/enforcement-rule.md`` (version 2).  No
 Solidity, no on-chain source, and nothing describing the on-chain side was
 consulted.  Every judgment call not settled by the spec is listed in
-``docs/verifier/implementation-notes.md`` under "Ambiguities".
+``docs/earlier-design/verifier-implementation-notes.md`` under "Ambiguities".
 
 Structure, and why it looks the way it does
 -------------------------------------------
@@ -655,7 +655,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="verify.py",
         description="Independent verifier for the rolling-window energy "
-                    "spending cap (docs/spec/enforcement-rule.md, version 2).")
+                    "spending cap (docs/earlier-design/enforcement-rule.md, version 2).")
     parser.add_argument("--readings", required=True,
                         help="CSV: dayIndex,slot,importMWh,exportMWh")
     parser.add_argument("--prices", required=True,

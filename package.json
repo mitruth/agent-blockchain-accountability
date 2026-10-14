@@ -4,8 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "hardhat test solidity",
-    "test:sol": "hardhat test solidity",
+    "test": "hardhat test solidity test/Authorization.t.sol test/Differential.t.sol test/Enforcement.t.sol test/MeterReadings.t.sol test/PriceOracle.t.sol test/Retention.t.sol test/Settlement.t.sol test/gate/KeyModel.t.sol test/gate/ConfigManager.t.sol test/gate/OrderLifecycle.t.sol test/gate/PositionLedger.t.sol",
+    "test:sol": "npm test",
+    "test:forge": "forge test",
+    "test:accounts": "forge test --match-path \"test/accounts/*\"",
     "compile": "hardhat compile"
   },
   "keywords": [],
@@ -13,7 +15,8 @@
   "license": "ISC",
   "type": "module",
   "devDependencies": {
-    "forge-std": "github:foundry-rs/forge-std#v1.9.4",
+    "@rhinestone/modulekit": "^0.5.9",
+    "forge-std": "github:foundry-rs/forge-std#v1.9.6",
     "hardhat": "^3.15.0"
   },
   "dependencies": {

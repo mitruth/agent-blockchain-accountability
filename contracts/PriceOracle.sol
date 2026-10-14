@@ -7,7 +7,7 @@ pragma solidity ^0.8.23;
 /// Prices are one of the two inputs daily spend is computed from; the other is
 /// the meter's readings. Neither comes from the agent. Before this contract the
 /// agent reported its own daily spend, so the cap bounded a number the agent
-/// chose (F8, docs/decisions/design-decisions.md D7.1).
+/// chose (F8, docs/earlier-design/design-decisions.md D7.1).
 ///
 /// The publisher is its own key. It is not the owner, the agent or the
 /// guardian. In this project it is simulated by a script that publishes the

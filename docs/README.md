@@ -5,44 +5,44 @@ root except the project `README.md` itself.
 
 ## Where to start
 
-**Picking the work back up?** Read [plan/roadmap.md](plan/roadmap.md) first.
+Read these in order.
 
-New to the project — read these in order:
-
-0. **[guide/hands-on-tour.md](guide/hands-on-tour.md)** — about an hour of
-   running the project, following real days, and breaking it on purpose to see
-   what catches it. The quickest way in.
-1. **[guide/project-guide.md](guide/project-guide.md)** — what every file and
-   folder does, and a runbook of commands you can run locally. Start here.
-2. **[verifier/implementation-notes.md](verifier/implementation-notes.md)** —
-   the ambiguity list. 22 places the specification was under-determined and 7
-   places it was judged outright wrong. The most useful document here.
-3. **[decisions/design-decisions.md](decisions/design-decisions.md)** — every
-   non-obvious choice, why it was taken, what was rejected, and the open
-   questions.
+1. **[guide/project-guide.md](guide/project-guide.md)**: what the project
+   contains today, how an order and a configuration change flow through the
+   gate, what every file does, what the tests prove, and how to run everything.
+2. **[decisions/design-decisions.md](decisions/design-decisions.md)**: every
+   decision taken while building, step by step, with the reason and what was
+   rejected. Ends with the decisions still open.
+3. **[spec/policy-spec-v0.1.md](spec/policy-spec-v0.1.md)**: what must be
+   built, all six steps. Marked notes show what has been amended or built since
+   it was written.
+4. **[plan/roadmap.md](plan/roadmap.md)**: status per step and what comes next.
 
 ## Categories
 
 | Folder | Holds | Current contents |
 |---|---|---|
-| `guide/` | Orientation and runbooks — how to find things and how to run them | `project-guide.md`, `hands-on-tour.md` |
-| `decisions/` | The design decision log. Append-only: a reversal gets a new entry marked **Superseded**, never an edit | `design-decisions.md` |
-| `spec/` | Specifications. What a thing must do, written so an implementation can be checked against it rather than derived from it | `enforcement-rule.md` |
-| `plan/` | Where the work stands and what comes next, in dependency order | `roadmap.md` |
-| `verifier/` | Notes on the independent verifier: its assumptions, its ambiguity list, and what it found | `implementation-notes.md` |
+| `guide/` | Orientation and runbooks: how to find things and how to run them | `project-guide.md` |
+| `decisions/` | The design decision log, numbered by build step. Append-only: a reversal gets a new entry marked **Superseded**, never an edit | `design-decisions.md` |
+| `spec/` | Specifications. What a thing must do, written so an implementation can be checked against it | `policy-spec-v0.1.md` |
+| `plan/` | Where the work stands and what comes next | `roadmap.md` |
+| `analysis/` | Comparisons and studies that inform a decision, with sources | `delegation-architecture.md`: the gate against Smart Sessions, MetaMask's Delegation Framework and Coinbase Spend Permissions |
+| `earlier-design/` | The project that came before this one: a rolling cap on daily energy spend, settled after the fact. Kept for reference, no longer maintained | Its guide, hands-on tour, decision log, spec, verifier notes and roadmap |
 
 Expected next, once the work reaches them: `security/` for the threat model and
 security analysis, `evaluation/` for results, gas measurements and the
-comparison against transaction-level authorisation.
+comparison against the baselines.
 
 ## Conventions
 
-- **A category folder, never the root.** Add a folder when a genuinely new
-  category appears, not for every new file.
+- **A category folder, never the root.** Add a folder when a new category
+  appears, not for every new file.
 - **Descriptive filenames**, not `NOTES.md` or `misc.md`. The filename should
   say what the document is without its folder.
-- **Cross-references use the full repository path** — `docs/spec/enforcement-rule.md`
-  — so a reference reads the same from a source file, a commit message, or
-  another document.
+- **Cross-references use the full repository path**, for example
+  `docs/spec/policy-spec-v0.1.md`, so a reference reads the same from a source
+  file, a commit message or another document.
 - **`spec/` is normative, `decisions/` is historical.** The spec says what must
-  be true now; the decision log says how we got here and never rewrites itself.
+  be true; the decision log says how we got here and never rewrites itself.
+- **Two numbering schemes for decisions.** D1 to D21 are rows of the spec's
+  Section 7. Numbers like 1.4 are entries of the decision log, by build step.
