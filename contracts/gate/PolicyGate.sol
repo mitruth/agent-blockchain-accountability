@@ -47,6 +47,10 @@ contract PolicyGate is IERC7579Module, AgentRegistry, DecoderRegistry, ConfigMan
     ///         gate as a writer there, or every submission reverts.
     PositionLedger public immutable ledger;
 
+    /// @notice Most legs one call may decode to: a batch of this many orders,
+    ///         or a modification's two. Bounds the booking loop.
+    uint256 public immutable maxLegs;
+
     /// @notice Orders submitted for an account, over all installations. Makes
     ///         every order hash distinct.
     mapping(address account => uint256) public submissionCount;
@@ -79,9 +83,14 @@ contract PolicyGate is IERC7579Module, AgentRegistry, DecoderRegistry, ConfigMan
     error PolicyGate_UnknownCall(address target, bytes4 selector);
     error PolicyGate_NotAnOrder(address target, bytes4 selector);
     error PolicyGate_NoReturnData();
+    error PolicyGate_PlacedIdsMismatch(uint256 placeLegs, uint256 ids);
+    error PolicyGate_MaxLegsTooSmall(uint256 maxLegs);
 
-    constructor(PositionLedger ledger_) {
+    /// @param maxLegs_ At least 2, so that a modification fits.
+    constructor(PositionLedger ledger_, uint256 maxLegs_) {
+        if (maxLegs_ < 2) revert PolicyGate_MaxLegsTooSmall(maxLegs_);
         ledger = ledger_;
+        maxLegs = maxLegs_;
     }
 
     // ------------------------------------------------------------------
@@ -120,9 +129,10 @@ contract PolicyGate is IERC7579Module, AgentRegistry, DecoderRegistry, ConfigMan
     ///
     /// Reverts when the caller is not an active agent of the account, when the
     /// target is the account, the gate or the ledger, when the owner has not
-    /// approved this function of this target, when the call is not one or two
-    /// order legs, when the market call reverts, and when the ledger refuses a
-    /// leg: an order it does not hold, or an open order beyond its bound.
+    /// approved this function of this target, when the call decodes to no leg
+    /// or to more than `maxLegs`, when the market call reverts, and when the
+    /// ledger refuses a leg: an order it does not hold, or an open order beyond
+    /// its bound.
     ///
     /// Every leg is booked in the ledger after the market call, in order: a
     /// cancellation releases before a placement adds, so a modification at the
@@ -152,7 +162,7 @@ contract PolicyGate is IERC7579Module, AgentRegistry, DecoderRegistry, ConfigMan
         if (address(decoder) == address(0)) revert PolicyGate_UnknownCall(target, selector);
 
         Order[] memory legs = decoder.decode(target, callData);
-        if (legs.length == 0 || legs.length > 2) revert PolicyGate_NotAnOrder(target, selector);
+        if (legs.length == 0 || legs.length > maxLegs) revert PolicyGate_NotAnOrder(target, selector);
 
         orderHash = keccak256(
             abi.encode(block.chainid, address(this), account, submissionCount[account]++, target, keccak256(callData))
@@ -201,15 +211,25 @@ contract PolicyGate is IERC7579Module, AgentRegistry, DecoderRegistry, ConfigMan
         Order[] memory legs,
         bytes[] memory results
     ) private {
+        uint256 placeLegs;
+        for (uint256 i = 0; i < legs.length; ++i) {
+            if (legs[i].kind == OrderKind.PLACE) ++placeLegs;
+            else if (legs[i].kind != OrderKind.CANCEL) revert PolicyGate_NotAnOrder(market, bytes4(callData[:4]));
+        }
+
+        bytes32[] memory placedIds;
+        if (placeLegs != 0) {
+            if (results.length == 0) revert PolicyGate_NoReturnData();
+            placedIds = decoder.placedOrderIds(market, callData, results[0]);
+            if (placedIds.length != placeLegs) revert PolicyGate_PlacedIdsMismatch(placeLegs, placedIds.length);
+        }
+
+        uint256 nextPlaced;
         for (uint256 i = 0; i < legs.length; ++i) {
             if (legs[i].kind == OrderKind.CANCEL) {
                 ledger.recordCancel(account, market, legs[i].orderId);
-            } else if (legs[i].kind == OrderKind.PLACE) {
-                if (results.length == 0) revert PolicyGate_NoReturnData();
-                bytes32 orderId = decoder.placedOrderId(market, callData, results[0]);
-                ledger.recordPlace(account, market, decoder, orderId, legs[i]);
             } else {
-                revert PolicyGate_NotAnOrder(market, bytes4(callData[:4]));
+                ledger.recordPlace(account, market, decoder, placedIds[nextPlaced++], legs[i]);
             }
         }
     }

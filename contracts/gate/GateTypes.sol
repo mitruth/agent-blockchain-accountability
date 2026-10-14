@@ -37,10 +37,13 @@ struct Order {
 /// @param remainingWh Still able to fill: zero once the order is cancelled,
 ///                    fully filled, or past its slot's gate closure.
 /// @param open        Whether the market still holds the order live.
+/// @param expired     The order ended because its session or slot closed,
+///                    with part of it unmatched. Not set for a cancellation.
 struct FillState {
     uint64 filledWh;
     uint64 remainingWh;
     bool open;
+    bool expired;
 }
 
 /// @notice How a proposed configuration compares with the one in force.

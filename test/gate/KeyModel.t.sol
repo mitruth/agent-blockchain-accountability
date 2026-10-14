@@ -225,10 +225,11 @@ contract KeyModelTest is GateFixture {
         gate.submit(address(account), address(market), _order(1500));
     }
 
-    /// Every approved call must be an order of one or two legs. A call read as
-    /// no order at all would pass every policy unchecked.
-    function test_aCallThatIsNotOneOrTwoLegsIsRejected() public {
-        uint256[2] memory counts = [uint256(0), 3];
+    /// Every approved call must be an order of at least one leg and at most
+    /// `maxLegs`. A call read as no order at all would pass every policy
+    /// unchecked; the upper bound bounds the booking loop.
+    function test_aCallWithNoLegsOrTooManyIsRejected() public {
+        uint256[2] memory counts = [uint256(0), MAX_LEGS + 1];
         for (uint256 i = 0; i < counts.length; ++i) {
             _asAccount(
                 abi.encodeCall(
@@ -245,6 +246,12 @@ contract KeyModelTest is GateFixture {
             gate.submit(address(account), address(market), abi.encodeCall(StubMarket.withdrawAll, ()));
         }
         assertEq(market.withdrawals(), 0);
+    }
+
+    function test_theLegLimitIsAtLeastTwo() public {
+        assertEq(gate.maxLegs(), MAX_LEGS);
+        vm.expectRevert(abi.encodeWithSelector(PolicyGate.PolicyGate_MaxLegsTooSmall.selector, 1));
+        new PolicyGate(ledger, 1);
     }
 
     function test_callDataShorterThanASelectorIsRejected() public {

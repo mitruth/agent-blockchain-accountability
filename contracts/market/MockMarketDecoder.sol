@@ -47,13 +47,14 @@ contract MockMarketDecoder is IOrderDecoder {
 
     /// @inheritdoc IOrderDecoder
     /// @dev placeOrder and modifyOrder both return the new order's id.
-    function placedOrderId(address, bytes calldata, bytes calldata result)
+    function placedOrderIds(address, bytes calldata, bytes calldata result)
         external
         pure
         override
-        returns (bytes32)
+        returns (bytes32[] memory ids)
     {
-        return abi.decode(result, (bytes32));
+        ids = new bytes32[](1);
+        ids[0] = abi.decode(result, (bytes32));
     }
 
     /// @inheritdoc IOrderDecoder
@@ -62,6 +63,9 @@ contract MockMarketDecoder is IOrderDecoder {
         state.filledWh = m.filledOf(orderId);
         state.remainingWh = m.remainingOf(orderId);
         state.open = m.isOpen(orderId);
+        MockEnergyMarket.MarketOrder memory order = m.orderOf(orderId);
+        state.expired = !state.open && !order.cancelled && order.filledWh < order.qtyWh
+            && block.timestamp >= m.gateTime(order.slot);
     }
 
     /// @inheritdoc IOrderDecoder

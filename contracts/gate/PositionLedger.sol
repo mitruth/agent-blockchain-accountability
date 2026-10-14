@@ -43,7 +43,8 @@ contract PositionLedger {
     ///
     ///   FILLED        fully filled; nothing released
     ///   CANCELLED     cancelled through a writer, normally the agent via the gate
-    ///   EXPIRED       its slot's gate closed with part of it unfilled
+    ///   EXPIRED       its session or slot closed with part of it unfilled,
+    ///                 as the market reports
     ///   CLOSED_ELSEWHERE  the market no longer holds it open, before gate
     ///                 closure and not fully filled: cancelled outside the gate
     ///
@@ -175,9 +176,14 @@ contract PositionLedger {
 
     /// @notice Bring one order up to date with the market.
     ///
-    /// Books any new fill. Then closes the order if it is fully filled, if its
-    /// slot's gate has closed (the unfilled rest expires and is released), or if
-    /// the market no longer holds it open. Otherwise it stays open.
+    /// Books any new fill. Then closes the order if it is fully filled, if the
+    /// market reports it expired (its session or slot closed with part
+    /// unmatched: the rest is released), or if the market no longer holds it
+    /// open for another reason. Otherwise it stays open.
+    ///
+    /// Expiry is the market's word, not the clock's: in a market that matches
+    /// after trading closes, an order is not over at gate closure but when the
+    /// session is finalised.
     ///
     /// @return filledWh   Newly booked fill.
     /// @return releasedWh Unfilled quantity released, if the order closed.
@@ -192,7 +198,7 @@ contract PositionLedger {
 
         if (record.filledWh == record.qtyWh) {
             releasedWh = _close(account, market, orderId, record, CloseReason.FILLED);
-        } else if (block.timestamp >= record.decoder.gateTime(market, record.slot)) {
+        } else if (state.expired) {
             releasedWh = _close(account, market, orderId, record, CloseReason.EXPIRED);
         } else if (!state.open) {
             releasedWh = _close(account, market, orderId, record, CloseReason.CLOSED_ELSEWHERE);

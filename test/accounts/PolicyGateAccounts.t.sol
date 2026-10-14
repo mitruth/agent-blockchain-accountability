@@ -49,7 +49,7 @@ contract PolicyGateAccountsTest is RhinestoneModuleKit, Test {
         vm.warp(1_760_000_000);
 
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger);
+        gate = new PolicyGate(ledger, 48);
         market = new StubMarket();
         decoder = new StubDecoder();
         policy = new CapPolicy(address(gate));

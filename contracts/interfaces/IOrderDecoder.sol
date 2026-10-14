@@ -18,9 +18,10 @@ import {Order, FillState} from "../gate/GateTypes.sol";
 /// cancelled, its fills, its gate time -- is read from the market, never taken
 /// from the agent.
 interface IOrderDecoder {
-    /// @notice What the call does, as one or two legs.
+    /// @notice What the call does, as legs.
     ///
-    ///   place    one PLACE leg; its orderId is zero until the call has run
+    ///   place    one PLACE leg per order placed; a batch is several. A
+    ///            PLACE leg's orderId is zero until the call has run
     ///   cancel   one CANCEL leg for the quantity still unfilled
     ///   modify   a CANCEL leg for the old order, then a PLACE leg for the new
     ///            one: an atomic cancel plus place (spec 5.1)
@@ -29,14 +30,16 @@ interface IOrderDecoder {
     /// @param callData The full calldata, selector included.
     function decode(address market, bytes calldata callData) external view returns (Order[] memory legs);
 
-    /// @notice The id the market gave the order this call placed, read from
-    ///         the market's return data. Called only for calls with a PLACE leg.
-    function placedOrderId(address market, bytes calldata callData, bytes calldata result)
+    /// @notice The ids the market gave the orders this call placed, read from
+    ///         the market's return data, in the order of the PLACE legs.
+    ///         Called only for calls with at least one PLACE leg.
+    function placedOrderIds(address market, bytes calldata callData, bytes calldata result)
         external
         view
-        returns (bytes32 orderId);
+        returns (bytes32[] memory orderIds);
 
-    /// @notice How much of an order has filled, and whether it can still fill.
+    /// @notice How much of an order has filled, whether it can still fill, and
+    ///         whether it ended unmatched when its session closed.
     function fillState(address market, bytes32 orderId) external view returns (FillState memory);
 
     /// @notice When trading in `slot` closes. No order for the slot can be

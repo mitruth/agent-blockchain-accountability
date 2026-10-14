@@ -46,8 +46,14 @@ contract StubDecoder is IOrderDecoder {
         legs[0].value = uint64((uint256(qtyWh) * price + 999) / 1000);
     }
 
-    function placedOrderId(address, bytes calldata, bytes calldata result) external pure override returns (bytes32) {
-        return bytes32(abi.decode(result, (uint256)));
+    function placedOrderIds(address, bytes calldata, bytes calldata result)
+        external
+        pure
+        override
+        returns (bytes32[] memory ids)
+    {
+        ids = new bytes32[](1);
+        ids[0] = bytes32(abi.decode(result, (uint256)));
     }
 
     /// @dev Nothing ever fills on the stub market.
@@ -68,7 +74,8 @@ contract LeglessDecoder is IOrderDecoder {
         legCount = legCount_;
     }
 
-    /// @dev Returns `legCount` placement legs: zero or three, both refused.
+    /// @dev Returns `legCount` placement legs. Zero is always refused; more
+    ///      than the gate's `maxLegs` too.
     function decode(address, bytes calldata) external view override returns (Order[] memory legs) {
         legs = new Order[](legCount);
         for (uint256 i = 0; i < legCount; ++i) {
@@ -77,7 +84,12 @@ contract LeglessDecoder is IOrderDecoder {
         }
     }
 
-    function placedOrderId(address, bytes calldata, bytes calldata) external pure override returns (bytes32) {}
+    function placedOrderIds(address, bytes calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes32[] memory)
+    {}
 
     function fillState(address, bytes32) external pure override returns (FillState memory state) {}
 
@@ -97,13 +109,14 @@ contract NullDecoder is IOrderDecoder {
         legs[0].value = 1;
     }
 
-    function placedOrderId(address target, bytes calldata callData, bytes calldata)
+    function placedOrderIds(address target, bytes calldata callData, bytes calldata)
         external
         pure
         override
-        returns (bytes32)
+        returns (bytes32[] memory ids)
     {
-        return keccak256(abi.encode(target, callData));
+        ids = new bytes32[](1);
+        ids[0] = keccak256(abi.encode(target, callData));
     }
 
     function fillState(address, bytes32) external pure override returns (FillState memory state) {

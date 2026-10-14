@@ -1034,6 +1034,46 @@ included: anyone could mint money.
 **Why.** Both source projects pass zero blocks (`blockNrForADay = 0`). When a
 lock may be released is decided by the market contracts that hold it.
 
+### 2.38 — A call may decode to a batch of legs; the limit is a parameter
+
+**Status.** Proposed. Supersedes the "one or two legs" rule of entry 2.5.
+
+**Decision.** `PolicyGate` takes `maxLegs` at construction, at least 2 so a
+modification fits. A call that decodes to no leg, or to more than `maxLegs`, is
+refused. The tests use 48: a day-ahead batch of 24 hourly orders, twice over.
+
+**Why.** In the ported market one call places a batch of orders (entry 2.23),
+and each order is a leg. The bound still exists because the gate books every
+leg in a loop.
+
+### 2.39 — The decoder returns every placed id at once
+
+**Status.** Proposed. Changes the interface of entry 2.3.
+
+**Decision.** `placedOrderId` becomes `placedOrderIds(market, callData, result)`,
+returning the ids of all orders the call placed, in the order of its PLACE legs.
+The gate checks that there are exactly as many ids as PLACE legs, and refuses
+the call otherwise.
+
+### 2.40 — Expiry is the market's word, not the clock's
+
+**Status.** Proposed. Changes entry 2.10's rule for `EXPIRED`.
+
+**Decision.** `FillState` gains `expired`: the market reports that an order
+ended because its session or slot closed with part of it unmatched. The ledger
+closes an order as `EXPIRED` when the market says so, instead of when the
+decoder's gate time has passed.
+
+**Why.** In Dan's market trading closes first and matching comes after: the
+off-chain matcher reads the closed session and registers trades later. Under
+the old rule the ledger would have released every unmatched order at gate
+closure, before the matcher had reported anything. The market knows when an
+order is over; the clock does not.
+
+**Consequence.** `gateTime` stays in the decoder for the policies of step 4
+(the target-slot horizon A6, the near-gate weighting of S6), but the ledger no
+longer reads it.
+
 ---
 
 ## Open decisions

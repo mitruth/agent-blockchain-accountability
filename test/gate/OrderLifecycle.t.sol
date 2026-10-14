@@ -44,7 +44,7 @@ contract OrderLifecycleTest is Test {
         vm.warp(GENESIS);
 
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger);
+        gate = new PolicyGate(ledger, 48);
         account = new MiniAccount(owner);
         market = new MockEnergyMarket(GENESIS, SLOT_SECONDS, GATE_LEAD, operator);
         decoder = new MockMarketDecoder();

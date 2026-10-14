@@ -15,6 +15,8 @@ abstract contract GateFixture is Test {
     bytes32 internal constant POLICY_ID = keccak256("cap");
     uint64 internal constant SOFT = 800;
     uint64 internal constant HARD = 1000;
+    /// @dev A day-ahead batch of 24 hourly orders, twice over.
+    uint256 internal constant MAX_LEGS = 48;
 
     PositionLedger internal ledger;
     PolicyGate internal gate;
@@ -33,7 +35,7 @@ abstract contract GateFixture is Test {
         vm.warp(1_760_000_000);
 
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger);
+        gate = new PolicyGate(ledger, MAX_LEGS);
         account = new MiniAccount(owner);
         market = new StubMarket();
         decoder = new StubDecoder();

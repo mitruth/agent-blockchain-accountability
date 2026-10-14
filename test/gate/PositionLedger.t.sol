@@ -19,7 +19,12 @@ contract ScriptedDecoder is IOrderDecoder {
 
     function decode(address, bytes calldata) external pure override returns (Order[] memory legs) {}
 
-    function placedOrderId(address, bytes calldata, bytes calldata) external pure override returns (bytes32) {}
+    function placedOrderIds(address, bytes calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes32[] memory)
+    {}
 
     function fillState(address, bytes32) external view override returns (FillState memory state) {
         state.filledWh = filledWh;
