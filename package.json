@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "hardhat test solidity test/Authorization.t.sol test/Differential.t.sol test/Enforcement.t.sol test/MeterReadings.t.sol test/PriceOracle.t.sol test/Retention.t.sol test/Settlement.t.sol test/gate/KeyModel.t.sol test/gate/ConfigManager.t.sol test/gate/OrderLifecycle.t.sol test/gate/PositionLedger.t.sol test/market/LockableERC1155.t.sol test/market/MarketFlow.t.sol",
+    "test": "hardhat test solidity test/Authorization.t.sol test/Differential.t.sol test/Enforcement.t.sol test/MeterReadings.t.sol test/PriceOracle.t.sol test/Retention.t.sol test/Settlement.t.sol test/gate/KeyModel.t.sol test/gate/ConfigManager.t.sol test/gate/OrderLifecycle.t.sol test/gate/PositionLedger.t.sol test/market/LockableERC1155.t.sol test/market/MarketFlow.t.sol test/market/GatedMarket.t.sol test/market/ClassicSettlement.t.sol",
     "test:sol": "npm test",
     "test:forge": "forge test",
     "test:accounts": "forge test --match-path \"test/accounts/*\"",

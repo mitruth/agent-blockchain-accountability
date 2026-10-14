@@ -17,7 +17,7 @@ Where the build stands and what comes next. Update this file as steps close.
 |---|---|---|
 | 0 | Read the repository, fill in Section 10 of the spec, set up the toolchain | **Done**, 2026-10-12 |
 | 1 | Skeleton and key model: `PolicyGate` executor, agent registry, decoder registry, config manager | **Done**, 2026-10-12. Acceptance criteria met |
-| 2 | Mock market, decoder, position ledger, reconcile | **Done**, 2026-10-14. Acceptance criteria met |
+| 2 | Position ledger, reconcile, the P2P market port and its decoder | **Done**, 2026-10-14. Acceptance criteria met on the port |
 | 3 | `WindowLib`, independent verifier, mutation suite | Next |
 | 4 | `StaticOrderPolicy`, S1, S2, S6 | Not started. **Decide D1 first** |
 | 5 | `OracleVerifier`, PV relay, S3, S4, S5 | Not started |
@@ -59,17 +59,36 @@ measured.
 
 ---
 
-## Next: port the P2P market
+## Done: the P2P market port
 
-Decided with Dan on 2026-10-14: decision log 2.20 to 2.31, and
-`docs/analysis/market-structure.md`. The mock market of step 2 is replaced by
-a port of Dan's P2P energy flexibility market, the ERC-1155 template of the
-DEDALUS project without encryption: market manager, market session, prosumer
-contract, lockable ERC-1155 for payment and energy, settlement. Orders are
-batches with a configurable number of slots, 24 to start; cancel and modify are
-added; trades come from an off-chain matcher; settlement from trusted sensors.
+Decided with Dan on 2026-10-14 (decision log 2.20 to 2.31,
+`docs/analysis/market-structure.md`) and built the same day (2.32 to 2.52): the
+ERC-1155 template of DEDALUS without encryption. Market manager, sessions on one
+slot grid, prosumer contracts owned by smart accounts, lockable ERC-1155 for
+payment and energy, `ClassicSettlement`, and `ProsumerDecoder` for the gate.
+Batches over a configurable number of slots; cancel and modify until the session
+closes; trades from a registered matcher after it closes; settlement by
+registered sensors. The mock market of step 2 remains as a test double for the
+ledger.
 
-Then step 3.
+| Check | Result |
+|---|---|
+| `test/market/`: token, market flow, gated market, settlement rule | 81 passing |
+| Whole suite under Hardhat | 328 passing |
+| Whole suite under Foundry, with the real-account tests | 332 passed |
+| Single defects in the market port | 54 of 54 caught, after six tests were added |
+
+---
+
+## Next: step 3
+
+`WindowLib` with the five window classes; the independent Python verifier,
+recomputing every window by brute force from the event log; the mutation suite
+committed as tooling, absorbing the hand-run lists of steps 1 and 2 and of the
+market port.
+
+**Then stop before step 4:** D1 has to be decided first
+(`docs/analysis/delegation-architecture.md`).
 
 ---
 

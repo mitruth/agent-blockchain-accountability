@@ -1,7 +1,8 @@
 # Project guide
 
 What the project contains today, what every file does, what the tests prove,
-and how to run everything. Current as of 2026-10-14: steps 1 and 2 of 6 are built.
+and how to run everything. Current as of 2026-10-14: steps 1 and 2 of 6 are
+built, step 2 on a port of Dan's P2P energy flexibility market.
 
 
 | For                                     | Read                                 |
@@ -35,7 +36,7 @@ The build follows six steps, fixed by Section 9 of the spec.
 | Step | Content                                                | Status                |
 | ---- | ------------------------------------------------------ | --------------------- |
 | 1    | The gate, the key model, the registries, configuration | **Built and passing** |
-| 2    | Mock market, order decoder, position ledger, reconcile | **Built and passing** |
+| 2    | Position ledger, reconcile, the P2P market port and its decoder | **Built and passing** |
 | 3    | `WindowLib`, independent verifier, mutation suite      | Not started           |
 | 4    | Per-action policies, S1, S2, S6                        | Not started           |
 | 5    | Oracle verification, PV relay, S3, S4, S5              | Not started           |
@@ -55,8 +56,12 @@ call.
 rule "tighten now, widen after 24 hours".
 - **A position ledger:** every order the agent placed, and per delivery slot
 the account's committed and cleared volume, buy and sell.
-- **A mock energy market and its decoder:** a per-slot order book with gate
-closure and partial fills, and the adapter that reads its calls and views.
+- **The P2P energy market, ported from Dan's BRIGHT and DEDALUS projects:** a
+market manager, market sessions, one prosumer contract per prosumer, a lockable
+ERC-1155 token for payment and energy, and the 10% settlement rule. Section 3
+ends with how it works.
+- **A decoder for the prosumer contract:** the adapter through which the gate
+reads the market's order calls and fills.
 - `reconcile`**:** brings an order up to date with the market. Anyone may
 call it.
 
@@ -66,9 +71,12 @@ call it.
 
 **No policy checks an order yet.** Today an order from a registered agent to an
 approved market function is executed and booked in the ledger. Policies can be
-added and configured, but `submit` does not consult them until step 4. The
-market is a mock whose fills come from an operator, not from matching. There is
-no oracle and no sequence policy. Nothing is deployed to a network.
+added and configured, but `submit` does not consult them until step 4. There
+is no oracle and no sequence policy. Nothing is deployed to a network.
+
+Two roles of the market are outside the repository by design: the off-chain
+matching service, linked to the chain by an oracle, which registers trades; and
+the trusted sensors that report measured energy. The tests play both.
 
 **Before step 4 starts,** spec decision D1, the agent's entry point, has to be
 decided: see `docs/analysis/delegation-architecture.md`.
@@ -183,10 +191,11 @@ In order, `submit` does this:
 
 ### What happens to an order after it is placed
 
-The market fills orders through its operator, partly or fully, until the slot's
-gate closes. The ledger learns of fills when the order is **reconciled**:
-`PolicyGate.reconcile(account, market, orderId)`, which anyone may call. Every
-quantity comes from the market through the order's decoder.
+In the ported market, trading in a session closes before delivery. The
+off-chain matcher then registers trades, which fill orders partly or fully, and
+finalises the session. The ledger learns of fills when the order is
+**reconciled**: `PolicyGate.reconcile(account, market, orderId)`, which anyone
+may call. Every quantity comes from the market through the order's decoder.
 
 Per account and delivery slot the ledger keeps four numbers, in Wh:
 
@@ -205,8 +214,8 @@ An order closes for one of four reasons, each its own event:
 | ------ | ---- | -------- |
 | `FILLED` | Fully filled | Nothing |
 | `CANCELLED` | Cancelled by the agent through the gate | The unfilled rest |
-| `EXPIRED` | Its slot's gate closed with part unfilled | The unfilled rest |
-| `CLOSED_ELSEWHERE` | The market no longer holds it open before gate closure, for instance the owner cancelled it directly | The unfilled rest |
+| `EXPIRED` | Its session was finalised with part of it unmatched, as the market reports | The unfilled rest |
+| `CLOSED_ELSEWHERE` | The market no longer holds it open for another reason, for instance the owner cancelled it directly | The unfilled rest |
 
 Expiry is never a cancellation: only `CANCELLED` will count toward the cancel
 quota S6 in step 4.
@@ -223,6 +232,57 @@ Two more rules:
 A reentrancy lock covers the whole function. The same lock covers every
 configuration write, so nothing can be registered or reconfigured while an order
 is part-way through.
+
+### The market behind the gate
+
+The market is a port of the P2P energy flexibility market of Dan's thesis,
+chapter 3, as built in BRIGHT and DEDALUS: same roles, same phases, ERC-1155
+template, no encryption. `docs/analysis/market-structure.md` says what was kept,
+changed and dropped; decisions 2.20 to 2.52 say why.
+
+```
+agent ──submit──▶ PolicyGate ──▶ smart account ──▶ Prosumer ──▶ MarketSession
+                                 (owner of Prosumer)
+matcher ──registerTrades, finalise──▶ MarketSession ──▶ both Prosumers
+sensor ──settle──▶ Prosumer ──penalty──▶ MarketManager
+operator ──register prosumers, matcher, prices, open sessions──▶ MarketManager
+```
+
+| Contract | Role |
+| -------- | ---- |
+| `MarketManager` | Registers prosumer contracts with their sensors and makes them energy minters; registers the matcher; sets the real-time price; opens sessions. Slot length is fixed at deployment, so every session sits on one slot grid |
+| `MarketSession` | One session: a first slot, a number of slots (24 for day-ahead, 6 for an intraday run) and a closing time before delivery. Holds the orders; takes trades from the matcher after it closes; finalised by the matcher |
+| `Prosumer` | One per prosumer, owned by its smart account. Places batches of bids or offers, cancels and modifies until the session closes, locks collateral, holds commitments per slot, is settled |
+| `LockableERC1155` | Id 0 is the payment token; every other id an energy token, minted per offer. Payment balances can be locked, and only the named unlocker releases them |
+| `ClassicSettlement` | Within 10% of the commitment, no penalty; beyond it, the whole deviation at the real-time price |
+
+Money and energy:
+
+- **A bid** locks quantity × its limit price. A match pays the seller at the
+  trade price out of it. What is left comes back when the bid is fully matched,
+  cancelled or expires.
+- **An offer** mints its energy token to the account and locks quantity × the
+  real-time price as a delivery guarantee. A match moves the energy token to
+  the buyer; the matched part's collateral is held until the slot is settled.
+- **A trade** names two order ids, a quantity and a price. Buyer, seller, slot
+  and token are read from the stored orders. Both limit prices must hold, and
+  an account cannot trade with itself.
+- **Expiry**: once the session is finalised, anyone calls `expire(order)` to
+  release an unmatched remainder and burn an offer's unmatched energy.
+- **Settlement**: after a slot ends, the prosumer's sensor reports measured
+  export and import. Committed net export (sold − bought) is compared with
+  measured net export. The penalty goes to the manager from the delivery
+  collateral first, then from the account's balance; what cannot be collected
+  is reported, never reverted.
+
+Setting up an account for the agent, all on the owner path:
+
+1. Install the gate; appoint it ledger writer; register the agent.
+2. On the token: a payment allowance for the account's prosumer contract, and
+   approval over its energy tokens.
+3. On the gate: approve the four order functions of the prosumer contract
+   (`placeBids`, `placeOffers`, `cancelOrder`, `modifyOrder`) with the
+   `ProsumerDecoder`. The token is never approved as a target.
 
 ---
 
@@ -328,12 +388,18 @@ configuration.
 
 
 
-### `contracts/market/`: the mock market
+### `contracts/market/`: the P2P market
 
 | File | What it does |
 | ---- | ------------ |
-| `MockEnergyMarket.sol` | A per-slot order book. Slot length and gate lead are constructor parameters. Owners place, cancel and modify before gate closure; an operator address, standing in for the clearing engine, fills within the limit price |
-| `MockMarketDecoder.sol` | Reads the market's place, cancel and modify calls into legs, values them at the limit price rounded up, and reads the market's fills and gate times |
+| `MarketManager.sol` | The operator's contract: prosumers and their sensors, the matcher, the real-time price, sessions, the slot length |
+| `MarketSession.sol` | One session's orders, cancellations, trades, finalisation and expiry |
+| `Prosumer.sol` | One prosumer's orders, collateral, commitments per slot and settlement |
+| `LockableERC1155.sol` | Payment (id 0) and energy tokens, with locks |
+| `EnergyTokenIds.sol` | The energy token id: minter, slot start time, energy type, counter |
+| `ClassicSettlement.sol` | The 10% settlement rule, and the interface a settlement rule implements |
+| `MarketTypes.sol` | Session configuration, order requests, orders, trades, valuation |
+| `ProsumerDecoder.sol` | The gate's adapter to `Prosumer`: calls as legs, fills and expiry from the sessions |
 
 ### `contracts/interfaces/`
 
@@ -341,7 +407,7 @@ configuration.
 | File                            | What it declares                                                                                                                                             |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `IERC7579.sol`                  | The two pieces of the ERC-7579 standard the gate needs: the module hooks and `executeFromExecutor`. Declared locally so the gate imports no external library |
-| `IOrderDecoder.sol`             | The adapter to one market: `decode` into legs, `placedOrderId`, `fillState`, `gateTime`. One decoder per approved market contract |
+| `IOrderDecoder.sol`             | The adapter to one market: `decode` into legs, `placedOrderIds`, `fillState`, `gateTime`. One decoder per approved market contract |
 | `IPolicy.sol`                   | The configuration side of a policy: `classifyConfig`, `configure`, `deconfigure`. The order-checking side arrives in step 4                                  |
 | `IModule.sol`, `IValidator.sol` | Earlier design                                                                                                                                               |
 
@@ -353,10 +419,15 @@ configuration.
 
 | Path                                | Tests                                  | Runs under          |
 | ----------------------------------- | -------------------------------------- | ------------------- |
-| `gate/KeyModel.t.sol`               | 35                                     | Hardhat and Foundry |
+| `gate/KeyModel.t.sol`               | 36                                     | Hardhat and Foundry |
 | `gate/ConfigManager.t.sol`          | 33                                     | Hardhat and Foundry |
 | `gate/OrderLifecycle.t.sol`         | 26                                     | Hardhat and Foundry |
 | `gate/PositionLedger.t.sol`         | 8                                      | Hardhat and Foundry |
+| `market/LockableERC1155.t.sol`      | 23                                     | Hardhat and Foundry |
+| `market/MarketFlow.t.sol`           | 40                                     | Hardhat and Foundry |
+| `market/GatedMarket.t.sol`          | 12                                     | Hardhat and Foundry |
+| `market/ClassicSettlement.t.sol`    | 6                                      | Hardhat and Foundry |
+| `market/MarketFixture.sol`          | Shared setup for the market tests |                     |
 | `accounts/PolicyGateAccounts.t.sol` | 4                                      | Foundry only        |
 | `gate/GateFixture.sol`              | Shared setup for `KeyModel` and `ConfigManager` |                     |
 | `gate/mocks/`                       | Test doubles, described in section 6   |                     |
@@ -422,7 +493,7 @@ documented in `docs/earlier-design/`.
 
 
 
-### `test/gate/KeyModel.t.sol`: 35 tests
+### `test/gate/KeyModel.t.sol`: 36 tests
 
 The permission table of section 2, one row at a time, then every escalation
 route.
@@ -432,7 +503,7 @@ route.
 | ---------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The path that must work                  | 2     | A registered agent's approved call is made by the account: the market sees the account as caller, not the agent and not the gate. The two events carry the decoded order and the order hash. Two identical calls get different hashes                                                                                                                                                                             |
 | Who may submit (A8)                      | 7     | An unregistered caller is rejected. The owner's own key is not an agent. An agent is valid through its last second and rejected one second later. Revocation acts at once. An agent of one account has no authority on another. The account, the gate and the zero address cannot be registered as agents, and an expiry in the past is refused                                                                   |
-| What may be submitted (A7)               | 6     | An unapproved function of an approved market is rejected. An unapproved market is rejected. Withdrawing an approval acts at once. Calldata shorter than a selector is rejected. A call its decoder reads as no order, or as more than two legs, is rejected. A market call that reverts reverts the whole submission |
+| What may be submitted (A7)               | 7     | An unapproved function of an approved market is rejected. An unapproved market is rejected. Withdrawing an approval acts at once. Calldata shorter than a selector is rejected. A call its decoder reads as no order, or as more than `maxLegs` legs, is rejected; `maxLegs` is at least 2. A market call that reverts reverts the whole submission |
 | Escalation: module management            | 5     | The agent cannot call `installModule`, `uninstallModule`, `execute` or `executeFromExecutor` on the account. The account is never accepted as a target, whatever the call. The owner cannot approve the account or the gate as a target either, nor register a zero decoder                                                                                                                                       |
 | Escalation: registries and configuration | 7     | Each of the gate's ten owner-path functions refuses the agent directly. The gate is never accepted as a target for any of them, nor is the ledger. The agent cannot write the ledger directly. The policy refuses `configure` from the agent, and from the account itself. A fuzz test sends arbitrary bytes to the account, the gate, the market, the policy and the ledger, 256 runs, and checks afterwards that modules, agents, approvals, ledger writers, policies and parameters are exactly as before |
 | Hostile targets                          | 2     | A target that forwards calls, like a multicall contract, carries no authority: what it forwards arrives from the forwarder. A target that is also an agent and calls `submit` again mid-call is stopped by the lock                                                                                                                                                                                               |
@@ -459,8 +530,11 @@ Section 4, rule by rule.
 
 ### `test/gate/OrderLifecycle.t.sol`: 26 tests
 
-Step 2's acceptance criteria, against the real mock market, decoder and ledger,
-on 30-minute slots with trading closing one hour before each slot.
+The ledger against the mock market in `test/gate/mocks/`, on 30-minute slots
+with trading closing one hour before each slot. These were step 2's acceptance
+tests before the port. They stay because the mock fills orders before trading
+closes, so they reach ledger paths the ported market never does (decision
+2.51).
 
 | Group | Tests | What it establishes |
 | ----- | ----- | ------------------- |
@@ -483,6 +557,49 @@ once; only a placement leg is booked as a placement; a zero quantity is not
 booked; a fill beyond the order, or one that goes backwards, is refused; a
 withdrawn writer can no longer write; a writer of one account cannot write
 another.
+
+### `test/market/LockableERC1155.t.sol`: 23 tests
+
+The token on its own: who mints payment and energy; the energy id carries its
+minter, slot and type; a locker uses up the owner's allowance once and a
+stranger cannot lock anyone's balance; only the named unlocker releases, with or
+without payment, and only up to the lock, tied to its owner; no locked payment
+moves, by the owner, by an operator approved for all, or in a batch (with a
+fuzz test, 256 runs); energy is burned by its holder or an approved operator,
+payment never.
+
+### `test/market/MarketFlow.t.sol`: 40 tests
+
+The market on its own, owners as plain addresses, phase by phase.
+
+| Group | Tests | What it establishes |
+| ----- | ----- | ------------------- |
+| Orders and collateral | 6 | A batch of bids locks each at its limit price; an offer mints its energy and locks at the real-time price; order ids are unique across sessions; orders outside the session, of zero quantity or price, after closing or beyond the balance are refused |
+| Cancel and modify | 5 | A cancellation releases collateral and burns an offer's energy; only the order's own prosumer contract can cancel it in the session; none after closing; a modification replaces price, quantity and slot, and an offer's energy token with it |
+| Matching | 11 | A trade pays the seller at the trade price, delivers the energy and commits both; a fully matched bid releases its over-reservation; only the matcher, only after closing; limits, the quantities of both orders, slots, self-trades and cancelled orders are checked; partial payments never exceed the collateral |
+| Finalisation and expiry | 5 | Expiry releases the unmatched part and burns unmatched energy; nothing before finalisation; nothing for a fully matched order; no trade after finalisation; only the matcher or operator finalises |
+| Settlement | 7 | Within 10%, no penalty; a short delivery is penalised from the collateral; a buyer's penalty comes from its balance; an uncollectable penalty is a shortfall, not a revert; only the sensor, only after the slot, only once, only with a commitment |
+| Sessions | 2 | An intraday session of six slots; a session must close before delivery and have 1 to 96 slots |
+| Who may call what | 4 | Only the owner orders; only the order's session calls back; only registered prosumers place; only the operator runs the manager |
+
+### `test/market/GatedMarket.t.sol`: 12 tests
+
+The whole system: an agent trades for Alice through PolicyGate on the ported
+market; Bob is the counterparty. A day-ahead batch of 24 bids is 24 legs and 24
+booked orders; a leg's value rounds up; a batch beyond `maxLegs` is refused; offers book as sells;
+cancel and modify through the gate; fills are booked on reconcile and the rest
+expires at finalisation; a fully matched order closes as filled; the ledger
+expires without the market's `expire` call; an order the owner cancels directly
+is closed elsewhere; the agent has no direct route into the market or the
+token. A fuzz test, 256 runs of random trading and matching, checks after every
+step that the ledger's books balance, and at the end that the ledger and Alice's
+prosumer contract agree slot by slot on what she bought and sold.
+
+### `test/market/ClassicSettlement.t.sol`: 6 tests
+
+The settlement rule at its edges: the threshold is 10%; exactly 10% costs
+nothing; one Wh beyond costs the whole deviation; 16% is penalised; a penalty
+rounds up; a commitment that nets to zero tolerates no deviation.
 
 ### `test/accounts/PolicyGateAccounts.t.sol`: 4 tests
 
@@ -514,8 +631,9 @@ Kernel. One test per account, same scenario:
 
 | Double            | Stands for                                                                                                                                                                                                                                                                                                  |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MiniAccount`     | The smallest account that behaves like an ERC-7579 account where it matters. Its `owner` stands in for "a user operation the owner signed". It accepts module management from itself, as real accounts do: that self-call is the escalation route the gate must close, so the mock keeps it open on purpose |
-| `StubMarket`      | A market that only records who called, for the key-model tests. It has one approved function and one the owner never approves. The real mock market is `contracts/market/MockEnergyMarket.sol` |
+| `MiniAccount`     | The smallest account that behaves like an ERC-7579 account where it matters. Its `owner` stands in for "a user operation the owner signed". It accepts module management from itself, as real accounts do: that self-call is the escalation route the gate must close, so the mock keeps it open on purpose. It accepts ERC-1155 tokens, as real accounts do through a fallback handler |
+| `StubMarket`      | A market that only records who called, for the key-model tests. It has one approved function and one the owner never approves |
+| `MockEnergyMarket`, `MockMarketDecoder` | A per-slot order book whose operator fills orders before trading closes, and its decoder. For the ledger tests of `OrderLifecycle` (decision 2.51) |
 | `StubDecoder`     | Reads `StubMarket.placeOrder` as one placement leg |
 | `NullDecoder`     | Reads any call as a 1 Wh placement. For targets that are not markets, in the attack tests: every approved call must be an order |
 | `CapPolicy`       | A policy with a soft and a hard cap, lower is tighter. Enough to drive every branch of the configuration manager                                                                                                                                                                                            |
@@ -535,7 +653,8 @@ by breaking one line of the gate, running the tests, and restoring the line.
 | ------------------------ | ------- | ---------------------------------------------------------------------------------------------------------- |
 | Against `test/gate/`     | 51      | 49 caught at first. The 2 that survived were gaps in the tests; two tests were added and all 51 are caught |
 | Against `test/accounts/` | 9       | 9 caught                                                                                                   |
-| Step 2 code (ledger, gate booking, mock market, decoder) against `test/gate/` | 51 | 41 caught at first. Seven survivors were gaps in the ledger and gate tests; nine tests were added and all seven are caught. The other three are in the mock market, which is to be replaced by a port of the P2P market |
+| Step 2 code (ledger, gate booking, mock market, decoder) against `test/gate/` | 51 | 41 caught at first. Seven survivors were gaps in the ledger and gate tests; nine tests were added and all seven are caught. The other three are in the mock market, now a test double |
+| The market port (token, session, prosumer contract, manager, settlement rule, decoder) against `test/market/` and the gate tests | 54 | 48 caught at first. The six survivors were tests that never reached an edge: a direct cancel on the session, a bid over-matched, exactly 10%, a 16% deviation, rounding of a penalty and of a leg's value. Six tests were added and all 54 are caught |
 
 
 One of the nine is worth knowing. When the gate declares itself a validator
@@ -555,8 +674,11 @@ address. "Root validator belongs to the owner alone" is a property of how the
 account is deployed, and no test here asserts it.
 - **Anything about policies limiting orders.** No order is checked against a
 policy until step 4.
-- **A real market.** Fills come from an operator address, not from matching
-between orders.
+- **Matching and metering.** The matcher and the sensors are trusted roles
+played by test addresses. No matching algorithm and no meter are in the
+repository.
+- **The market on real accounts.** The market tests use `MiniAccount`; the
+real-account tests of `test/accounts/` do not yet trade.
 - **Behaviour on a network.** There is no deployment script and nothing is
 deployed.
 - **Gas.** Not measured for the gate yet.
@@ -579,8 +701,10 @@ npm install
 
 ### The Hardhat suite
 
-Expect **246 passing** in under a minute: 102 for the gate (35 key model, 33
-configuration, 26 order lifecycle, 8 ledger), 144 for the earlier design.
+Expect **328 passing** in about a minute: 184 for the gate and the market (36
+key model, 33 configuration, 26 order lifecycle on the mock market, 8 ledger, 23
+token, 40 market flow, 12 gated market, 6 settlement rule), 144 for the earlier
+design.
 
 ```bash
 npm test
@@ -591,7 +715,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **250 passed**: the 246 above plus the four real-account tests.
+Expect **332 passed**: the 328 above plus the four real-account tests.
 
 With Foundry installed and allowed to run:
 

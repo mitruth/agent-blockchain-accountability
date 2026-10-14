@@ -149,7 +149,7 @@ Order { kind: PLACE | CANCEL | MODIFY, side: BUY | SELL, slot: uint32, qtyWh: ui
 - MODIFY decodes as an atomic cancel plus place. Price, quantity and slot changes all re-run the checks.
 - The decoder also exposes `gateTime(slot)` from the market.
 
-> **As built, step 2.** `IOrderDecoder` has four functions: `decode(market, callData)` returns legs (one for a placement or a cancellation, a CANCEL then a PLACE for a modification); `placedOrderId` reads a new order's id from the market's reply; `fillState` and `gateTime` read the market's views, so the ledger needs no knowledge of any market. A call that decodes to no leg is refused. `OrderSubmitted` carries the legs. See decisions 2.3 to 2.5.
+> **As built, step 2.** `IOrderDecoder` has four functions: `decode(market, callData)` returns legs (one per order placed, so a batch is several; one for a cancellation; a CANCEL then a PLACE for a modification); `placedOrderIds` reads the new orders' ids from the market's reply; `fillState` and `gateTime` read the market's views, so the ledger needs no knowledge of any market. A call that decodes to no leg is refused. `OrderSubmitted` carries the legs. See decisions 2.3 to 2.5. For the ported P2P market the decoder is `contracts/market/ProsumerDecoder.sol`, reading calls to the prosumer contract; an order stays open after trading closes until the session is finalised, because matching happens then (log 2.52). The gate's limit on legs per call is the constructor parameter `maxLegs` (log 2.38).
 
 ### 5.2 PositionLedger and order lifecycle
 
@@ -165,7 +165,7 @@ Order states: placed → partially filled → filled, cancelled, or expired at g
 - **Valuation:** placement counts at limit price, which is conservative. True-up to the clearing price on reconcile is optional and off by default.
 - **Expiries are not cancellations.** They never count in S6.
 
-> **As built, step 2.** `contracts/gate/PositionLedger.sol`, a separate contract written only by writers the account appoints (the gate today). Records are keyed by account, market and order id, so `reconcile` takes the market: `reconcile(account, market, orderId)`. Each record holds its placement time rather than a bucket; window policies derive their own buckets. An order closes as FILLED, CANCELLED, EXPIRED or CLOSED_ELSEWHERE (the market no longer holds it open before gate closure, for instance cancelled by the owner directly); only CANCELLED is a cancellation. The open-order bound is 64, and a placement beyond it reverts until the check phase exists. The agent may cancel or modify only orders booked through the gate. Positions are keyed by account only and survive a reinstall of the gate. See decisions 2.6 to 2.16.
+> **As built, step 2.** `contracts/gate/PositionLedger.sol`, a separate contract written only by writers the account appoints (the gate today). Records are keyed by account, market and order id, so `reconcile` takes the market: `reconcile(account, market, orderId)`. Each record holds its placement time rather than a bucket; window policies derive their own buckets. An order closes as FILLED, CANCELLED, EXPIRED (the market reports its session closed with part unmatched; log 2.40) or CLOSED_ELSEWHERE (the market no longer holds it open for another reason, for instance cancelled by the owner directly); only CANCELLED is a cancellation. The open-order bound is 64, and a placement beyond it reverts until the check phase exists. The agent may cancel or modify only orders booked through the gate. Positions are keyed by account only and survive a reinstall of the gate. See decisions 2.6 to 2.16.
 
 ### 5.3 WindowLib
 
@@ -392,20 +392,20 @@ Do not reorder. Each step has to pass before the next starts.
   - permissionless reconcile;
   - the open-order bound.
 
-> **Status: built; criteria met on 14 October 2026.** 26 tests in `test/gate/OrderLifecycle.t.sol`, against `contracts/market/MockEnergyMarket.sol`, its decoder and the ledger.
+> **Status: built; criteria met on 14 October 2026, on the port of Dan's P2P market** (amendment A5). The market's own tests are in `test/market/MarketFlow.t.sol` and `test/market/LockableERC1155.t.sol`; the criteria below are shown through the gate by `test/market/GatedMarket.t.sol`, and for paths the port never takes (fills before closing) by `test/gate/OrderLifecycle.t.sol` against a mock market.
 >
 > | Criterion | Shown by |
 > |---|---|
-> | Place | `test_placeBooksACommittedBuy`, `test_placeBooksACommittedSell` |
-> | Partial fill | `test_partialFillIsBookedOnReconcile`, `test_cancelAfterAnUnbookedPartialFillBooksTheFillFirst` |
-> | Full fill | `test_fullFillClosesTheOrderAndReleasesNothing` |
-> | Cancel | `test_cancelReleasesTheUnfilledOrder` |
-> | Modify price, quantity, slot | `test_modifyPrice`, `test_modifyQuantity`, `test_modifySlotMovesTheCommitment`, `test_modifyAfterAPartialFillKeepsTheFill`, `test_modifyDecodesAsCancelThenPlace` |
-> | Expiry with release | `test_expiryReleasesTheUnfilledPartAtGateClosure`, `test_anUnfilledOrderExpiresEntirely` |
-> | Permissionless reconcile | `testFuzz_anyoneCanReconcile`, `test_theLedgerItselfAcceptsOnlyTheAccountsWriters` |
-> | The open-order bound | `test_openOrdersAreBounded` |
+> | Place | `test_aDayAheadBatchIsTwentyFourLegs`, `test_offersThroughTheGateAreBookedAsSells` |
+> | Partial fill | `test_fillsAreBookedOnReconcileAndTheRestExpiresAtFinalisation`; on the mock, `test_partialFillIsBookedOnReconcile` |
+> | Full fill | `test_aFullyMatchedOrderClosesAsFilled` |
+> | Cancel | `test_aCancelThroughTheGateReleasesInTheMarketAndTheLedger` |
+> | Modify price, quantity, slot | `test_aModifyThroughTheGateIsACancelThenAPlace`; in the market, `test_modifyReplacesPriceQuantityAndSlot` |
+> | Expiry with release | `test_fillsAreBookedOnReconcileAndTheRestExpiresAtFinalisation`, `test_theLedgerExpiresWithoutTheMarketsExpireCall` |
+> | Permissionless reconcile | on the mock, `testFuzz_anyoneCanReconcile`, `test_theLedgerItselfAcceptsOnlyTheAccountsWriters` |
+> | The open-order bound | on the mock, `test_openOrdersAreBounded`; `test_theOpenOrderBoundIsSixtyFour` |
 >
-> Beyond the criteria: `testFuzz_theBooksBalance` checks the ledger's books after every step of random order sequences.
+> Beyond the criteria: `testFuzz_theBooksBalanceAndAgreeWithTheMarket` checks the ledger after every step of random trading and matching on the port, and that it agrees with the prosumer contract's commitments.
 
 > **Status of step 3: not started.**
 
@@ -511,3 +511,4 @@ Decided with Dan on 9 October 2026, after Section 10 was filled in. Where these 
 - **A2. Slot length is a parameter.** The HEMS dataset is 30 min. Every default this brief states as "15 min" (S2 and S4 bucket, SoC staleness of one slot) reads as one slot, with the slot length set at deployment.
 - **A3. Toolchain.** Foundry 1.8.5 with ModuleKit 0.5.9 is added, on Solidity 0.8.25 and EVM `cancun`. The custom `SmartAccount` cannot host an executor; PolicyGate is installed as an executor module on real ERC-7579 accounts. Hardhat stays as a second runner for every test except the real-account ones (log 0.5 to 0.7).
 - **A4. Open.** The honest-arm data is in USD and the settlement token is a mock EUR (D7). Whether that is a 1:1 relabel or a conversion is not decided.
+- **A5. The market is a port of Dan's P2P energy flexibility market.** Decided on 14 October 2026. Section 1's "market rules belong to the market contract and are assumed" still holds, but the market is now concrete: BRIGHT's and DEDALUS's structure (manager, session, prosumer contract, lockable ERC-1155, settlement), with batches over a configurable number of slots, cancel and modify until the session closes, off-chain matching by a registered matcher, settlement by registered sensors, and caller checks added throughout. See `docs/analysis/market-structure.md` and log 2.20 to 2.52.

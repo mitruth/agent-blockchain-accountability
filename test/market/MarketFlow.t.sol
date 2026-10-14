@@ -113,6 +113,23 @@ contract MarketFlowTest is MarketFixture {
         assertEq(uint8(session.orderOf(bidId).status), uint8(MarketTypes.OrderStatus.CANCELLED));
     }
 
+    /// The session takes a cancellation only from the prosumer contract that
+    /// placed the order. Anyone else, calling the session directly, is
+    /// refused, and the order stays open.
+    function test_onlyTheOrdersProsumerCancelsItInTheSession() public {
+        bytes32 bidId = _bid(0, 2000, 250_000);
+
+        vm.expectRevert(abi.encodeWithSelector(MarketSession.MarketSession_NotYourOrder.selector, bidId, stranger));
+        vm.prank(stranger);
+        session.cancel(bidId);
+
+        vm.expectRevert(abi.encodeWithSelector(MarketSession.MarketSession_NotYourOrder.selector, bidId, address(bobP)));
+        vm.prank(address(bobP));
+        session.cancel(bidId);
+
+        assertEq(uint8(session.orderOf(bidId).status), uint8(MarketTypes.OrderStatus.OPEN));
+    }
+
     function test_noCancelOnceTheSessionHasClosed() public {
         bytes32 bidId = _bid(0, 2000, 250_000);
         _close();
@@ -242,6 +259,17 @@ contract MarketFlowTest is MarketFixture {
 
         vm.expectRevert(
             abi.encodeWithSelector(MarketSession.MarketSession_BadTrade.selector, bidId, offerId, "offer over-matched")
+        );
+        _trade(bidId, offerId, 1001, 220_000);
+    }
+
+    function test_aTradeBeyondTheBidIsRefused() public {
+        bytes32 bidId = _bid(0, 1000, 250_000);
+        bytes32 offerId = _offer(0, 2000, 200_000);
+        _close();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketSession.MarketSession_BadTrade.selector, bidId, offerId, "bid over-matched")
         );
         _trade(bidId, offerId, 1001, 220_000);
     }

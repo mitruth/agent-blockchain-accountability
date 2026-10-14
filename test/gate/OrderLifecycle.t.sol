@@ -5,8 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
 import {Order, OrderKind, Side} from "../../contracts/gate/GateTypes.sol";
-import {MockEnergyMarket} from "../../contracts/market/MockEnergyMarket.sol";
-import {MockMarketDecoder} from "../../contracts/market/MockMarketDecoder.sol";
+import {MockEnergyMarket} from "./mocks/MockEnergyMarket.sol";
+import {MockMarketDecoder} from "./mocks/MockMarketDecoder.sol";
 import {MiniAccount} from "./mocks/MiniAccount.sol";
 
 /// Step 2 of the v0.1 build order: the order lifecycle.

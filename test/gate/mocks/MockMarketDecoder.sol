@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
-import {IOrderDecoder} from "../interfaces/IOrderDecoder.sol";
-import {Order, OrderKind, Side, FillState} from "../gate/GateTypes.sol";
+import {IOrderDecoder} from "../../../contracts/interfaces/IOrderDecoder.sol";
+import {Order, OrderKind, Side, FillState} from "../../../contracts/gate/GateTypes.sol";
 import {MockEnergyMarket} from "./MockEnergyMarket.sol";
 
 /// @title MockMarketDecoder

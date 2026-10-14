@@ -8,7 +8,8 @@ import {Order, OrderKind, Side, ConfigChange, FillState} from "../../../contract
 
 /// @notice A stand-in market for the key-model tests: it records who called.
 ///         The real mock market, with a book, gate closure and fills, is
-///         contracts/market/MockEnergyMarket.sol.
+///         test/gate/mocks/MockEnergyMarket.sol; the market of this project is
+///         the port in contracts/market/.
 contract StubMarket {
     address public lastCaller;
     uint256 public orderCount;

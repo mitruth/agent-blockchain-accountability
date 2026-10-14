@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
-import {Side} from "../gate/GateTypes.sol";
+import {Side} from "../../../contracts/gate/GateTypes.sol";
 
 /// @title MockEnergyMarket
 /// @notice A per-slot order book for a peer-to-peer energy market, as far as
-///         the enforcement layer needs one. Step 2 of the v0.1 build.
+///         the enforcement layer needs one. A test double: the market of this
+///         project is the port in contracts/market/ (decision log 2.20, 2.51).
+///         It stays because it fills orders before trading closes, which the
+///         ported market never does, and so reaches ledger paths the port cannot.
 ///
 /// Time is cut into delivery slots of `slotSeconds`, slot 0 starting at
 /// `genesis`. Trading in a slot closes `gateLeadSeconds` before the slot

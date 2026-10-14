@@ -1216,6 +1216,59 @@ orders per session.
 **Why.** The matcher reads the session's order lists in one call; both bounds
 keep every call of the session bounded.
 
+### 2.51 — The mock market stays, as a test double
+
+**Status.** Proposed. Refines entry 2.20.
+
+**Decision.** `MockEnergyMarket` and `MockMarketDecoder` move from
+`contracts/market/` to `test/gate/mocks/`, with `OrderLifecycle.t.sol` kept as
+the ledger's tests against them. The deployable market is the port alone.
+
+**Why.** The mock fills orders before trading closes and allows a cancellation
+after a partial fill. The ported market never does either: trades come after
+closing, cancellations only before. The ledger is meant to serve other markets
+too, and only the mock reaches those paths. The step 2 acceptance criteria are
+now met on the port by `test/market/GatedMarket.t.sol`.
+
+### 2.52 — How the decoder reads the ported market
+
+**Status.** Proposed. Implements entry 2.31.
+
+**Decision.** `ProsumerDecoder`:
+
+- `placeBids`, `placeOffers`: one PLACE leg per order of the batch, bid as BUY,
+  offer as SELL, on the market's slot grid (the session's first slot plus the
+  slot within it).
+- `cancelOrder`: one CANCEL leg for what the session says is still unmatched.
+- `modifyOrder`: a CANCEL leg, then a PLACE leg on the same side.
+- An order is **open** while its status is open, its session is not finalised
+  and it is not fully matched. After trading closes it stays open, because that
+  is when matching happens.
+- An order has **expired** once its session is finalised with part of it
+  unmatched, whether or not anyone has called `expire` on the market.
+- `gateTime(slot)` is the closing time of the current session, of either energy
+  type, that covers the slot; zero if none does. The ledger no longer reads it
+  (entry 2.40); the policies of step 4 will.
+
+**Consequence.** `GatedMarket.t.sol` checks after random trading and matching
+that the ledger and the prosumer contract agree, slot by slot, on what was
+bought and sold.
+
+### 2.53 — Mutation check of the market port, by hand
+
+**Status.** Settled as a practice; the tooling is step 3.
+
+**Result.** 54 single defects across the token, the session, the prosumer
+contract, the manager, the settlement rule and the decoder, against
+`test/market/` and the gate tests. 48 caught at first. The six survivors were
+all tests that stopped short of an edge: no test called the session's `cancel`
+directly, none over-matched a bid (only an offer), none sat at exactly 10% or
+between 10% and 20%, and every price gave whole units, so no rounding was ever
+visible. `test/market/ClassicSettlement.t.sol` and three market tests were
+added; all 54 are caught.
+
+Hardhat 328 passing; Foundry, with the real-account tests, 332 passed.
+
 ---
 
 ## Open decisions
