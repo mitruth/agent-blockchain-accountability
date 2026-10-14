@@ -61,7 +61,8 @@ measured.
 
 ## Next: port the P2P market
 
-Decided with Dan on 2026-10-14. The mock market of step 2 is replaced by
+Decided with Dan on 2026-10-14: decision log 2.20 to 2.31, and
+`docs/analysis/market-structure.md`. The mock market of step 2 is replaced by
 a port of Dan's P2P energy flexibility market, the ERC-1155 template of the
 DEDALUS project without encryption: market manager, market session, prosumer
 contract, lockable ERC-1155 for payment and energy, settlement. Orders are

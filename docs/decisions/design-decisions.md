@@ -803,6 +803,168 @@ Foundry, with the four real-account tests: 250 passed.
 
 ---
 
+## Step 2, continued. Porting the P2P market
+
+Decided with Dan on 14 October 2026. The reading of the two source projects,
+the mapping and the reasons are in `docs/analysis/market-structure.md`.
+
+### 2.20 — The mock market is replaced by a port of Dan's P2P market
+
+**Status.** Settled by Dan.
+
+**Decision.** The market behind the gate follows the structure and logic of the
+P2P energy flexibility market of Dan's thesis, as built in the BRIGHT and
+DEDALUS projects: registration, market session, off-chain matching, commitments
+per prosumer, settlement against monitored values.
+
+**Why.** It is a design with a record, the subject of Dan's PhD, and familiar to
+him and to the reviewers who know his work. The mock market of entry 2.1 was a
+stand-in.
+
+**Consequence.** `MockEnergyMarket` and its decoder are retired once the port
+passes the same order-lifecycle tests. The rules three of the step 2 mutants
+targeted (gate closure before slot start, only the owner cancels, a
+modification keeps its side) are to be tested on the port.
+
+### 2.21 — The ERC-1155 template, without encryption
+
+**Status.** Settled by Dan.
+
+**Decision.** The port follows DEDALUS's token design: one lockable ERC-1155
+contract holds the fungible payment token and the energy tokens, whose ids
+encode the minter, the slot and the energy type. DEDALUS's encryption is not
+ported.
+
+### 2.22 — Five roles, the manager separate from the prosumers
+
+**Status.** Roles settled by Dan; the separation proposed.
+
+**Decision.** Market manager, market session, prosumer contract, lockable
+ERC-1155, settlement rule. The manager is its own contract, as in the thesis and
+BRIGHT.
+
+**Why the separation.** DEDALUS merges the manager into `Building`, because its
+market is a building community whose building is also a buyer. That hierarchy is
+not needed here (entry 2.30).
+
+### 2.23 — Orders in batches; each order names its slot and its price
+
+**Status.** Batching settled by Dan; per-order price proposed.
+
+**Decision.** The prosumer contract places a batch of orders in one call: up to
+the session's slot count, each order for one slot of the session, with its own
+quantity and limit price. A batch is all bids or all offers.
+
+**Why per-order price.** The thesis gives a day-ahead order one price; DEDALUS
+gives each hour its own, and an intraday strategy will want to price slots
+differently. One price for the batch is the special case of equal prices.
+
+**Consequence.** For the gate a batch is several legs, one per order, so the
+gate's limit of two legs per call is raised (entry 2.31).
+
+### 2.24 — Slots per session and slot length are parameters
+
+**Status.** Settled by Dan. Extends entry 2.2 and spec amendment A2.
+
+**Decision.** A session is configured with its first slot, its number of slots
+and the slot length. 24 hourly slots is the starting case, a day-ahead market.
+A 6-hour intraday session, or 30-minute slots, is a configuration, not a code
+change.
+
+### 2.25 — Cancel and modify, until the session closes
+
+**Status.** Settled by Dan. New relative to both source projects.
+
+**Decision.** The prosumer contract can cancel an order or replace it with a new
+quantity, price or slot until the session's trading closes. A cancellation
+releases the order's collateral and burns an offer's unmatched energy tokens; a
+modification is a cancellation and a placement in one call.
+
+**Why.** Without cancellation there is no spoofing attack, and the cancellation
+quota S6 and the spec's modification tests would have nothing to act on.
+
+### 2.26 — Matching off chain, by a registered matcher
+
+**Status.** Settled by Dan.
+
+**Decision.** An off-chain service, linked to the chain through an oracle,
+reads the session's orders, matches them and registers the trades. Only the
+matcher address the manager registered may call `registerTrades`. A trade names
+the bid, the offer, the quantity and the price; an order can be matched by
+several trades, which is how partial fills arise.
+
+**Consequence.** The matcher is a trust anchor, like the sensors. It is listed
+with them in the security analysis.
+
+### 2.27 — Settlement by trusted sensors
+
+**Status.** Sensors settled by Dan; delivery from the sensor's own address
+proposed.
+
+**Decision.** Each prosumer has a sensor address, registered by the manager.
+Only that address submits monitored values. Settlement compares each slot's
+monitored value with the prosumer's commitment for that slot by
+`ClassicSettlement`: within 10% the collateral is released; beyond it the
+penalty, deviation × `realTimePrice`, goes to the manager.
+
+**Why not the owner.** In both source projects the prosumer owner submits the
+values. Here the owner is the smart account the agent acts through, so the
+agent would report its own deliveries.
+
+**The alternative.** Readings signed by the sensor and relayed by anyone, using
+the EIP-712 check already in this repository (`MeterReadings.sol`). Useful if a
+sensor cannot hold a funded key. Not built now.
+
+### 2.28 — Commitments per prosumer and slot
+
+**Status.** Settled by Dan.
+
+**Decision.** Each prosumer contract holds, per slot, the committed quantity
+bought and sold and their value, updated by every registered trade. Settlement
+reads them.
+
+### 2.29 — Every function that moves funds, tokens or commitments checks its caller
+
+**Status.** Proposed. The reason is in section 4 of the analysis.
+
+**Decision.** Each state-changing function of the port names who may call it:
+the manager's operator, the session, the matcher, the sensor or the prosumer's
+owner. The token moves funds and energy only for its owner or for the market
+contracts the owner approved.
+
+**Why.** Reading BRIGHT, several such functions are open to any caller: the
+energy token's transfer checks the sender's rights instead of the caller's,
+trades and commitments can be registered by anyone, and commitments pay out to
+an address the caller supplies. In this project the agent is an ordinary address
+and would call those functions directly, around the gate.
+
+### 2.30 — What is not ported
+
+**Status.** Settled by Dan.
+
+**Dropped.** Encryption, the Chainlink comparison, the VPP or community mode,
+behind-the-meter asset modelling, the building-and-apartment hierarchy, the
+ERC-721 token of BRIGHT. Each can return later; none is needed by the
+enforcement layer.
+
+### 2.31 — How the gate sees the ported market
+
+**Status.** Proposed.
+
+**Decision.**
+
+- The prosumer contract's owner is the prosumer's smart account. The agent
+  places, cancels and modifies through the gate, as calls from the account to
+  the prosumer contract.
+- A decoder for the prosumer contract reads a batch as one PLACE leg per order,
+  a cancellation as one CANCEL leg, a modification as a CANCEL leg and a PLACE
+  leg.
+- The gate's limit on legs per call becomes a parameter covering the largest
+  batch (the session's slot count) instead of two.
+- The session's closing time is the gate time: unmatched orders expire there.
+
+---
+
 ## Open decisions
 
 Waiting for Dan. None blocks step 2.
@@ -817,5 +979,6 @@ Waiting for Dan. None blocks step 2.
 | 5   | Is 16 the right bound on policies per account?                                                                                                                                                                              | 1.16                 | Revisit with gas in step 4                    |
 | 6   | Add a real owner validator to the tests, so "only the owner can make the account act" is asserted?                                                                                                                          | 1.18                 | Not planned before a deployment script exists |
 | 7   | D1: keep the bespoke gate, move to MetaMask's ERC-7710 framework, or authenticate the agent with a Smart Session? Decide before step 4, after the prototype checks | 1.20, spec D1, `docs/analysis/delegation-architecture.md` | Keep as built; decide before step 4 |
+| 8   | Market port: manager separate from the prosumers (2.22), a price per order in a batch (2.23), the sensor submitting from its own address (2.27), caller checks everywhere (2.29) | 2.22, 2.23, 2.27, 2.29, `docs/analysis/market-structure.md` | As proposed |
 
 

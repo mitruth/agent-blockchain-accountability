@@ -26,7 +26,7 @@ Read these in order.
 | `decisions/` | The design decision log, numbered by build step. Append-only: a reversal gets a new entry marked **Superseded**, never an edit | `design-decisions.md` |
 | `spec/` | Specifications. What a thing must do, written so an implementation can be checked against it | `policy-spec-v0.1.md` |
 | `plan/` | Where the work stands and what comes next | `roadmap.md` |
-| `analysis/` | Comparisons and studies that inform a decision, with sources | `delegation-architecture.md`: the gate against Smart Sessions, MetaMask's Delegation Framework and Coinbase Spend Permissions |
+| `analysis/` | Comparisons and studies that inform a decision, with sources | `delegation-architecture.md`: the gate against Smart Sessions, MetaMask's Delegation Framework and Coinbase Spend Permissions; `market-structure.md`: how Dan's P2P market is ported behind the gate |
 | `earlier-design/` | The project that came before this one: a rolling cap on daily energy spend, settled after the fact. Kept for reference, no longer maintained | Its guide, hands-on tour, decision log, spec, verifier notes and roadmap |
 
 Expected next, once the work reaches them: `security/` for the threat model and
