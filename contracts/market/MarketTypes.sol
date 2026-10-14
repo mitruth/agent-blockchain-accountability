@@ -22,13 +22,16 @@ library MarketTypes {
     /// @notice One market session: a run of delivery slots and the time its
     ///         trading closes. A day-ahead session is 24 hourly slots closing
     ///         before the first; an intraday session might be 6.
+    ///
+    /// Slots are numbered on one grid for the whole market: slot n starts at
+    /// n × the manager's slot length. A session names its first slot on that
+    /// grid and how many it covers.
     struct SessionConfig {
         EnergyType energyType;
-        uint40 firstSlotStart;
-        uint32 slotSeconds;
+        uint32 firstSlot;
         uint16 slotCount;
         /// @dev No order can be placed, cancelled or modified from this time
-        ///      on, and orders still unmatched expire.
+        ///      on. Matching happens after it.
         uint40 closesAt;
     }
 
@@ -42,11 +45,13 @@ library MarketTypes {
         uint64 price;
     }
 
+    /// @dev A fully matched order stays OPEN: what it can still do is read
+    ///      from `matched` and the session's state, not from the status.
     enum OrderStatus {
         NONE,
         OPEN,
         CANCELLED,
-        CLOSED
+        EXPIRED
     }
 
     /// @notice An order as the session holds it.
@@ -62,7 +67,8 @@ library MarketTypes {
         OrderStatus status;
         address prosumer;
         address account;
-        uint16 slot;
+        /// @dev On the market's grid, not within the session.
+        uint32 slot;
         uint64 quantity;
         uint64 price;
         uint64 matched;
@@ -79,8 +85,16 @@ library MarketTypes {
         uint64 price;
     }
 
-    /// @notice quantityWh at pricePerKWh, rounded up.
-    function value(uint64 quantityWh, uint64 pricePerKWh) internal pure returns (uint256) {
-        return (uint256(quantityWh) * pricePerKWh + 999) / 1000;
+    /// @notice quantityWh at pricePerKWh, rounded up. For collateral and every
+    ///         cap quantity (spec D12).
+    function value(uint256 quantityWh, uint256 pricePerKWh) internal pure returns (uint256) {
+        return (quantityWh * pricePerKWh + 999) / 1000;
+    }
+
+    /// @notice quantityWh at pricePerKWh, rounded down. For payments out of
+    ///         collateral, so that a run of partial payments can never add up to
+    ///         more than the collateral locked for them.
+    function valueDown(uint256 quantityWh, uint256 pricePerKWh) internal pure returns (uint256) {
+        return (quantityWh * pricePerKWh) / 1000;
     }
 }

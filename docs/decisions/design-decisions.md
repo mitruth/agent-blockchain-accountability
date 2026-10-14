@@ -1074,6 +1074,148 @@ order is over; the clock does not.
 (the target-slot horizon A6, the near-gate weighting of S6), but the ledger no
 longer reads it.
 
+### 2.41 — The slot length belongs to the market, not to a session
+
+**Status.** Proposed. Refines entry 2.24.
+
+**Decision.** `MarketManager` takes the slot length at deployment. Slot n
+starts at n × slot length, on one grid for the whole market. A session is its
+energy type, its first slot on that grid, its number of slots (1 to 96) and the
+time its trading closes, which must be in the future and no later than the start
+of its first slot.
+
+**Why.** The position ledger keys positions by slot. With one grid, a slot
+number means one interval of time whichever session it came from; with a slot
+length per session, two sessions could give the same number to different
+intervals. A 24-slot day-ahead session and a 6-slot intraday one are both a
+first slot and a count.
+
+### 2.42 — Collateral rounds up; payments out of it round down
+
+**Status.** Proposed.
+
+**Decision.** Collateral is quantity × price rounded up (spec D12). A payment
+from collateral to a seller, and the value booked on a commitment, round down.
+
+**Why.** A bid can be matched by several partial trades. Rounded up, their
+payments could add up to a few units more than the bid locked, and the last
+trade would fail. Rounded down, they can never exceed it: the sum of the parts
+is at most the whole, which is at most the whole rounded up. The seller loses
+less than one smallest unit per trade.
+
+### 2.43 — A trade must respect both limit prices; an account cannot trade with itself
+
+**Status.** Proposed. Closes a gap in both source projects.
+
+**Decision.** `registerTrades` refuses a trade above the bid's limit or below
+the offer's, a trade between two orders of the same account, a trade across
+slots, a trade beyond either order's open quantity, and a trade on an order that
+is not open. Buyer, seller, slot and energy token are read from the stored
+orders; the matcher supplies only the two order ids, a quantity and a price.
+
+**Why.** Neither source checked the limits, and BRIGHT took the payment
+addresses from the trade the caller supplied (analysis, section 4). The matcher
+is trusted to match well, not trusted with where money goes.
+
+### 2.44 — Orders expire one at a time, after finalisation
+
+**Status.** Proposed. Changes the source's end-of-session loop.
+
+**Decision.** After trading closes the matcher registers trades, then calls
+`finalise`; the operator may finalise instead if the matcher never does. From
+then on every order with an unmatched remainder has expired, and anyone may call
+`expire(order)` to release its collateral and burn an offer's unmatched energy.
+
+**Why.** Both source projects refunded and burned in one loop over every order
+at the end of the session. That loop's cost grows with the number of orders,
+which participants control. One order per call keeps every call bounded. The
+ledger already treats expiry as the market's word (entry 2.40), so it needs no
+one to have called `expire`.
+
+### 2.45 — Order ids are unique across sessions
+
+**Status.** Proposed.
+
+**Decision.** An order's id is the hash of its session's address and its
+number in the session.
+
+**Why.** The position ledger keys orders by prosumer contract and id. A
+running number per session would repeat across sessions.
+
+### 2.46 — Settlement compares measured net export with committed net export
+
+**Status.** Proposed. **Open:** it departs from the thesis, which measures
+flexibility against a baseline. Listed as open decision 9.
+
+**Decision.** For one slot, committed net export is sold − bought; measured net
+export is exported − imported, as the sensor reports. `ClassicSettlement` prices
+the difference: nothing within 10% of the committed net, the whole deviation at
+the real-time price beyond it. The penalty is paid to the manager from the
+slot's delivery collateral first, then from the owner's unlocked balance as far
+as the allowance reaches; the rest is reported as a shortfall, never a revert.
+Remaining collateral is released.
+
+**Why not the baseline.** In BRIGHT the prosumer sets its own baseline
+(`setBaseline`), and flexibility is measured against it. Here the prosumer
+contract is driven by the agent, so a self-set baseline could be chosen to make
+any delivery look compliant. Measured net export needs no baseline. If the
+baseline formulation is wanted, the baseline has to come from the operator or a
+signed forecast, not from the prosumer.
+
+**Why no revert.** A settlement that reverts when the penalty cannot be
+collected would let a prosumer escape settlement by withdrawing its allowance.
+
+### 2.47 — The collateral model of the source projects
+
+**Status.** Settled in substance by the source; details proposed.
+
+**Decision.**
+
+- A bid locks quantity × its limit price. A match pays the seller at the trade
+  price out of it. When the bid is fully matched, what the limit over-reserved
+  comes back at once; otherwise at expiry or cancellation.
+- An offer locks quantity × the real-time price, a delivery guarantee. The
+  matched part's share moves to the slot's commitment and is held until
+  settlement; the rest comes back at expiry or cancellation.
+
+This is DEDALUS's model (bids at their price, offers at the real-time price).
+BRIGHT locked both sides at the real-time price.
+
+### 2.48 — Tokens stay in the owner's account
+
+**Status.** Proposed.
+
+**Decision.** Payment and energy tokens are held by the prosumer's smart
+account, as both source projects hold them with the prosumer's owner. Once, on
+the owner path, the account grants its prosumer contract a payment allowance
+(to lock collateral) and approval over its tokens (to deliver and burn energy).
+
+**Consequence.** The account must accept ERC-1155 tokens. Real ERC-7579
+accounts do so through a fallback handler; the test account `MiniAccount` now
+implements the two receiver hooks.
+
+### 2.49 — The prosumer contract places orders in the session directly
+
+**Status.** Proposed.
+
+**Decision.** The prosumer contract calls the current session itself; the
+session asks the manager whether the caller is a registered prosumer and who its
+account is.
+
+**Why.** BRIGHT routed every order through the manager, DEDALUS through
+`Building`. The check the manager performed (is this prosumer registered) is
+kept; the extra hop is not.
+
+### 2.50 — Bounds on a session
+
+**Status.** Proposed. The numbers are placeholders.
+
+**Decision.** At most 96 slots per session (two days of half-hours) and 2048
+orders per session.
+
+**Why.** The matcher reads the session's order lists in one call; both bounds
+keep every call of the session bounded.
+
 ---
 
 ## Open decisions
@@ -1091,5 +1233,6 @@ Waiting for Dan. None blocks step 2.
 | 6   | Add a real owner validator to the tests, so "only the owner can make the account act" is asserted?                                                                                                                          | 1.18                 | Not planned before a deployment script exists |
 | 7   | D1: keep the bespoke gate, move to MetaMask's ERC-7710 framework, or authenticate the agent with a Smart Session? Decide before step 4, after the prototype checks | 1.20, spec D1, `docs/analysis/delegation-architecture.md` | Keep as built; decide before step 4 |
 | 8   | Market port: manager separate from the prosumers (2.22), a price per order in a batch (2.23), the sensor submitting from its own address (2.27), caller checks everywhere (2.29) | 2.22, 2.23, 2.27, 2.29, `docs/analysis/market-structure.md` | As proposed |
+| 9   | Settlement basis: measured net export against committed net export (as built), or flexibility against a baseline (thesis), with the baseline set by the operator or a signed forecast | 2.46 | Net export, as built |
 
 
