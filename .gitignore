@@ -4,7 +4,7 @@ cache/
 out/
 cache_forge/
 
-# Written by scripts/demo/deploy.js for the local node; regenerated each deploy.
+# Written by offchain/deploy for the local node; regenerated each deploy.
 deployments/
 
 # Secrets. PRIVATE_KEY, GROQ_API_KEY and deployed addresses live here.

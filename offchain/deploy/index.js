@@ -1,20 +1,15 @@
-// Deploy the whole system on the local Hardhat node and write
-// deployments/local.json: the market, the gate, and one smart account and
-// prosumer contract per prosumer in scripts/demo/prosumers.json.
-//
-//   npx hardhat node                 (in another terminal)
-//   npm run demo:deploy
+// deploy: the whole system on the local node, written to deployments/local.json.
+// The market, the gate, and one smart account and prosumer contract per
+// prosumer in prosumers.json.
 //
 // No database: every address is written to deployments/local.json, and every
 // link between them is also on chain (MarketManager.prosumerOf(account),
 // Prosumer.owner(), PolicyGate.agentValidUntil(account, agent)).
 
 import fs from "node:fs";
-import path from "node:path";
-import { parseUnits } from "viem";
-import { ROOT, key, deploy, send, read, selector, calldata as encode, now, saveDeployment, EUR, eur } from "./lib.js";
+import { key, deploy, send, read, selector, calldata as encode, now, saveDeployment, price, EUR, eur } from "../chain/index.js";
 
-const config = JSON.parse(fs.readFileSync(path.join(ROOT, "scripts", "demo", "prosumers.json"), "utf8"));
+export const DEFAULT_CONFIG = new URL("./prosumers.json", import.meta.url);
 
 // Key indexes of the public test mnemonic. Prosumers take three each from 3 on.
 const OPERATOR = 0;
@@ -28,25 +23,30 @@ function rolesOf(i) {
   return { owner: base, sensor: base + 1, agent: base + 2 };
 }
 
-async function main() {
-  console.log("Deploying to the local Hardhat node\n");
+export function loadConfig(file = DEFAULT_CONFIG) {
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+/** Deploy everything in `config`, write deployments/local.json, and return what was written. */
+export async function deploySystem(config = loadConfig(), { log = console.log } = {}) {
+  log("Deploying to the local Hardhat node\n");
 
   // --- the market --------------------------------------------------------
-  const realTimePrice = parseUnits(config.realTimePricePerKWh, 6);
+  const realTimePrice = price(config.realTimePricePerKWh);
   const token = await deploy(OPERATOR, "LockableERC1155", ["ENERGY_MARKET", ""]);
   const rule = await deploy(OPERATOR, "ClassicSettlement");
   const manager = await deploy(OPERATOR, "MarketManager", [token, config.slotSeconds, realTimePrice, rule]);
   await send(OPERATOR, token, "LockableERC1155", "setRegistrar", [manager]);
   await send(OPERATOR, manager, "MarketManager", "setMatcher", [key(MATCHER).address]);
-  console.log(`market      manager ${manager}`);
-  console.log(`            token   ${token}`);
-  console.log(`            slots of ${config.slotSeconds} s, real-time price ${eur(realTimePrice)} per kWh`);
+  log(`market      manager ${manager}`);
+  log(`            token   ${token}`);
+  log(`            slots of ${config.slotSeconds} s, real-time price ${eur(realTimePrice)} per kWh`);
 
   // --- the enforcement layer -----------------------------------------------
   const ledger = await deploy(OPERATOR, "PositionLedger");
   const gate = await deploy(OPERATOR, "PolicyGate", [ledger, BigInt(config.maxLegs)]);
   const decoder = await deploy(OPERATOR, "ProsumerDecoder");
-  console.log(`gate        ${gate}  (ledger ${ledger}, decoder ${decoder})\n`);
+  log(`gate        ${gate}  (ledger ${ledger}, decoder ${decoder})\n`);
 
   const orderFunctions = ["placeBids", "placeOffers", "cancelOrder", "modifyOrder"].map((f) =>
     selector("Prosumer", f),
@@ -97,14 +97,14 @@ async function main() {
 
     prosumers[p.name] = entry;
     const linked = await read(manager, "MarketManager", "prosumerOf", [account]);
-    console.log(
+    log(
       `${p.name.padEnd(11)} account ${account}  prosumer ${prosumer}` +
         (p.agent ? `  agent ${entry.agent.address}` : "  (no agent)"),
     );
     if (linked.toLowerCase() !== prosumer.toLowerCase()) throw new Error(`prosumerOf(${p.name}) does not point at its prosumer contract`);
   }
 
-  saveDeployment({
+  const deployment = {
     network: "hardhat-local",
     chainId: 31337,
     deployedAt: new Date().toISOString(),
@@ -117,12 +117,8 @@ async function main() {
       keeper: { address: key(KEEPER).address, keyIndex: KEEPER },
     },
     prosumers,
-  });
-  console.log("\nWritten: deployments/local.json");
+  };
+  saveDeployment(deployment);
+  log("\nWritten: deployments/local.json");
+  return deployment;
 }
-
-
-main().catch((error) => {
-  console.error(error.shortMessage ?? error.message ?? error);
-  process.exit(1);
-});

@@ -401,21 +401,31 @@ configuration.
 | `MarketTypes.sol` | Session configuration, order requests, orders, trades, valuation |
 | `ProsumerDecoder.sol` | The gate's adapter to `Prosumer`: calls as legs, fills and expiry from the sessions |
 
-### `contracts/demo/`
+### `contracts/harness/`: stand-ins, not part of the system
 
 | File | What it is |
 | ---- | ---------- |
 | `MiniAccount.sol` | The smallest account that behaves like an ERC-7579 account where the gate needs it. For tests and the local system only: it stands in for a real account (Safe7579, Nexus, Kernel) and validates no signatures of its own |
 
-### `scripts/demo/`: the system on a local node
+### `offchain/`: the programs around the contracts
 
-| File | What it does |
-| ---- | ------------ |
-| `prosumers.json` | Who takes part: each prosumer's name, whether an agent trades for it, its starting funds; and the slot length, real-time price, leg limit and agent validity |
-| `deploy.js` | Deploys the market and the gate, then one smart account and prosumer contract per prosumer; registers them, funds them, sets every approval, installs the gate and registers the agent where there is one. Writes `deployments/local.json` |
-| `matcher.js` | The off-chain matching service. `matchOrders` is the rule, a pure function you can replace; `runMatcher` reads a closed session, registers the trades and finalises it |
-| `flow.js` | One market day, from opening the session to settlement, printing each stage |
-| `lib.js` | Connection to the node, test keys by index, compiled contracts, transactions that report the contract's own error when they revert |
+All JavaScript, with viem. Each folder is one package with one job; its
+`index.js` is what the others import, and a `cli.js`, where there is one, is
+what `npm run` starts. Packages depend on `chain/` and on nothing else, except
+`scenarios/`, which uses them all.
+
+| Package | What it does | Started by |
+| ------- | ------------ | ---------- |
+| `chain/` | The connection to the local node, the test keys by index, the compiled contracts (deploy, send, read), transactions that report the contract's own error when they revert, the node's clock, `deployments/local.json`, and the units Wh and EUR | imported by every other package |
+| `deploy/` | Deploys the market and the gate, then one smart account and prosumer contract per prosumer in `prosumers.json`; registers them, funds them, sets every approval, installs the gate and registers the agent where there is one. Writes `deployments/local.json` | `npm run demo:deploy` |
+| `matcher/` | The matching service. `rule.js` is the rule, a pure function you can replace; `index.js` reads a closed session, registers the trades and finalises it | `npm run demo:match`, or a scenario |
+| `keeper/` | Expires the orders a finalised session left unmatched and reconciles the gate's ledger. Anyone may do both | a scenario |
+| `sensor/` | A prosumer's meter reporting what it measured in a slot, which settles that slot. Where a real meter feed would be connected | a scenario |
+| `scenarios/` | `day-ahead.js`, one market day from opening the session to settlement; `calendar.js`, the Brussels clock and the day-ahead closing time | `npm run demo:flow` |
+
+`prosumers.json` says who takes part: each prosumer's name, whether an agent
+trades for it, its starting funds; and the slot length, real-time price, leg
+limit and agent validity.
 
 ### `contracts/interfaces/`
 
@@ -425,7 +435,6 @@ configuration.
 | `IERC7579.sol`                  | The two pieces of the ERC-7579 standard the gate needs: the module hooks and `executeFromExecutor`. Declared locally so the gate imports no external library |
 | `IOrderDecoder.sol`             | The adapter to one market: `decode` into legs, `placedOrderIds`, `fillState`, `gateTime`. One decoder per approved market contract |
 | `IPolicy.sol`                   | The configuration side of a policy: `classifyConfig`, `configure`, `deconfigure`. The order-checking side arrives in step 4                                  |
-| `IModule.sol`, `IValidator.sol` | Earlier design                                                                                                                                               |
 
 
 
@@ -440,14 +449,14 @@ configuration.
 | `gate/OrderLifecycle.t.sol`         | 26                                     | Hardhat and Foundry |
 | `gate/PositionLedger.t.sol`         | 8                                      | Hardhat and Foundry |
 | `market/LockableERC1155.t.sol`      | 23                                     | Hardhat and Foundry |
-| `market/MarketFlow.t.sol`           | 40                                     | Hardhat and Foundry |
+| `market/MarketFlow.t.sol`           | 41                                     | Hardhat and Foundry |
 | `market/GatedMarket.t.sol`          | 12                                     | Hardhat and Foundry |
 | `market/ClassicSettlement.t.sol`    | 6                                      | Hardhat and Foundry |
 | `market/MarketFixture.sol`          | Shared setup for the market tests |                     |
 | `accounts/PolicyGateAccounts.t.sol` | 4                                      | Foundry only        |
 | `gate/GateFixture.sol`              | Shared setup for `KeyModel` and `ConfigManager` |                     |
 | `gate/mocks/`                       | Test doubles, described in section 6   |                     |
-| `*.t.sol` at the top of `test/`     | 144, earlier design                    | Hardhat and Foundry |
+| `earlier-design/`                   | 144, earlier design                    | Hardhat and Foundry |
 
 
 
@@ -483,17 +492,19 @@ configuration.
 
 The project that came before this one enforced a rolling cap on daily energy
 spend, computed after the fact from meter readings and oracle prices. Its code
-is untouched and its tests still pass. It stays until step 4, when sequence
-policy S1 covers what it does, and is then removed.
+is unchanged apart from paths, and its tests still pass. Everything of it sits
+in folders named `earlier-design/`. It stays until step 4, when sequence policy
+S1 covers what it does, and is then removed.
 
 
-| What                                          | Where                                                                                                                                                                                  |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts                                     | `contracts/PolicyConfig.sol`, `SpendLedger.sol`, `SpendValidator.sol`, `SpendMath.sol`, `PriceOracle.sol`, `MeterReadings.sol`, `SmartAccount.sol`                                     |
-| Tests, 144                                    | `test/Authorization.t.sol`, `test/Enforcement.t.sol`, `test/Settlement.t.sol`, `test/Retention.t.sol`, `test/PriceOracle.t.sol`, `test/MeterReadings.t.sol`, `test/Differential.t.sol` |
-| Python verifier, 53 tests                     | `verifier/`                                                                                                                                                                            |
-| Chain against verifier on real simulator days | `differential/`                                                                                                                                                                        |
-| Daily records of the three simulator arms     | `records_B0.csv`, `records_B1.csv`, `records_B2.csv`                                                                                                                                   |
+| What                                          | Where                                   |
+| --------------------------------------------- | --------------------------------------- |
+| Contracts and their two interfaces            | `contracts/earlier-design/`             |
+| Tests, 144                                    | `test/earlier-design/`                  |
+| Python verifier, 53 tests                     | `earlier-design/verifier/`              |
+| Chain against verifier on real simulator days | `earlier-design/differential/`          |
+| Daily records of the three simulator arms     | `earlier-design/records/`               |
+| Key generators for its Base Sepolia roles     | `earlier-design/keys/`                  |
 
 
 Two pieces of it will be reused: the EIP-712 signature checking in
@@ -690,8 +701,8 @@ address. "Root validator belongs to the owner alone" is a property of how the
 account is deployed, and no test here asserts it.
 - **Anything about policies limiting orders.** No order is checked against a
 policy until step 4.
-- **Matching and metering, for real.** The matcher in `scripts/demo/` is a
-simple double auction, and the sensors report values the flow script makes up.
+- **Matching and metering, for real.** The matcher in `offchain/matcher/` is a
+simple double auction, and the sensors report values the day-ahead scenario makes up.
 No real meter is connected.
 - **The market on real accounts.** The market tests use `MiniAccount`; the
 real-account tests of `test/accounts/` do not yet trade.
@@ -811,7 +822,7 @@ What it does and prints, stage by stage:
    - **Alice's agent** sends 24 bids through the gate in one call (24 legs).
    - **Carol's agent** sends her midday offers and the rest of her day's bids.
    - **Bob** offers every hour himself, through his account, with no agent.
-   - The day's profiles are in `flow.js` (`profiles`) and in decision log entry
+   - The day's profiles are in `offchain/scenarios/day-ahead.js` (`profiles`) and in decision log entry
      2.58.
 3. **Alice's agent modifies her 19:00 bid.** This is two legs: a cancel, then a
    place.
@@ -855,11 +866,11 @@ Still runnable, and they still pass: 53 verifier tests, and the differential
 with 0 disagreements between chain and verifier.
 
 ```bash
-python -m unittest discover -s verifier -p "test_*.py"
+python -m unittest discover -s earlier-design/verifier -p "test_*.py"
 ```
 
 ```bash
-python differential/run_diff.py
+python earlier-design/differential/run_diff.py
 ```
 
 ---

@@ -6,11 +6,11 @@ third, deliberately plain computation of the same arithmetic -- not part of
 either implementation.
 
 usage:
-    python differential/show_day.py B2 19158
-    python differential/show_day.py B0 19200 --all     # print every half-hour, not only active ones
-    python differential/show_day.py B2 19349 --scenario B2atCap   # a scenario other than the default cap
+    python earlier-design/differential/show_day.py B2 19158
+    python earlier-design/differential/show_day.py B0 19200 --all     # print every half-hour, not only active ones
+    python earlier-design/differential/show_day.py B2 19349 --scenario B2atCap   # a scenario other than the default cap
 
-Needs differential/data/, which `python differential/run_diff.py` builds.
+Needs earlier-design/differential/data/, which `python earlier-design/differential/run_diff.py` builds.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ import io
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "differential" / "data"
+ROOT = Path(__file__).resolve().parents[2]
+DATA = ROOT / "earlier-design" / "differential" / "data"
 
 UNITS_PER_MILLI_USD = 10**11  # mWh x (1e-8 USD/kWh) = 1e-14 USD; 1 milli-USD = 1e11 of those
 
@@ -54,8 +54,8 @@ def main() -> int:
     prices = {int(r["slot"]): r for r in rows(DATA / "inputs" / "prices.csv", args.day)}
     if len(readings) != 48 or len(prices) != 48:
         raise SystemExit(
-            f"day {args.day} not found for {args.arm} in differential/data/inputs/ "
-            "(valid days are 18994..19357; run `python differential/run_diff.py` first)"
+            f"day {args.day} not found for {args.arm} in earlier-design/differential/data/inputs/ "
+            "(valid days are 18994..19357; run `python earlier-design/differential/run_diff.py` first)"
         )
 
     date = datetime.fromtimestamp(args.day * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
@@ -104,7 +104,7 @@ def main() -> int:
             print(f"{label:<26} {r['spendMilliUsd']:>8} {r['windowSum']:>13} {r['capInForce']:>8} "
                   f"{r['compliant']:>10} {r['authorisedNextDay']:>18}")
         else:
-            print(f"{label:<26} {'(not found -- run python differential/run_diff.py)':>8}")
+            print(f"{label:<26} {'(not found -- run python earlier-design/differential/run_diff.py)':>8}")
     print()
     return 0
 

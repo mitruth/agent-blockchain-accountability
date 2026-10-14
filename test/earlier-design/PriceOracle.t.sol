@@ -3,8 +3,8 @@ pragma solidity ^0.8.23;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {PriceOracle} from "../contracts/PriceOracle.sol";
-import {PolicyConfig} from "../contracts/PolicyConfig.sol";
+import {PriceOracle} from "../../contracts/earlier-design/PriceOracle.sol";
+import {PolicyConfig} from "../../contracts/earlier-design/PolicyConfig.sol";
 
 /// Stage A1: the price oracle.
 ///

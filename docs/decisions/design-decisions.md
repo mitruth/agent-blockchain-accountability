@@ -1389,6 +1389,57 @@ is dropped so that every hour keeps its orders.
 
 ---
 
+## Step 3. WindowLib, verifier, mutation suite
+
+Started 14 October 2026.
+
+### 3.1 — The repository is grouped by function; the earlier design moves aside
+
+**Status.** Settled by Dan ("organize the project better, create subfolders
+as packages, not all scripts in the same folder, group them by logic and
+function").
+
+**Decision.** Every file has a folder that says what it is for:
+
+| Was | Is now | Why |
+| --- | ------ | --- |
+| `scripts/demo/lib.js` | `offchain/chain/`, split into `client.js`, `contracts.js`, `time.js`, `deployment.js`, `units.js` | One concern per file; every package imports `chain/index.js` |
+| `scripts/demo/deploy.js`, `prosumers.json` | `offchain/deploy/` (`index.js` exports `deploySystem`, `cli.js` runs it) | Deployment is a function another program can call |
+| `scripts/demo/matcher.js` | `offchain/matcher/`: `rule.js` (the pure rule), `index.js` (the service), `cli.js` | The rule can be replaced without touching the service |
+| The keeper's and the sensors' code inside `flow.js` | `offchain/keeper/`, `offchain/sensor/` | They are roles of the system, not of one scenario |
+| `scripts/demo/flow.js` | `offchain/scenarios/day-ahead.js`, with `calendar.js` for the Brussels clock | A scenario only tells the story; the roles do the work |
+| `contracts/demo/MiniAccount.sol` | `contracts/harness/` | A stand-in, not part of the system; the window verifier's probe joins it |
+| The 7 earlier contracts at the top of `contracts/`, and `IModule`, `IValidator` | `contracts/earlier-design/` | Out of the way of the current system |
+| The 7 earlier test files at the top of `test/` | `test/earlier-design/` | Same |
+| `verifier/`, `differential/`, `records_B*.csv`, `scripts/keys/` | `earlier-design/verifier/`, `…/differential/`, `…/records/`, `…/keys/` | Same; the records' description moved from the root README to `earlier-design/records/README.md` |
+
+Each `offchain/` folder is a package in the sense of a module with one entry
+point, `index.js`; it is not a separate npm package. Packages import `chain/`
+and nothing else, except `scenarios/`, which uses them all. The `npm run`
+command names are unchanged.
+
+**Why not npm workspaces.** Each folder would need its own `package.json` and
+the root would link them into `node_modules`. That buys versioning and
+publishing, which nothing here needs.
+
+**What changed besides paths.**
+
+- The artifact lookup walks `artifacts/contracts/` instead of three named
+  folders, so a new contract folder needs no change in the scripts.
+- The earlier design's Python files compute the repository root two levels up
+  instead of one. Its Solidity differential test, both configs' file
+  permissions, and its runner's test paths point at
+  `earlier-design/differential/data`.
+
+**Checked.** The same 329 Hardhat tests pass. The earlier design's 53 Python
+verifier tests pass from the new folder. `demo:deploy` and `demo:flow` give
+the same day as before, figure for figure (entry 2.58).
+
+**Earlier entries keep their paths.** The entries above name files where they
+were when the decision was taken. This table maps them to where they are now.
+
+---
+
 ## Open decisions
 
 Waiting for Dan. None blocks step 2.

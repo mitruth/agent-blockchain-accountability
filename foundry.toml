@@ -9,7 +9,7 @@ evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
 # The differential replays real days and writes the chain's verdict there.
-fs_permissions = [{ access = "read-write", path = "differential/data" }]
+fs_permissions = [{ access = "read-write", path = "earlier-design/differential/data" }]
 # ModuleKit's import prefixes. Kept here rather than in remappings.txt because
 # Hardhat also reads that file and rejects two of these.
 remappings = [

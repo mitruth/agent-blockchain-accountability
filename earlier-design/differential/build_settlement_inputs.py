@@ -12,7 +12,7 @@ rounded half away from zero, once, the way a meter rounds to its resolution
 (D7.10). Prices are the same for every arm; the script checks that rather than
 assuming it.
 
-Outputs, under differential/data/inputs/ (regenerated, not committed):
+Outputs, under earlier-design/differential/data/inputs/ (regenerated, not committed):
 
   <arm>.days.hex        packed for the Solidity differential: per day,
                         uint64 dayIndex, then 48 x uint32 import, 48 x uint32
@@ -25,7 +25,7 @@ Outputs, under differential/data/inputs/ (regenerated, not committed):
                         quantisation; neither implementation reads it
 
 usage:
-    python differential/build_settlement_inputs.py [--hems-repo PATH] [--home home_01]
+    python earlier-design/differential/build_settlement_inputs.py [--hems-repo PATH] [--home home_01]
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "differential" / "data" / "inputs"
+ROOT = Path(__file__).resolve().parents[2]
+OUT = ROOT / "earlier-design" / "differential" / "data" / "inputs"
 ARMS = ("B0", "B1", "B2")
 SLOTS = 48
 UTC_OFFSET_HOURS = 8  # dataset clock treated as fixed UTC-8 (D7.7)

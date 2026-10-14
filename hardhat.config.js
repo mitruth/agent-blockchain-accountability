@@ -24,7 +24,7 @@ export default {
   test: {
     solidity: {
       fsPermissions: {
-        dangerouslyReadWriteDirectory: ["differential/data"],
+        dangerouslyReadWriteDirectory: ["earlier-design/differential/data"],
       },
     },
   },

@@ -3,12 +3,12 @@ pragma solidity ^0.8.23;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {PolicyConfig} from "../contracts/PolicyConfig.sol";
-import {SpendLedger} from "../contracts/SpendLedger.sol";
-import {SpendValidator} from "../contracts/SpendValidator.sol";
-import {SmartAccount} from "../contracts/SmartAccount.sol";
-import {PriceOracle} from "../contracts/PriceOracle.sol";
-import {MeterReadings} from "../contracts/MeterReadings.sol";
+import {PolicyConfig} from "../../contracts/earlier-design/PolicyConfig.sol";
+import {SpendLedger} from "../../contracts/earlier-design/SpendLedger.sol";
+import {SpendValidator} from "../../contracts/earlier-design/SpendValidator.sol";
+import {SmartAccount} from "../../contracts/earlier-design/SmartAccount.sol";
+import {PriceOracle} from "../../contracts/earlier-design/PriceOracle.sol";
+import {MeterReadings} from "../../contracts/earlier-design/MeterReadings.sol";
 
 /// Stage A4: record the measured day, then restrict the agent.
 ///

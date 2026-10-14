@@ -5,73 +5,42 @@ change. The prosumer's smart account checks every order before it reaches the
 market, through an ERC-7579 executor module, `PolicyGate`. The agent holds no
 key on the account.
 
-Step 1 of 6 is built: the gate, the key model and configuration. No policy
-checks an order yet.
+Built so far: the gate, the key model and configuration (step 1); the order
+lifecycle and the position ledger (step 2); a port of the P2P energy market the
+agent trades on; and the whole system running on a local node. No policy checks
+an order yet: that is step 4.
 
 **Documentation is in [`docs/`](docs/README.md).** Start with
 [`docs/guide/project-guide.md`](docs/guide/project-guide.md) for what the
 project contains today, what the tests prove and how to run everything.
 
----
+## Layout
 
-# Daily records from the HEMS simulation
+| Folder | What is in it |
+| ------ | ------------- |
+| `contracts/gate/` | `PolicyGate` and its parts, the `PositionLedger` |
+| `contracts/market/` | The P2P market: token, manager, sessions, prosumer contracts, settlement, the gate's decoder |
+| `contracts/interfaces/` | ERC-7579 pieces, the decoder and policy interfaces |
+| `contracts/harness/` | Stand-ins for tests and the local system, not part of the system |
+| `test/` | Solidity tests, one folder per contract folder; `test/accounts/` runs under Foundry only |
+| `offchain/` | The JavaScript around the contracts, one package per job: `chain`, `deploy`, `matcher`, `keeper`, `sensor`, `scenarios` |
+| `docs/` | Guide, specification, decision log, roadmap, analyses |
+| `earlier-design/`, and `contracts/earlier-design/`, `test/earlier-design/` | The project this one replaces, kept running until step 4 |
 
-The records below come from the home energy simulation that supplies the
-honest-agent arms. They were produced for the earlier design
-(`docs/earlier-design/`) and are kept as its test data and as the source for cap
-calibration.
+## Running it
 
-These CSVs are a compressed, integer-only view of one simulated year of home energy
-control for `home_01` (2022). Each file is one way of running the same house.
-
-One row is a summary of what that controller did for the house over one calendar day:
-how much it spent, how much it bought and sold, how hard it used the battery, how empty
-the battery got, and the peak grid draw. It is not the list of individual charge and
-discharge steps. Those live in the step log; this file keeps only the day's totals and
-extremes. Values are scaled to integers so a chain contract can store and compare them
-without floating point. Negative `spendMilliUsd` is real (the house was paid that day)
-and is not clipped.
-
-`**B0/records_B0.csv`.** A simple set of if-then rules. Charge when power is cheap or there
-is leftover solar. Discharge when power is expensive. It only looks at the current moment,
-not the rest of the day.
-
-`**B1/records_B1.csv`.** The cheapest the house can be if it already knew the whole day's
-sun, load, and prices. That is not realistic. It is the best-case year we measure the
-others against.
-
-`**B2/records_B2.csv`.** Same idea as planning the day in advance, but the house has to
-guess sun and load. It already knows prices. The guess is often wrong, so this year costs
-more than B1.
-
-365 rows plus a header. `dayIndex` runs from 0 (2022-01-01) to 364. Built from each arm's
-step log by `export_records.py`. Caps for a 7-day spend policy are printed by
-`calibrate_policy.py`. Both scripts, and the step logs, are in the sibling repository
-`Demo_PlanApplyEvaluate`, under its `scripts/` folder, not in this one.
-
-## Columns
-
-Every numeric field is an integer. Rounding is half away from zero, applied once per field
-per day.
-
-
-| Column          | Unit         | Meaning                                                           |
-| --------------- | ------------ | ----------------------------------------------------------------- |
-| `dayIndex`      | days         | Days since 2022-01-01                                             |
-| `agentId`       | hex          | `0x` + keccak256 of the ASCII string `home_01`. Same on every row |
-| `spendMilliUsd` | milli-USD    | Daily energy + degradation cost × 1000. Signed                    |
-| `exportWh`      | Wh           | Energy exported to the grid that day                              |
-| `importWh`      | Wh           | Energy imported from the grid that day                            |
-| `cyclesMilli`   | milli-cycles | Battery throughput that day, as thousandths of a full cycle       |
-| `minSocBps`     | basis points | Lowest battery state of charge that day. 10000 = full, 1000 = 10% |
-| `maxImportW`    | W            | Peak import power that day                                        |
-| `tasksMissed`   | count        | Flexible tasks that missed their deadline. 0 in these files       |
-
-
-Rebuild, from the root of `Demo_PlanApplyEvaluate`:
-
-```powershell
-python scripts\export_records.py
-python scripts\calibrate_policy.py
+```bash
+npm install
+npm test
 ```
 
+The local system, in two terminals:
+
+```bash
+npm run node
+```
+
+```bash
+npm run demo:deploy
+npm run demo:flow
+```

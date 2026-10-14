@@ -2,8 +2,8 @@
 pragma solidity ^0.8.23;
 
 import {Test} from "forge-std/Test.sol";
-import {MeterReadings} from "../contracts/MeterReadings.sol";
-import {PolicyConfig} from "../contracts/PolicyConfig.sol";
+import {MeterReadings} from "../../contracts/earlier-design/MeterReadings.sol";
+import {PolicyConfig} from "../../contracts/earlier-design/PolicyConfig.sol";
 
 /// Stage A2: the meter.
 ///

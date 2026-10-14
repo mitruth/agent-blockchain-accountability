@@ -1,57 +1,48 @@
-// Shared helpers for the local demo: one Hardhat node, test keys, the
-// compiled contracts, and transactions that explain their reverts.
-//
-// The node is `npx hardhat node`: chain 31337 at http://127.0.0.1:8545, with
-// accounts from Hardhat's public test mnemonic. Every role in the demo is one
-// of those accounts, by index. Never use these keys anywhere real.
+// The compiled contracts, and transactions that explain their reverts.
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
-  createPublicClient,
-  createWalletClient,
-  http,
   parseEventLogs,
   toFunctionSelector,
   getAbiItem,
   encodeFunctionData,
   decodeErrorResult,
 } from "viem";
-import { hardhat } from "viem/chains";
-import { mnemonicToAccount } from "viem/accounts";
+import { publicClient, key, wallet } from "./client.js";
+import { ROOT } from "./paths.js";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const ROOT = path.resolve(HERE, "..", "..");
-export const DEPLOYMENT_FILE = path.join(ROOT, "deployments", "local.json");
+const ARTIFACTS = path.join(ROOT, "artifacts", "contracts");
 
-const MNEMONIC = "test test test test test test test test test test test junk";
-const RPC = process.env.RPC_URL ?? "http://127.0.0.1:8545";
+// Contract name → artifact file, found once by walking artifacts/contracts.
+let artifactIndex = null;
 
-export const publicClient = createPublicClient({ chain: hardhat, transport: http(RPC) });
-
-const wallets = new Map();
-
-/** The test account at `index` of the public mnemonic. */
-export function key(index) {
-  return mnemonicToAccount(MNEMONIC, { addressIndex: index });
-}
-
-function wallet(index) {
-  if (!wallets.has(index)) {
-    wallets.set(index, createWalletClient({ account: key(index), chain: hardhat, transport: http(RPC) }));
-  }
-  return wallets.get(index);
+function indexArtifacts() {
+  const index = new Map();
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (!entry.isDirectory()) continue;
+      if (entry.name.endsWith(".sol")) {
+        const name = entry.name.slice(0, -4);
+        const file = path.join(full, `${name}.json`);
+        if (fs.existsSync(file)) index.set(name, index.has(name) ? null : file); // null: ambiguous
+      } else {
+        walk(full);
+      }
+    }
+  };
+  if (fs.existsSync(ARTIFACTS)) walk(ARTIFACTS);
+  return index;
 }
 
 /** ABI and bytecode of a contract, from `npx hardhat build --no-tests`. */
 export function artifact(name) {
-  const dirs = ["market", "gate", "demo"];
-  for (const dir of dirs) {
-    const file = path.join(ROOT, "artifacts", "contracts", dir, `${name}.sol`, `${name}.json`);
-    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, "utf8"));
-  }
-  throw new Error(`No artifact for ${name}. Run: npx hardhat build --no-tests`);
+  artifactIndex ??= indexArtifacts();
+  const file = artifactIndex.get(name);
+  if (file === null) throw new Error(`Two contracts are named ${name}; the artifact is ambiguous`);
+  if (!file) throw new Error(`No artifact for ${name}. Run: npx hardhat build --no-tests`);
+  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 const abiCache = new Map();
@@ -97,7 +88,7 @@ export async function send(from, address, contract, functionName, args = []) {
 // account, the prosumer contract, the session, the token. Try every ABI.
 const EVERY_CONTRACT = [
   "PolicyGate", "PositionLedger", "MiniAccount", "Prosumer", "MarketSession",
-  "MarketManager", "LockableERC1155", "ProsumerDecoder",
+  "MarketManager", "LockableERC1155", "ProsumerDecoder", "WindowProbe",
 ];
 
 function revertData(error) {
@@ -109,6 +100,7 @@ function revertData(error) {
   return null;
 }
 
+/** The contract's own error for a failed call, decoded against every ABI of the project. */
 export function explain(error) {
   const data = revertData(error);
   if (data) {
@@ -138,48 +130,4 @@ export function selector(contract, functionName) {
 /** Events of `contract` in a receipt. */
 export function events(receipt, contract, eventName) {
   return parseEventLogs({ abi: abi(contract), logs: receipt.logs, eventName });
-}
-
-// --- time -------------------------------------------------------------------
-
-export async function now() {
-  const block = await publicClient.getBlock();
-  return Number(block.timestamp);
-}
-
-/** Move the chain to `timestamp` (seconds) and mine a block there. */
-export async function warpTo(timestamp) {
-  const current = await now();
-  if (timestamp > current) {
-    await publicClient.request({ method: "evm_setNextBlockTimestamp", params: [timestamp] });
-  }
-  await publicClient.request({ method: "evm_mine", params: [] });
-}
-
-// --- deployment file ---------------------------------------------------------
-
-export function saveDeployment(data) {
-  fs.mkdirSync(path.dirname(DEPLOYMENT_FILE), { recursive: true });
-  fs.writeFileSync(DEPLOYMENT_FILE, JSON.stringify(data, null, 2) + "\n");
-}
-
-export function loadDeployment() {
-  if (!fs.existsSync(DEPLOYMENT_FILE)) throw new Error("No deployment. Run: npm run demo:deploy");
-  return JSON.parse(fs.readFileSync(DEPLOYMENT_FILE, "utf8"));
-}
-
-// --- units -------------------------------------------------------------------
-
-/** The payment token has 6 decimals: 1 EUR = 1,000,000 units. */
-export const EUR = 1_000_000n;
-
-export function eur(units) {
-  const n = BigInt(units);
-  const sign = n < 0n ? "-" : "";
-  const a = n < 0n ? -n : n;
-  return `${sign}${a / EUR}.${(a % EUR).toString().padStart(6, "0")} EUR`;
-}
-
-export function kWh(wh) {
-  return `${(Number(wh) / 1000).toFixed(3)} kWh`;
 }

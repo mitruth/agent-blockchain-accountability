@@ -1,7 +1,7 @@
 // One day of the market on the local node, from order placement to settlement
 // (thesis figure 3.3), with agents trading through PolicyGate.
 //
-//   npx hardhat node                 (in another terminal)
+//   npm run node                     (in another terminal)
 //   npm run demo:deploy
 //   npm run demo:flow
 //
@@ -19,14 +19,13 @@
 //
 // Run it again for another day: each run opens the next session.
 
-import { parseUnits } from "viem";
-import { loadDeployment, send, read, calldata, events, now, warpTo, eur, kWh } from "./lib.js";
-import { runMatcher } from "./matcher.js";
+import { loadDeployment, send, read, calldata, events, now, warpTo, price, eur, kWh } from "../chain/index.js";
+import { runMatcher } from "../matcher/index.js";
+import { expireUnmatched, reconcile } from "../keeper/index.js";
+import { commitmentOf, report } from "../sensor/index.js";
+import { wallClock, nextDayAhead, label, hhmm } from "./calendar.js";
 
 const ELECTRICITY = 0;
-const OPEN = 1;
-const TZ = "Europe/Brussels";
-const price = (s) => parseUnits(s, 6);
 const step = (n, text) => console.log(`\n── ${n}. ${text} ${"─".repeat(Math.max(0, 66 - text.length))}`);
 
 const d = loadDeployment();
@@ -35,45 +34,10 @@ const P = d.prosumers;
 const SLOT = d.slotSeconds;
 const nameOf = Object.fromEntries(Object.entries(P).map(([name, p]) => [p.account.toLowerCase(), name]));
 
-// --- Brussels time ------------------------------------------------------------
-
-function wallClock(seconds) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TZ, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  }).formatToParts(new Date(seconds * 1000));
-  const v = Object.fromEntries(parts.map((p) => [p.type, Number(p.value)]));
-  return { y: v.year, m: v.month, d: v.day, h: v.hour, min: v.minute };
-}
-
-/** UTC seconds of y-m-d h:00 on the Brussels wall clock (CET or CEST). */
-function brussels(day, hour) {
-  const naive = Date.UTC(day.y, day.m - 1, day.d, hour) / 1000;
-  let t = naive - 3600;
-  for (let i = 0; i < 3; i++) {
-    const w = wallClock(t);
-    t += naive - Date.UTC(w.y, w.m - 1, w.d, w.h, w.min) / 1000;
-  }
-  return t;
-}
-
-function addDays(day, n) {
-  const x = new Date(Date.UTC(day.y, day.m - 1, day.d + n));
-  return { y: x.getUTCFullYear(), m: x.getUTCMonth() + 1, d: x.getUTCDate() };
-}
-
-const label = (seconds) =>
-  new Intl.DateTimeFormat("en-GB", {
-    timeZone: TZ, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short",
-  }).format(new Date(seconds * 1000));
-const hhmm = (seconds) =>
-  new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(
-    new Date(seconds * 1000),
-  );
-
 // --- the prosumers' days ----------------------------------------------------
 //
 // Each returns, for an hour of the Brussels day, the order that prosumer
-// places: [side, Wh, EUR per kWh], or null.
+// places: [side, Wh, EUR per kWh].
 
 const profiles = {
   // A household: buys every hour, more at the morning and evening peaks, and
@@ -118,16 +82,7 @@ async function main() {
   // ── 1 ───────────────────────────────────────────────────────────────────
   step(1, "The operator opens the day-ahead session");
   const t = await now();
-  let day = addDays(wallClock(t), 1);
-  let closesAt = brussels(addDays(day, -1), 12);
-  if (closesAt <= t) {
-    day = addDays(day, 1);
-    closesAt = brussels(addDays(day, -1), 12);
-  }
-  const start = brussels(day, 0);
-  const end = brussels(addDays(day, 1), 0);
-  const firstSlot = start / SLOT;
-  const slotCount = (end - start) / SLOT; // 24, or 23 / 25 on a clock-change day
+  const { start, end, closesAt, firstSlot, slotCount } = nextDayAhead(t, SLOT);
   const slotStart = (i) => (firstSlot + i) * SLOT;
 
   await send(d.roles.operator.keyIndex, manager, "MarketManager", "openSession", [
@@ -201,37 +156,20 @@ async function main() {
     );
   }
   for (let i = 0; i < slotCount; i++) {
-    const s = firstSlot + i;
-    console.log(`  ${hhmm(slotStart(i))}  ${(bySlot.get(s) ?? ["no trade"]).join(";  ")}`);
+    console.log(`  ${hhmm(slotStart(i))}  ${(bySlot.get(firstSlot + i) ?? ["no trade"]).join(";  ")}`);
   }
 
   // ── 6 ───────────────────────────────────────────────────────────────────
   step(6, "A keeper expires the rest and reconciles the ledger");
-  const keeper = d.roles.keeper.keyIndex;
-  const allIds = [
-    ...(await read(session, "MarketSession", "bidIds")),
-    ...(await read(session, "MarketSession", "offerIds")),
-  ];
-  let expired = 0;
-  for (const id of allIds) {
-    const o = await read(session, "MarketSession", "orderOf", [id]);
-    if (o.status === OPEN && o.matched < o.quantity) {
-      await send(keeper, session, "MarketSession", "expire", [id]);
-      expired++;
-    }
-  }
-  console.log(`  expired ${expired} orders with an unmatched remainder`);
+  console.log(`  expired ${await expireUnmatched(d, session)} orders with an unmatched remainder`);
 
   for (const name of Object.keys(P).filter((n) => P[n].agent)) {
     const p = P[name];
-    for (const id of allIds) {
-      const rec = await read(ledger, "PositionLedger", "recordOf", [p.account, p.prosumer, id]);
-      if (rec.status === OPEN) await send(keeper, gate, "PolicyGate", "reconcile", [p.account, p.prosumer, id]);
-    }
+    await reconcile(d, session, name);
     let agree = 0;
     let differ = 0;
     for (let i = 0; i < slotCount; i++) {
-      const c = await read(p.prosumer, "Prosumer", "commitmentOf", [firstSlot + i]);
+      const c = await commitmentOf(d, name, firstSlot + i);
       const pos = await read(ledger, "PositionLedger", "positionOf", [p.account, firstSlot + i]);
       if (pos.clearedBuyWh === c.boughtWh && pos.clearedSellWh === c.soldWh) agree++;
       else differ++;
@@ -249,33 +187,31 @@ async function main() {
   // Measured, as a share of the commitment: Bob's battery falls short at
   // 19:00, by more than 10%; otherwise he delivers 95% and everyone else 100%.
   const delivered = (name, h) => (name === "bob" ? (h === 19 ? 80n : 95n) : 100n);
-  const day_ = {};
-  for (const name of Object.keys(P)) day_[name] = { bought: 0n, sold: 0n, paid: 0n, received: 0n, penalty: 0n, settled: 0 };
+  const tally = {};
+  for (const name of Object.keys(P)) tally[name] = { bought: 0n, sold: 0n, paid: 0n, received: 0n, penalty: 0n, settled: 0 };
   for (let i = 0; i < slotCount; i++) {
     const h = wallClock(slotStart(i)).h;
     for (const name of Object.keys(P)) {
-      const p = P[name];
-      const c = await read(p.prosumer, "Prosumer", "commitmentOf", [firstSlot + i]);
+      const c = await commitmentOf(d, name, firstSlot + i);
       if (c.boughtWh === 0n && c.soldWh === 0n) continue;
       const net = c.soldWh - c.boughtWh;
       const share = delivered(name, h);
       const exported = net > 0n ? (net * share) / 100n : 0n;
       const imported = net < 0n ? (-net * share) / 100n : 0n;
-      const receipt = await send(p.sensor.keyIndex, p.prosumer, "Prosumer", "settle", [firstSlot + i, exported, imported]);
-      const s = events(receipt, "Prosumer", "Settled")[0].args;
-      const tally = day_[name];
-      tally.bought += c.boughtWh;
-      tally.sold += c.soldWh;
-      tally.paid += c.paid;
-      tally.received += c.received;
-      tally.penalty += s.penalty;
-      tally.settled++;
+      const s = await report(d, name, firstSlot + i, exported, imported);
+      const x = tally[name];
+      x.bought += c.boughtWh;
+      x.sold += c.soldWh;
+      x.paid += c.paid;
+      x.received += c.received;
+      x.penalty += s.penalty;
+      x.settled++;
       if (s.penalty > 0n) {
         console.log(`  ${hhmm(slotStart(i))} ${name}: committed ${kWh(net)}, measured ${kWh(exported - imported)} → penalty ${eur(s.penalty)}`);
       }
     }
   }
-  for (const [name, x] of Object.entries(day_)) {
+  for (const [name, x] of Object.entries(tally)) {
     console.log(
       `  ${name.padEnd(6)} ${String(x.settled).padStart(2)} hours settled: bought ${kWh(x.bought)} for ${eur(x.paid)},` +
         ` sold ${kWh(x.sold)} for ${eur(x.received)}, penalties ${eur(x.penalty)}`,

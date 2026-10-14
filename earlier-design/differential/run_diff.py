@@ -18,8 +18,8 @@ is at least as likely to mean the two sides share an assumption as that both
 are right. Read docs/earlier-design/verifier-implementation-notes.md alongside it.
 
 usage:
-    python differential/run_diff.py                # build inputs if missing, run chain, compare
-    python differential/run_diff.py --skip-chain   # reuse differential/data/chain/
+    python earlier-design/differential/run_diff.py                # build inputs if missing, run chain, compare
+    python earlier-design/differential/run_diff.py --skip-chain   # reuse differential/data/chain/
 """
 
 from __future__ import annotations
@@ -32,13 +32,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "differential" / "data"
+ROOT = Path(__file__).resolve().parents[2]
+DATA = ROOT / "earlier-design" / "differential" / "data"
 INPUTS = DATA / "inputs"
 CHAIN = DATA / "chain"
 VERIFY = DATA / "verify"
-VERIFIER = ROOT / "verifier" / "verify.py"
-BUILDER = ROOT / "differential" / "build_settlement_inputs.py"
+VERIFIER = ROOT / "earlier-design" / "verifier" / "verify.py"
+BUILDER = ROOT / "earlier-design" / "differential" / "build_settlement_inputs.py"
 
 DAY_FIELDS = [
     # (chain column, verifier column)
@@ -92,11 +92,11 @@ def run_chain(differential_only: bool) -> None:
         # For mutation runs: a mutated contract fails the ordinary suite, but
         # the differential scenarios only record what the chain does, and what
         # a mutated chain does is exactly the thing to compare.
-        command.append("test/Differential.t.sol")
+        command.append("test/earlier-design/Differential.t.sol")
     else:
         # Named files, not the whole tree: test/accounts/ uses ModuleKit, which
         # builds under Foundry only, and Hardhat given no paths would try it.
-        for folder in ("test", "test/gate"):
+        for folder in ("test/earlier-design", "test/gate"):
             command.extend(sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / folder).glob("*.t.sol")))
     print("running Solidity tests to capture the chain's verdict ...")
     proc = subprocess.run(
@@ -213,7 +213,7 @@ def main() -> int:
 
     metas = sorted(CHAIN.glob("*.meta.csv"))
     if not metas:
-        raise SystemExit("no chain scenarios found in differential/data/chain/")
+        raise SystemExit("no chain scenarios found in earlier-design/differential/data/chain/")
 
     header = (f"{'scenario':<10} {'days':>5} {'writes':>6} {'breaches':>8} {'unauth':>6} "
               f"{'disagree':>8} {'deferral':>8} {'max |chain-sim| mUSD':>21}")

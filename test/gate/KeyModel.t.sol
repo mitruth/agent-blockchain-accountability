@@ -2,7 +2,7 @@
 pragma solidity ^0.8.23;
 
 import {GateFixture} from "./GateFixture.sol";
-import {MiniAccount} from "../../contracts/demo/MiniAccount.sol";
+import {MiniAccount} from "../../contracts/harness/MiniAccount.sol";
 import {
     StubMarket, StubDecoder, NullDecoder, LeglessDecoder, CapPolicy, RelayTarget, ReentrantTarget
 } from "./mocks/GateMocks.sol";

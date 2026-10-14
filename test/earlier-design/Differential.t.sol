@@ -3,29 +3,29 @@ pragma solidity ^0.8.23;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {PolicyConfig} from "../contracts/PolicyConfig.sol";
-import {SpendLedger} from "../contracts/SpendLedger.sol";
-import {SpendValidator} from "../contracts/SpendValidator.sol";
-import {SmartAccount} from "../contracts/SmartAccount.sol";
-import {PriceOracle} from "../contracts/PriceOracle.sol";
-import {MeterReadings} from "../contracts/MeterReadings.sol";
+import {PolicyConfig} from "../../contracts/earlier-design/PolicyConfig.sol";
+import {SpendLedger} from "../../contracts/earlier-design/SpendLedger.sol";
+import {SpendValidator} from "../../contracts/earlier-design/SpendValidator.sol";
+import {SmartAccount} from "../../contracts/earlier-design/SmartAccount.sol";
+import {PriceOracle} from "../../contracts/earlier-design/PriceOracle.sol";
+import {MeterReadings} from "../../contracts/earlier-design/MeterReadings.sol";
 
 /// The on-chain half of the differential.
 ///
 /// Replays real days through the real path -- the oracle publishes prices, the
 /// meter signs readings, settleDay computes and records spend -- and writes the
-/// chain's verdict to differential/data/chain/. differential/run_diff.py feeds
+/// chain's verdict to earlier-design/differential/data/chain/. earlier-design/differential/run_diff.py feeds
 /// the same readings, prices and captured policy events to the independent
 /// verifier and compares the two, day by day.
 ///
-/// Inputs come from differential/build_settlement_inputs.py: per arm, 364 UTC
+/// Inputs come from earlier-design/differential/build_settlement_inputs.py: per arm, 364 UTC
 /// days of 48 half-hours from the HEMS simulator's step log.
 ///
 /// Policy events are captured from the PolicyUpdated log, not read back from
 /// storage, so the verifier sees what a third party watching the chain sees.
 contract DifferentialTest is Test {
-    string internal constant INPUTS = "differential/data/inputs/";
-    string internal constant CHAIN = "differential/data/chain/";
+    string internal constant INPUTS = "earlier-design/differential/data/inputs/";
+    string internal constant CHAIN = "earlier-design/differential/data/chain/";
 
     /// Per day in the packed input: uint64 day, 48 x uint32 import,
     /// 48 x uint32 export, 48 x int32 import price, 48 x int32 export price.
