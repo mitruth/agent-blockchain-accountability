@@ -189,11 +189,11 @@ Through its session, the agent has the account call
 | 1         | The agent is authorised, unexpired and unrevoked                                                     | Yes, by its session on the account; the gate checks that the caller is an account with the gate installed |
 | 2         | The pair (target, function selector) is on the allowlist; its decoder turns the call into an `Order` | Yes, as one or two legs                                      |
 | 3         | Verify signed oracle readings                                                                        | No, step 5. `submit` takes no readings yet                   |
-| 4         | Check phase: every policy inspects the order                                                         | No, step 4                                                   |
-| 5         | Aggregate: execute, flag or reject                                                                   | No, step 4                                                   |
-| 6         | Commit phase: update policy state and the position ledger                                            | The ledger, yes, after the market call. Policy state, step 4 |
+| 4         | Check phase: every policy inspects the order                                                         | Yes (step 4.2): every instance, all legs at once |
+| 5         | Aggregate: execute, flag or reject                                                                   | Yes: any REJECT stops the submission without reverting; a FLAG is logged and goes ahead |
+| 6         | Commit phase: update policy state and the position ledger                                            | Yes: policies before the market call, the ledger after it |
 | 7         | The account calls the market                                                                         | Yes                                                          |
-| 8         | Emit the outcome                                                                                     | Yes: `OrderSubmitted`, then `Executed`                       |
+| 8         | Emit the outcome                                                                                     | Yes: `OrderSubmitted`, a `PolicyResult` per instance, `PolicyFlag`s, then `Executed` or `Rejected` |
 
 
 In order, `submit` does this:
@@ -213,13 +213,25 @@ In order, `submit` does this:
 6. Computes `orderHash` from the chain id, the gate's address, the account, the
   account's submission counter, the target and the hash of the calldata. Emits
    `OrderSubmitted`.
-7. Asks the account to make the call: one call, zero value, never a batch and
-  never a delegatecall. If the market reverts, everything reverts.
-8. Books each leg in the position ledger, in order. A CANCEL leg books any fill
-  not yet booked and releases the rest; a PLACE leg reads the new order's id
-  from the market's reply and books the order. If the ledger refuses a leg (an
-  order it does not hold, or a 65th open order), everything reverts.
-9. Emits `Executed`.
+7. **Check.** Asks every policy instance of the account to check all the legs
+  at once, and emits each one's `PolicyResult`: its quantity before and after,
+  its soft and hard bounds, and its verdict. A FLAG also emits `PolicyFlag`.
+  If any instance says REJECT, emits `Rejected` and **returns without
+  reverting**: nothing is committed, booked or sent, and the refusal stays in
+  the log. A policy whose check reverts reverts the submission.
+8. **Commit.** Asks every instance to commit.
+9. Asks the account to make the call: one call, zero value, never a batch and
+  never a delegatecall. If the market reverts, everything reverts, the commits
+  included.
+10. Books each leg in the position ledger, in order. A CANCEL leg books any fill
+  not yet booked and releases the rest, and the released volume is **credited**
+  back to every instance; a PLACE leg reads the new order's id from the
+  market's reply and books the order. If the ledger refuses a leg (an order it
+  does not hold, or a 65th open order), everything reverts.
+11. Emits `Executed`.
+
+A modification is checked as its two legs: the new order needs room before the
+old one is credited, which happens only once the market has taken the call.
 
 
 
@@ -239,6 +251,11 @@ Per account and delivery slot the ledger keeps four numbers, in Wh:
 | Committed buy, committed sell | Placed and not released, filled part included | Up on placement; down by the unfilled rest when the order closes |
 | Cleared buy, cleared sell     | Filled                                        | Up when a fill is booked                                         |
 
+
+When `reconcile` closes an order with part of it unfilled, an expiry or an
+order the market closed for another reason, the released volume is credited
+back to every policy instance. A policy whose credit fails keeps the charge,
+and `CreditFailed` says so; it cannot block the reconciliation.
 
 A fill counts as cleared only once booked. Until then it stays committed and
 is not credited, which is the safe side: the deliverability policy of step 5
@@ -498,7 +515,7 @@ limit and agent validity.
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `IERC7579.sol`      | The two pieces of the ERC-7579 standard the gate needs: the module hooks and `executeFromExecutor`. Declared locally so the gate imports no external library |
 | `IOrderDecoder.sol` | The adapter to one market: `decode` into legs, `placedOrderIds`, `fillState`, `gateTime`. One decoder per approved market contract                           |
-| `IPolicy.sol`       | The configuration side of a policy: `classifyConfig`, `configure`, `deconfigure`. The order-checking side arrives in step 4                                  |
+| `IPolicy.sol`       | A policy contract: its configuration (`classifyConfig`, `configure`, `deconfigure`) and its order phases (`check`, `commit`, `credit`), spec 4.2 |
 
 
 
@@ -512,6 +529,7 @@ limit and agent validity.
 | `gate/ConfigManager.t.sol`          | 33                                              | Hardhat and Foundry |
 | `gate/OrderLifecycle.t.sol`         | 26                                              | Hardhat and Foundry |
 | `gate/PositionLedger.t.sol`         | 8                                               | Hardhat and Foundry |
+| `gate/PolicyPhases.t.sol`           | 15                                              | Hardhat and Foundry |
 | `market/LockableERC1155.t.sol`      | 23                                              | Hardhat and Foundry |
 | `market/MarketFlow.t.sol`           | 41                                              | Hardhat and Foundry |
 | `market/GatedMarket.t.sol`          | 12                                              | Hardhat and Foundry |
@@ -645,6 +663,16 @@ closes, so they reach ledger paths the ported market never does (decision
 
 
 
+
+### `test/gate/PolicyPhases.t.sol`: 15 tests
+
+The gate's check, commit and credit phases, on the mock market, with a test
+double, `QtyPolicy`, that counts the Wh placed against a soft and a hard bound.
+
+| Group | Tests | What it establishes |
+| ----- | ----- | ------------------- |
+| Check and commit | 9 | An accepted submission is committed, then executed, with the instance's result in the log. A soft bound crossed is flagged and executed; the hard bound is inclusive. A rejection returns normally and leaves nothing committed, booked or sent; one instance's rejection stops every instance, and every result is logged. The owner's own submission is checked too. A reverting check or commit reverts the submission. A policy cannot reconcile while the gate commits: the lock refuses it |
+| Credits | 6 | A cancellation passes even at the hard bound and is credited, with the order's placement time, side, slot, quantity and price. A partly filled cancellation credits only the unfilled part. An expiry is credited on reconcile; nothing is credited while the order is still open. A failing credit is recorded and cannot block reconciliation. A modification needs room for the new order before the old is credited |
 
 ### `test/gate/PositionLedger.t.sol`: 8 tests
 
@@ -877,9 +905,9 @@ npm install
 
 ### The Hardhat suite
 
-Expect **363 passing** in about two minutes: 219 for the gate, the market and
+Expect **378 passing** in about two minutes: 234 for the gate, the market and
 the windows (38 key model, 33 configuration, 26 order lifecycle on the mock
-market, 8 ledger, 23 token, 41 market flow, 12 gated market, 6 settlement rule,
+market, 8 ledger, 15 policy phases, 23 token, 41 market flow, 12 gated market, 6 settlement rule,
 32 windows), 144 for the earlier design.
 
 ```bash
@@ -891,7 +919,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **371 passed**: the 363 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype).
+Expect **386 passed**: the 378 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype).
 
 With Foundry installed and allowed to run:
 

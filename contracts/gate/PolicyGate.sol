@@ -6,7 +6,8 @@ import {IOrderDecoder} from "../interfaces/IOrderDecoder.sol";
 import {DecoderRegistry} from "./DecoderRegistry.sol";
 import {ConfigManager} from "./ConfigManager.sol";
 import {PositionLedger} from "./PositionLedger.sol";
-import {Order, OrderKind} from "./GateTypes.sol";
+import {IPolicy} from "../interfaces/IPolicy.sol";
+import {Order, OrderKind, Verdict, CheckContext, CheckResult, Release} from "./GateTypes.sol";
 
 /// @title PolicyGate
 /// @notice ERC-7579 executor module through which an autonomous trading agent
@@ -38,8 +39,9 @@ import {Order, OrderKind} from "./GateTypes.sol";
 /// no window and no oracle check could live in a validator.
 ///
 /// Built so far: the key model, the registries, the booking of every order in
-/// the position ledger (steps 1 and 2), and the session entry point (step 4.1).
-/// The policy check and commit phases arrive in step 4.2, readings in step 5.
+/// the position ledger (steps 1 and 2), the session entry point (step 4.1),
+/// and the policy check, commit and credit phases (step 4.2). Signed readings
+/// arrive in step 5.
 contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     uint256 private constant MODULE_TYPE_EXECUTOR = 2;
 
@@ -70,8 +72,41 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     /// @notice The account made the call.
     event Executed(address indexed account, bytes32 indexed orderHash);
 
-    /// @notice One order brought up to date with the market (spec 5.2).
-    ///         Credits to the policies for released volume arrive in step 4.
+    /// @notice One policy instance's result on a submission, emitted for every
+    ///         instance, whatever the outcome (spec 8).
+    event PolicyResult(
+        address indexed account,
+        bytes32 indexed orderHash,
+        address indexed policy,
+        bytes32 policyId,
+        CheckResult result
+    );
+
+    /// @notice An instance's soft bound is crossed; the submission goes ahead
+    ///         (spec 5.5, flag mode EMIT).
+    event PolicyFlag(
+        address indexed account,
+        bytes32 indexed orderHash,
+        address indexed policy,
+        bytes32 policyId,
+        uint256 valueAfter,
+        uint256 soft
+    );
+
+    /// @notice At least one instance rejected the submission. Nothing was
+    ///         committed, booked or sent to the market. Not a revert: the
+    ///         refusal stays in the log.
+    event Rejected(address indexed account, bytes32 indexed orderHash);
+
+    /// @notice A policy's credit for released volume failed. The policy keeps
+    ///         the charge, which errs on the safe side; the release itself
+    ///         stands.
+    event CreditFailed(
+        address indexed account, address indexed policy, bytes32 policyId, address market, bytes32 orderId
+    );
+
+    /// @notice One order brought up to date with the market (spec 5.2). When
+    ///         volume is released, the policies are credited.
     event Reconciled(
         address indexed account, address indexed market, bytes32 indexed orderId, uint64 filledWh, uint64 releasedWh
     );
@@ -133,9 +168,16 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     /// the market call reverts, and when the ledger refuses a leg: an order it
     /// does not hold, or an open order beyond its bound.
     ///
+    /// Every policy instance of the account checks the submission first, all
+    /// legs at once. If any rejects, the submission stops there: `Rejected`
+    /// and every instance's `PolicyResult` are emitted, nothing is committed,
+    /// booked or sent, and the call returns normally. Otherwise every instance
+    /// commits, the account makes the call, and the ledger books the legs.
+    ///
     /// Every leg is booked in the ledger after the market call, in order: a
     /// cancellation releases before a placement adds, so a modification at the
-    /// open-order bound goes through.
+    /// open-order bound goes through. Released volume is credited back to the
+    /// policies.
     ///
     /// No value is ever sent: the account's native balance is not the agent's
     /// to move.
@@ -168,6 +210,17 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
         );
         emit OrderSubmitted(account, target, selector, legs, orderHash);
 
+        // Check phase, then commit phase (spec 4.1, steps 4 to 6).
+        CheckContext memory ctx = CheckContext({market: target, decoder: address(decoder), time: uint64(block.timestamp)});
+        (IPolicy[] memory policies, bytes32[] memory policyIds) = _policyList(account);
+        if (!_checkAll(account, orderHash, policies, policyIds, legs, ctx)) {
+            emit Rejected(account, orderHash);
+            return orderHash;
+        }
+        for (uint256 i = 0; i < policies.length; ++i) {
+            policies[i].commit(account, policyIds[i], legs, ctx);
+        }
+
         bytes[] memory results =
             IERC7579Execution(account).executeFromExecutor(MODE_SINGLE_CALL, abi.encodePacked(target, uint256(0), callData));
 
@@ -189,6 +242,7 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     {
         (filledWh, releasedWh) = ledger.reconcile(account, market, orderId);
         emit Reconciled(account, market, orderId, filledWh, releasedWh);
+        if (releasedWh != 0) _creditAll(account, market, orderId, releasedWh);
     }
 
     // ------------------------------------------------------------------
@@ -226,9 +280,67 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
         uint256 nextPlaced;
         for (uint256 i = 0; i < legs.length; ++i) {
             if (legs[i].kind == OrderKind.CANCEL) {
-                ledger.recordCancel(account, market, legs[i].orderId);
+                uint64 releasedWh = ledger.recordCancel(account, market, legs[i].orderId);
+                if (releasedWh != 0) _creditAll(account, market, legs[i].orderId, releasedWh);
             } else {
                 ledger.recordPlace(account, market, decoder, placedIds[nextPlaced++], legs[i]);
+            }
+        }
+    }
+
+    function _policyList(address account) private view returns (IPolicy[] memory policies, bytes32[] memory ids) {
+        PolicyRef[] memory list = policiesOf(account);
+        policies = new IPolicy[](list.length);
+        ids = new bytes32[](list.length);
+        for (uint256 i = 0; i < list.length; ++i) {
+            policies[i] = list[i].policy;
+            ids[i] = list[i].policyId;
+        }
+    }
+
+    /// @dev Every instance is asked and every result emitted, even after a
+    ///      rejection, so the log holds the whole picture.
+    function _checkAll(
+        address account,
+        bytes32 orderHash,
+        IPolicy[] memory policies,
+        bytes32[] memory policyIds,
+        Order[] memory legs,
+        CheckContext memory ctx
+    ) private returns (bool accepted) {
+        accepted = true;
+        for (uint256 i = 0; i < policies.length; ++i) {
+            CheckResult memory r = policies[i].check(account, policyIds[i], legs, ctx);
+            emit PolicyResult(account, orderHash, address(policies[i]), policyIds[i], r);
+            if (r.verdict == Verdict.REJECT) {
+                accepted = false;
+            } else if (r.verdict == Verdict.FLAG) {
+                emit PolicyFlag(account, orderHash, address(policies[i]), policyIds[i], r.valueAfter, r.soft);
+            }
+        }
+    }
+
+    /// @dev Credit every instance for an order's released volume, read from
+    ///      the ledger's record. A failing credit is recorded and skipped: the
+    ///      charge stays, and a broken policy cannot block reconciliation.
+    function _creditAll(address account, address market, bytes32 orderId, uint64 releasedWh) private {
+        PositionLedger.OrderRecord memory record = ledger.recordOf(account, market, orderId);
+        Release memory release = Release({
+            market: market,
+            orderId: orderId,
+            side: record.side,
+            slot: record.slot,
+            placedAt: record.placedAt,
+            qtyWh: record.qtyWh,
+            price: record.price,
+            filledWh: record.filledWh,
+            releasedWh: releasedWh
+        });
+        PolicyRef[] memory list = policiesOf(account);
+        for (uint256 i = 0; i < list.length; ++i) {
+            try list[i].policy.credit(account, list[i].policyId, release) {}
+            catch {
+                emit CreditFailed(account, address(list[i].policy), list[i].policyId, market, orderId);
             }
         }
     }

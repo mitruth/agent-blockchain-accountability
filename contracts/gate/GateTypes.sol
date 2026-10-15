@@ -53,3 +53,55 @@ enum ConfigChange {
     TIGHTEN,
     WIDEN
 }
+
+/// @notice A policy's verdict on one submission (spec 5.5): within the soft
+///         bound, between the soft and the hard bound, or beyond the hard one.
+enum Verdict {
+    EXECUTE,
+    FLAG,
+    REJECT
+}
+
+/// @notice What a policy reports about a submission: its own quantity before
+///         and after the submission, its soft and hard bounds, and its verdict.
+///         Units are the policy's: Wh, token units, a count.
+struct CheckResult {
+    uint256 valueBefore;
+    uint256 valueAfter;
+    uint256 soft;
+    uint256 hard;
+    Verdict verdict;
+}
+
+/// @notice What a policy may read about a submission besides its legs.
+/// @param market  The target of the call.
+/// @param decoder The decoder registered for the call (an IOrderDecoder): its
+///                views give a slot's start and gate time.
+/// @param time    The block time of the submission.
+struct CheckContext {
+    address market;
+    address decoder;
+    uint64 time;
+}
+
+/// @notice Volume an order no longer exposes: an order closed by a
+///         cancellation, an expiry, or the market, with part of it unfilled.
+///         Policies give back what they charged for that part.
+/// @param releasedWh The unfilled part, released.
+struct Release {
+    address market;
+    bytes32 orderId;
+    Side side;
+    uint32 slot;
+    uint48 placedAt;
+    uint64 qtyWh;
+    uint64 price;
+    uint64 filledWh;
+    uint64 releasedWh;
+}
+
+/// @notice `qtyWh` at `price` per kWh, in token units, rounded up (spec D12):
+///         a cap counts at least the true value.
+function valueUp(uint64 qtyWh, uint64 price) pure returns (uint256) {
+    return (uint256(qtyWh) * price + 999) / 1000;
+}

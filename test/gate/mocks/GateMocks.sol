@@ -4,7 +4,9 @@ pragma solidity ^0.8.23;
 import {IOrderDecoder} from "../../../contracts/interfaces/IOrderDecoder.sol";
 import {IPolicy} from "../../../contracts/interfaces/IPolicy.sol";
 import {PolicyGate} from "../../../contracts/gate/PolicyGate.sol";
-import {Order, OrderKind, Side, ConfigChange, FillState} from "../../../contracts/gate/GateTypes.sol";
+import {
+    Order, OrderKind, Side, ConfigChange, FillState, Verdict, CheckContext, CheckResult, Release
+} from "../../../contracts/gate/GateTypes.sol";
 
 /// @notice A stand-in market for the key-model tests: it records who called.
 ///         The real mock market, with a book, gate closure and fills, is
@@ -186,6 +188,20 @@ contract CapPolicy is IPolicy {
         if (revertOnDeconfigure) revert CapPolicy_Stuck();
         delete caps[account][policyId];
     }
+
+    /// @dev A configuration-test policy: it never stands in the way of an order.
+    function check(address, bytes32, Order[] calldata, CheckContext calldata)
+        external
+        pure
+        override
+        returns (CheckResult memory r)
+    {
+        r.verdict = Verdict.EXECUTE;
+    }
+
+    function commit(address, bytes32, Order[] calldata, CheckContext calldata) external override onlyGate {}
+
+    function credit(address, bytes32, Release calldata) external override onlyGate {}
 }
 
 /// @notice A target that forwards whatever it is told to, as a multicall

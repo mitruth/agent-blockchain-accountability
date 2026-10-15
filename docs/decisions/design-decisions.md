@@ -1806,6 +1806,73 @@ The day-ahead scenario gives the same day, figure for figure.
 another deployment file, so a second node can run without touching
 `deployments/local.json`.
 
+### 4.2 — The check, commit and credit phases
+
+**Status.** Proposed.
+
+**Decision.** `IPolicy` gains the order half of spec 4.2:
+
+| Function | Called | Does |
+| -------- | ------ | ---- |
+| `check(account, policyId, legs, ctx)` | On every instance, for every submission, all legs at once | A view: the policy's quantity before and after, its soft and hard bounds, and a verdict, EXECUTE, FLAG or REJECT |
+| `commit(account, policyId, legs, ctx)` | On every instance, only when none rejected, before the market call | Records the submission |
+| `credit(account, policyId, release)` | On every instance, when volume is released | Gives back what was charged for it |
+
+`ctx` carries the market, the call's decoder and the block time. Readings join
+it in step 5. A `Release` carries the order's record from the ledger: side,
+slot, placement time, quantity, price and filled part, plus what was released.
+
+**The gate's flow.** `submit` decodes, then runs the phases:
+
+1. **Check.** Every instance is checked, and every result is emitted as
+   `PolicyResult`.
+2. **Reject.** If any instance rejects, `Rejected` is emitted and `submit`
+   returns normally. Nothing is committed, booked or sent.
+3. **Flag.** A FLAG emits `PolicyFlag` and goes ahead: spec 5.5's flag mode
+   EMIT. COSIGN is not built; the spec uses EMIT for the evaluation.
+4. **Commit and execute.** Every instance commits; then the account calls the
+   market and the ledger books the legs.
+
+**Credits** come from two places:
+
+- **A cancellation through the gate,** as soon as the ledger has released it.
+- **`reconcile`,** when it closes an order with part of it unfilled: an expiry,
+  or an order the market closed for another reason.
+
+**Choices the spec leaves open.**
+
+- **All legs checked together.** A batch cannot be cut into pieces small enough
+  to pass a cap one by one: the split-leg drain of step 4's criteria.
+- **A modification's new order needs room before the old one is credited.**
+  The check sees a cancel leg and a place leg. The cancel's volume is credited
+  only after the market has taken the call and the ledger has released it.
+  - Counting the credit in the check would let a modification that the market
+    then refuses free headroom for nothing.
+  - The price is a false refusal near the cap: a modification that would end
+    below the cap is refused if old plus new exceed it. Cancelling, then
+    placing, is the way round.
+  - `test_aModificationNeedsRoomForTheNewOrderBeforeTheOldIsCredited` shows
+    both sides.
+- **A reverting `check` or `commit` reverts the submission.** The spec makes a
+  policy's rejection the only failure that does not revert; a broken policy is
+  not a rejection.
+- **A failing `credit` is caught.** `CreditFailed` is emitted and the policy
+  keeps the charge, the safe side. Otherwise a broken policy could block
+  `reconcile` and keep orders open in the ledger for ever. `deconfigure` was
+  already treated this way.
+- **Every result is emitted, even after a rejection,** so the attack matrix and
+  the verifier see every policy's view of every submission.
+- **The lock covers the phases.** A policy that calls `reconcile` while the
+  gate commits is refused, and the submission fails. A view `check` cannot
+  write anything.
+
+**Test doubles.** `CapPolicy`, used by the configuration tests, now always
+answers EXECUTE, so those tests keep testing configuration. `QtyPolicy`, in
+`test/gate/mocks/PhaseMocks.sol`, counts the Wh placed against soft and hard
+bounds and can be made to fail at any phase.
+
+**Tests.** `test/gate/PolicyPhases.t.sol`, 15 tests. `npm test`: 378 passing.
+
 ---
 
 ## Open decisions
