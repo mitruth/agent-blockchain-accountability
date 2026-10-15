@@ -52,10 +52,15 @@ const profiles = {
 
 // --- calls -----------------------------------------------------------------
 
-/** An agent's call through the gate: agent → PolicyGate → account → Prosumer. */
+/**
+ * An agent's call: with its session key the agent has the account call the
+ * gate's submit, and the gate has the account call the prosumer contract.
+ * agent → account (session) → PolicyGate → account → Prosumer.
+ */
 async function viaAgent(name, fn, args) {
   const p = P[name];
-  const receipt = await send(p.agent.keyIndex, gate, "PolicyGate", "submit", [p.account, p.prosumer, calldata("Prosumer", fn, args)]);
+  const submit = calldata("PolicyGate", "submit", [p.prosumer, calldata("Prosumer", fn, args)]);
+  const receipt = await send(p.agent.keyIndex, p.account, "MiniAccount", "executeAsSession", [gate, submit]);
   const legs = events(receipt, "PolicyGate", "OrderSubmitted")[0].args.legs.length;
   return { receipt, legs, gas: receipt.gasUsed };
 }

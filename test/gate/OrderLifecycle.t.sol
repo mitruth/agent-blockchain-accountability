@@ -52,7 +52,7 @@ contract OrderLifecycleTest is Test {
         vm.startPrank(owner);
         account.installModule(EXECUTOR, address(gate), "");
         account.execute(address(ledger), 0, abi.encodeCall(ledger.setWriter, (address(gate), true)));
-        account.execute(address(gate), 0, abi.encodeCall(gate.registerAgent, (agent, uint48(GENESIS + 30 days))));
+        account.enableSession(agent, address(gate), PolicyGate.submit.selector, uint48(GENESIS + 30 days));
         bytes4[3] memory selectors = [
             MockEnergyMarket.placeOrder.selector,
             MockEnergyMarket.cancelOrder.selector,
@@ -68,9 +68,14 @@ contract OrderLifecycleTest is Test {
     // Helpers
     // ------------------------------------------------------------------
 
-    function _place(Side side, uint32 slot, uint64 qtyWh, uint64 price) internal returns (bytes32 orderId) {
+    /// @dev The agent's path: through its session, the account calls submit.
+    function _asAgent(bytes memory marketCall) internal {
         vm.prank(agent);
-        gate.submit(address(account), address(market), abi.encodeCall(MockEnergyMarket.placeOrder, (side, slot, qtyWh, price)));
+        account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(market), marketCall)));
+    }
+
+    function _place(Side side, uint32 slot, uint64 qtyWh, uint64 price) internal returns (bytes32 orderId) {
+        _asAgent(abi.encodeCall(MockEnergyMarket.placeOrder, (side, slot, qtyWh, price)));
         return bytes32(market.orderCount());
     }
 
@@ -79,15 +84,11 @@ contract OrderLifecycleTest is Test {
     }
 
     function _cancel(bytes32 orderId) internal {
-        vm.prank(agent);
-        gate.submit(address(account), address(market), abi.encodeCall(MockEnergyMarket.cancelOrder, (orderId)));
+        _asAgent(abi.encodeCall(MockEnergyMarket.cancelOrder, (orderId)));
     }
 
     function _modify(bytes32 orderId, uint32 slot, uint64 qtyWh, uint64 price) internal returns (bytes32) {
-        vm.prank(agent);
-        gate.submit(
-            address(account), address(market), abi.encodeCall(MockEnergyMarket.modifyOrder, (orderId, slot, qtyWh, price))
-        );
+        _asAgent(abi.encodeCall(MockEnergyMarket.modifyOrder, (orderId, slot, qtyWh, price)));
         return bytes32(market.orderCount());
     }
 
@@ -440,10 +441,7 @@ contract OrderLifecycleTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(PositionLedger.PositionLedger_TooManyOpenOrders.selector, address(account))
         );
-        vm.prank(agent);
-        gate.submit(
-            address(account), address(market), abi.encodeCall(MockEnergyMarket.placeOrder, (Side.BUY, SLOT, 100, PRICE))
-        );
+        _asAgent(abi.encodeCall(MockEnergyMarket.placeOrder, (Side.BUY, SLOT, 100, PRICE)));
         assertEq(market.orderCount(), before);
 
         // A modification at the bound is a cancel then a place, so it fits.
@@ -490,10 +488,7 @@ contract OrderLifecycleTest is Test {
 
         vm.warp(closes);
         vm.expectRevert(abi.encodeWithSelector(MockEnergyMarket.MockEnergyMarket_GateClosed.selector, SLOT, closes));
-        vm.prank(agent);
-        gate.submit(
-            address(account), address(market), abi.encodeCall(MockEnergyMarket.placeOrder, (Side.BUY, SLOT, 100, PRICE))
-        );
+        _asAgent(abi.encodeCall(MockEnergyMarket.placeOrder, (Side.BUY, SLOT, 100, PRICE)));
     }
 
     function test_noCancelOrFillAfterGateClosure() public {

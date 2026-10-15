@@ -202,7 +202,7 @@ contract RelayTarget {
 }
 
 /// @notice A target that calls back into the gate while the account is calling
-///         it.
+///         it: `reconcile`, which anyone may call.
 contract ReentrantTarget {
     PolicyGate public immutable gate;
     bool public reentryOk;
@@ -212,7 +212,7 @@ contract ReentrantTarget {
         gate = gate_;
     }
 
-    function poke(address account, address market, bytes calldata marketCall) external {
-        (reentryOk, reentryError) = address(gate).call(abi.encodeCall(gate.submit, (account, market, marketCall)));
+    function poke(address account, address market, bytes32 orderId) external {
+        (reentryOk, reentryError) = address(gate).call(abi.encodeCall(gate.reconcile, (account, market, orderId)));
     }
 }

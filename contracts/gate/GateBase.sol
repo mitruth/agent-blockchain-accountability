@@ -28,13 +28,14 @@ abstract contract GateBase {
     error Gate_AlreadyInstalled(address account);
     error Gate_Reentrancy();
 
-    /// @notice The owner path. The caller must be an account with the gate
-    ///         installed, and every write lands in that account's own state.
+    /// @notice The caller must be an account with the gate installed, and every
+    ///         write lands in that account's own state.
     ///
-    /// An account calls the gate only when its root validator has authorised
-    /// the call, which is the owner. The agent holds no key on the account; the
-    /// one way it can make the account call anything is `submit`, and `submit`
-    /// refuses the gate as a target.
+    /// An account calls the gate when its root validator, the owner, has
+    /// authorised the call, or when the agent's session has, and the session
+    /// allows `submit` and nothing else (decision D1, option 3). So every other
+    /// function guarded here is the owner path. The agent cannot route around
+    /// its session either: `submit` refuses the gate as a target.
     ///
     /// Any address may call `onInstall` and so pass this check, but it then
     /// writes state keyed by itself, which no other account ever reads.

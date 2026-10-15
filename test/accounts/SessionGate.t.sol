@@ -1,22 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
-import {Test, Vm} from "forge-std/Test.sol";
-import {RhinestoneModuleKit, ModuleKitHelpers, AccountInstance, AccountType, UserOpData} from "modulekit/ModuleKit.sol";
-import {ExecutionReturnData} from "modulekit/test/RhinestoneModuleKit.sol";
-import {EncodeLib} from "modulekit/test/helpers/SmartSessionHelpers.sol";
-import {MODULE_TYPE_EXECUTOR, MODULE_TYPE_HOOK} from "modulekit/accounts/common/interfaces/IERC7579Module.sol";
-import {KernelHelpers} from "modulekit/test/helpers/KernelHelpers.sol";
-import {MockPolicy, MockExecutor} from "modulekit/Mocks.sol";
+import {Vm} from "forge-std/Test.sol";
+import {ModuleKitHelpers, AccountInstance, AccountType} from "modulekit/ModuleKit.sol";
+import {MODULE_TYPE_EXECUTOR} from "modulekit/accounts/common/interfaces/IERC7579Module.sol";
+import {MockExecutor} from "modulekit/Mocks.sol";
 import {
-    Session,
-    PermissionId,
-    ActionData,
-    PolicyData,
-    ERC7739Data,
-    ISessionValidator
+    Session, PermissionId, PolicyData, ERC7739Data
 } from "modulekit/integrations/interfaces/ISmartSession.sol";
 
+import {SessionFixture} from "./SessionFixture.sol";
 import {IERC7579Module, IERC7579Execution} from "../../contracts/interfaces/IERC7579.sol";
 import {StubMarket} from "../gate/mocks/GateMocks.sol";
 
@@ -57,18 +50,17 @@ import {StubMarket} from "../gate/mocks/GateMocks.sol";
 ///
 /// Foundry only. ModuleKit 0.5.9 bundles a Smart Sessions build older than
 /// v1.0.0; the source of v1.0.0 and of main was read for the same properties.
-contract SessionGateTest is RhinestoneModuleKit, Test {
+contract SessionGateTest is SessionFixture {
     using ModuleKitHelpers for *;
 
     SessionGateProbe internal gate;
     StubMarket internal market;
-    MockPolicy internal allow;
 
     function setUp() public {
         vm.warp(1_760_000_000);
         gate = new SessionGateProbe();
         market = new StubMarket();
-        allow = new MockPolicy();
+        _setUpSessions();
         makeAccountInstance("warmup");
     }
 
@@ -102,10 +94,8 @@ contract SessionGateTest is RhinestoneModuleKit, Test {
         // The owner installs the gate (an executor) and gives the agent a
         // session that may call one function: gate.submit.
         instance.installModule({moduleTypeId: MODULE_TYPE_EXECUTOR, module: address(gate), data: ""});
-        Session memory agent = _session(instance, "agent", _onlySubmit(), _noSigning());
-        address hook = _unhookKernel(instance); // Smart Sessions installed without a hook on Kernel
-        instance.addSession(agent);
-        _rehookKernel(instance, hook);
+        Session memory agent = _session(instance, "agent", _only(address(gate), SessionGateProbe.submit.selector), _noSigning());
+        _enableSession(instance, agent);
 
         // 1. Through the session, submit reaches the market as the account.
         bytes memory order = abi.encodeCall(StubMarket.placeOrder, (0, 100, 1500, 250_000));
@@ -169,7 +159,7 @@ contract SessionGateTest is RhinestoneModuleKit, Test {
 
         // 4. The agent's session cannot sign for the account; a session made
         //    to sign can, with a signature built the same way.
-        Session memory signer = _session(instance, "signer", _onlySubmit(), _signing());
+        Session memory signer = _session(instance, "signer", _only(address(gate), SessionGateProbe.submit.selector), _signing());
         PermissionId signerId = instance.addSession(signer);
         PermissionId agentId = instance.getPermissionId(agent);
 
@@ -181,101 +171,7 @@ contract SessionGateTest is RhinestoneModuleKit, Test {
         assertFalse(_signs(instance, agentId), "the agent's session cannot sign for the account");
     }
 
-    /// A session operation in a call of its own, so that `vm.expectRevert`
-    /// applies to the whole operation.
-    function useSessionOrRevert(bytes calldata inst, bytes calldata sess, address target, bytes calldata data)
-        external
-    {
-        AccountInstance memory instance = abi.decode(inst, (AccountInstance));
-        Session memory session = abi.decode(sess, (Session));
-        instance.useSession(session, target, 0, data);
-    }
-
-    /// One user operation signed with the session, as `useSession` sends it,
-    /// returning its logs. (ModuleKit records the logs of every operation it
-    /// sends, so a test cannot record them around `useSession` itself.)
-    function _sessionOp(AccountInstance memory instance, Session memory session, address target, bytes memory data)
-        internal
-        returns (Vm.Log[] memory)
-    {
-        address hook = _unhookKernel(instance);
-        UserOpData memory op = instance.getExecOps(target, 0, data, address(instance.smartSession));
-        op.userOp.signature = EncodeLib.encodeUse(instance.getPermissionId(session), op.userOp.signature);
-        ExecutionReturnData memory result = op.execUserOps();
-        _rehookKernel(instance, hook);
-        return result.logs;
-    }
-
-    /// ModuleKit's own workaround (withHookFixForKernel), for the steps it
-    /// does not cover: on Kernel, take the hook multiplexer off while Smart
-    /// Sessions is installed or used, and put it back after.
-    function _unhookKernel(AccountInstance memory instance) internal returns (address hook) {
-        if (instance.accountType != AccountType.KERNEL) return address(0);
-        hook = KernelHelpers(instance.accountHelper).getHookMultiPlexer(instance);
-        instance.uninstallModule(MODULE_TYPE_HOOK, hook, "");
-        KernelHelpers(instance.accountHelper).setHookMultiPlexer(instance, address(1));
-    }
-
-    function _rehookKernel(AccountInstance memory instance, address hook) internal {
-        if (instance.accountType != AccountType.KERNEL) return;
-        KernelHelpers(instance.accountHelper).setHookMultiPlexer(instance, hook);
-        instance.installModule(MODULE_TYPE_HOOK, hook, "");
-    }
-
-    /// Whether `emitter` emitted `topic0` with `account` as first indexed argument.
-    function _logged(Vm.Log[] memory logs, address emitter, bytes32 topic0, address account)
-        internal
-        pure
-        returns (bool)
-    {
-        for (uint256 i = 0; i < logs.length; ++i) {
-            if (
-                logs[i].emitter == emitter && logs[i].topics.length > 1 && logs[i].topics[0] == topic0
-                    && logs[i].topics[1] == bytes32(uint256(uint160(account)))
-            ) return true;
-        }
-        return false;
-    }
-
     // --- sessions ---------------------------------------------------------
-
-    function _session(
-        AccountInstance memory instance,
-        bytes32 salt,
-        ActionData[] memory actions,
-        ERC7739Data memory erc7739
-    )
-        internal
-        pure
-        returns (Session memory)
-    {
-        return Session({
-            sessionValidator: ISessionValidator(address(instance.defaultSessionValidator)),
-            sessionValidatorInitData: "mockInitData",
-            salt: salt,
-            userOpPolicies: new PolicyData[](0),
-            erc7739Policies: erc7739,
-            actions: actions
-        });
-    }
-
-    /// One action: gate.submit. The policy on it allows everything; the
-    /// scoping is the action itself, a (target, selector) pair.
-    function _onlySubmit() internal view returns (ActionData[] memory actions) {
-        PolicyData[] memory policies = new PolicyData[](1);
-        policies[0] = PolicyData({policy: address(allow), initData: ""});
-        actions = new ActionData[](1);
-        actions[0] = ActionData({
-            actionTargetSelector: SessionGateProbe.submit.selector,
-            actionTarget: address(gate),
-            actionPolicies: policies
-        });
-    }
-
-    /// The agent's session: no ERC-7739 content, no ERC-1271 policy.
-    function _noSigning() internal pure returns (ERC7739Data memory) {
-        return ERC7739Data({allowedERC7739Content: new string[](0), erc1271Policies: new PolicyData[](0)});
-    }
 
     /// The positive control: one content type allowed, and a policy that
     /// accepts every signature.

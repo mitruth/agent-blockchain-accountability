@@ -62,7 +62,7 @@ contract GatedMarketTest is MarketFixture {
         vm.startPrank(aliceOwner);
         aliceAccount.installModule(EXECUTOR, address(gate), "");
         aliceAccount.execute(address(ledger), 0, abi.encodeCall(ledger.setWriter, (address(gate), true)));
-        aliceAccount.execute(address(gate), 0, abi.encodeCall(gate.registerAgent, (agent, uint48(block.timestamp + 30 days))));
+        aliceAccount.enableSession(agent, address(gate), PolicyGate.submit.selector, uint48(block.timestamp + 30 days));
         bytes4[4] memory selectors = [
             Prosumer.placeBids.selector,
             Prosumer.placeOffers.selector,
@@ -81,9 +81,14 @@ contract GatedMarketTest is MarketFixture {
     // Helpers: the agent's calls, through the gate
     // ------------------------------------------------------------------
 
-    function _submit(bytes memory call) internal {
+    /// @dev The agent's path: through its session, Alice's account calls submit.
+    function _submitTo(address target, bytes memory call) internal {
         vm.prank(agent);
-        gate.submit(address(aliceAccount), address(aliceP), call);
+        aliceAccount.executeAsSession(address(gate), abi.encodeCall(gate.submit, (target, call)));
+    }
+
+    function _submit(bytes memory call) internal {
+        _submitTo(address(aliceP), call);
     }
 
     function _agentBids(MarketTypes.OrderRequest[] memory reqs) internal returns (bytes32[] memory ids) {
@@ -168,12 +173,7 @@ contract GatedMarketTest is MarketFixture {
         vm.expectRevert(
             abi.encodeWithSelector(PolicyGate.PolicyGate_NotAnOrder.selector, address(aliceP), Prosumer.placeBids.selector)
         );
-        vm.prank(agent);
-        gate.submit(
-            address(aliceAccount),
-            address(aliceP),
-            abi.encodeCall(Prosumer.placeBids, (MarketTypes.EnergyType.ELECTRICITY, reqs))
-        );
+        _submit(abi.encodeCall(Prosumer.placeBids, (MarketTypes.EnergyType.ELECTRICITY, reqs)));
         assertEq(session.bidIds().length, 0);
     }
 
@@ -350,10 +350,7 @@ contract GatedMarketTest is MarketFixture {
                 PolicyGate.PolicyGate_UnknownCall.selector, address(token), token.setPaymentAllowance.selector
             )
         );
-        vm.prank(agent);
-        gate.submit(
-            address(aliceAccount), address(token), abi.encodeCall(token.setPaymentAllowance, (agent, type(uint256).max))
-        );
+        _submitTo(address(token), abi.encodeCall(token.setPaymentAllowance, (agent, type(uint256).max)));
     }
 
     // ------------------------------------------------------------------

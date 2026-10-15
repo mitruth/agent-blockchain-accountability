@@ -6,7 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { ROOT } from "./paths.js";
 
-export const DEPLOYMENT_FILE = path.join(ROOT, "deployments", "local.json");
+/** DEPLOYMENT_FILE in the environment points elsewhere, e.g. for a second node. */
+export const DEPLOYMENT_FILE = process.env.DEPLOYMENT_FILE ?? path.join(ROOT, "deployments", "local.json");
 
 export function saveDeployment(data) {
   fs.mkdirSync(path.dirname(DEPLOYMENT_FILE), { recursive: true });

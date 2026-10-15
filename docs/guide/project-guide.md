@@ -51,7 +51,9 @@ The build follows six steps, fixed by Section 9 of the spec.
 
 - `PolicyGate`**:** an ERC-7579 executor module. It is the only way the agent
 can make the account do anything.
-- **An agent registry:** which agent may act for which account, until when.
+- **The agent's session** (decision D1): a Rhinestone Smart Session on the
+account, or its stand-in in `MiniAccount`, that lets the agent have the account
+call the gate's `submit` and nothing else, until it expires or is removed.
 - **A call allowlist:** which function of which market contract the agent may
 call.
 - **A configuration manager:** the list of policies per account, with the
@@ -81,8 +83,8 @@ under Hardhat; the other 3 are faults in test doubles.
 
 ### What does not exist yet
 
-**No policy checks an order yet.** Today an order from a registered agent to an
-approved market function is executed and booked in the ledger. Policies can be
+**No policy checks an order yet.** Today an order the agent submits through its
+session to an approved market function is executed and booked in the ledger. Policies can be
 added and configured, but `submit` does not consult them until step 4.
 `WindowLib` is built and tested on its own; no policy uses it yet. There
 is no oracle and no sequence policy. Nothing is deployed to a network.
@@ -91,11 +93,9 @@ Two roles of the market are outside the repository by design: the off-chain
 matching service, linked to the chain by an oracle, which registers trades; and
 the trusted sensors that report measured energy. The tests play both.
 
-**Decision D1 is settled (15 October): the agent will hold a Rhinestone Smart
-Session scoped to the gate's `submit`, and the policies stay in the gate.**
-Step 4 makes that change. Until then the agent authenticates through the
-gate's registry, as built. See `docs/analysis/delegation-architecture.md`,
-section 10.
+**Decision D1 is settled and built (step 4.1):** the agent holds a Rhinestone
+Smart Session scoped to the gate's `submit`, and the policies stay in the gate.
+See `docs/analysis/delegation-architecture.md`, section 10.
 
 ---
 
@@ -103,8 +103,9 @@ section 10.
 
 ## 2. The key model
 
-The agent holds no key on the prosumer account. That is the foundation, and
-step 1 exists to establish it.
+The agent holds no key that can sign for the prosumer account. That is the
+foundation. Step 1 established it with an agent registry in the gate; step 4.1
+replaced the registry with a session on the account (decision D1, option 3).
 
 ```
 OWNER PATH (configuration)
@@ -113,32 +114,47 @@ OWNER PATH (configuration)
                                               │
                                               ▼
                                           the account ── calls ──▶ PolicyGate
-                                                                   register an agent
                                                                    approve a market call
                                                                    add or configure a policy
+                                          the account ── enables ──▶ the agent's session
 
 AGENT PATH (orders)
 
-  agent key ── calls ──▶ PolicyGate.submit(account, target, callData)
-                             │  checks the agent, the target, the function
-                             ▼
-                         account.executeFromExecutor ── calls ──▶ market
+  agent key ── signs a user operation ──▶ the agent's Smart Session
+                                              │  allows one call: PolicyGate.submit
+                                              ▼
+                                          the account ── calls ──▶ PolicyGate.submit(target, callData)
+                                                                     │  checks the target, the function
+                                                                     ▼
+                                          account.executeFromExecutor ── calls ──▶ market
 ```
 
-The gate tells the two paths apart by **who calls it**. A configuration write
-is accepted only when the caller is an account that has the gate installed, and
-it lands in that account's own state. An account calls the gate only when its
-root validator authorised the call, and the root validator belongs to the owner.
-The agent calls the gate directly, as an ordinary address, and the only function
-that accepts it is `submit`.
+On both paths the gate's caller is the account. What separates them is **what
+each key may make the account call**:
+
+- **The owner's key** passes the account's root validator, which may make the
+  account call anything.
+- **The agent's key** passes only its session, which lets it make the account
+  call the gate's `submit` and nothing else: no other function of the gate, not
+  the market, not the account itself. The session expires at a set time and the
+  owner can remove it at once.
+- **Signing.** The session has no ERC-7739 content and no ERC-1271 policy, so
+  the agent cannot sign anything for the account, a token permit for instance.
+
+So `submit` accepts any account with the gate installed, and every other
+function the gate guards the same way is, in effect, the owner path.
+
+**Given up by this design.** The gate sees the account, not which key asked.
+The owner's own `submit` is booked, and from step 4.2 checked, like the
+agent's.
 
 ### Who may do what
 
 
 | Actor           | May                                                                                                                                                                           | May not                                                                                                                                                                     |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Owner**       | Install and uninstall the gate; register and revoke agents; approve and withdraw market calls; add, configure and remove policies; appoint who writes the account's positions | Approve the account itself, the gate or the ledger as a target. Loosen a policy or remove one without the 24-hour wait                                                      |
-| **Agent**       | Submit approved calls while registered and unexpired; cancel or modify the orders it placed                                                                                   | Install or uninstall a module; write any registry or the ledger; configure a policy; touch an order it did not place; reach any of those by routing a call through the gate |
+| **Owner**       | Install and uninstall the gate; give and remove the agent's session; approve and withdraw market calls; add, configure and remove policies; appoint who writes the account's positions; submit orders itself, checked like the agent's | Approve the account itself, the gate or the ledger as a target. Loosen a policy or remove one without the 24-hour wait                                                      |
+| **Agent**       | Through its session, while it is valid, have the account call `submit` on approved calls; cancel or modify the orders placed through the gate | Call anything but `submit` through its session; sign for the account; install or uninstall a module; write any registry or the ledger; configure a policy; widen its own session; touch an order not placed through the gate; reach any of those by routing a call through the gate |
 | **Anyone else** | Nothing on this account                                                                                                                                                       | Everything                                                                                                                                                                  |
 
 
@@ -151,8 +167,8 @@ An agent that wanted more authority would aim at one of four things.
 
 | Target of the attack                | Why it would work if open                                                                                                                                 | How it is closed                                                                              |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| The account's own module management | Real accounts accept `installModule` from themselves. `submit` makes the account call things. So `submit` with the account as target would be a self-call | `submit` refuses the account as a target. The allowlist refuses to register it too            |
-| The gate's registries               | A call from the account to the gate arrives on the owner path                                                                                             | `submit` refuses the gate as a target. The allowlist refuses to register it too               |
+| The account's own module management, and its sessions | Real accounts accept `installModule` and session changes from themselves. `submit` makes the account call things. So `submit` with the account as target would be a self-call | The agent's session does not name the account. `submit` refuses the account as a target, and the allowlist refuses to register it |
+| The gate's registries               | A call from the account to the gate arrives on the owner path                                                                                             | The agent's session names `submit` only. `submit` refuses the gate as a target, and the allowlist refuses to register it |
 | A policy's parameters               | A looser cap is as good as no cap                                                                                                                         | A policy accepts `configure` from the gate only, and the gate calls it only on the owner path |
 | The ledger's list of writers        | The ledger appoints writers on the word of the account. A call from the account to the ledger would let the agent appoint itself                          | `submit` refuses the ledger as a target                                                       |
 
@@ -163,14 +179,14 @@ An agent that wanted more authority would aim at one of four things.
 
 ## 3. How an order flows today
 
-The agent calls `PolicyGate.submit(account, target, callData)`. The spec's
-full flow has eight steps (Section 4.1). This is what steps 1 and 2 implement of
-it.
+Through its session, the agent has the account call
+`PolicyGate.submit(target, callData)`. The spec's full flow has eight steps
+(Section 4.1). This is what is built of it.
 
 
 | Spec step | What it is                                                                                           | Built?                                                       |
 | --------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| 1         | The caller is a registered, unexpired, unrevoked agent of `account`                                  | Yes                                                          |
+| 1         | The agent is authorised, unexpired and unrevoked                                                     | Yes, by its session on the account; the gate checks that the caller is an account with the gate installed |
 | 2         | The pair (target, function selector) is on the allowlist; its decoder turns the call into an `Order` | Yes, as one or two legs                                      |
 | 3         | Verify signed oracle readings                                                                        | No, step 5. `submit` takes no readings yet                   |
 | 4         | Check phase: every policy inspects the order                                                         | No, step 4                                                   |
@@ -182,8 +198,8 @@ it.
 
 In order, `submit` does this:
 
-1. Reverts with `PolicyGate_AgentNotAuthorized` unless the caller is an active
-  agent of the account.
+1. Reverts with `Gate_NotInstalled` unless the caller is an account with the
+  gate installed. The agent reaches this only through its session.
 2. Reverts with `PolicyGate_CallDataTooShort` if the call has no selector.
 3. Reverts with `PolicyGate_ForbiddenTarget` if the target is the account, the
   gate, the ledger or the zero address.
@@ -301,7 +317,8 @@ is reported, never reverted.
 
 Setting up an account for the agent, all on the owner path:
 
-1. Install the gate; appoint it ledger writer; register the agent.
+1. Install the gate; appoint it ledger writer; give the agent a session whose
+  only action is the gate's `submit`.
 2. On the token: a payment allowance for the account's prosumer contract, and
   approval over its energy tokens.
 3. On the gate: approve the four order functions of the prosumer contract
@@ -316,18 +333,19 @@ Setting up an account for the agent, all on the owner path:
 
 Everything in this section is on the owner path.
 
-### Agents and approvals
+### The agent's session and the approvals
 
+The agent's session is the account's, not the gate's. On a real account it is
+a Smart Session, enabled and removed through the Smart Sessions module; on
+`MiniAccount`, `enableSession` and `removeSession`. Either acts at once.
 
-| Call                                    | Effect                                               | When    |
+| Call (on the gate)                      | Effect                                               | When    |
 | --------------------------------------- | ---------------------------------------------------- | ------- |
-| `registerAgent(agent, validUntil)`      | The agent may submit through `validUntil`, inclusive | At once |
-| `revokeAgent(agent)`                    | The agent may no longer submit                       | At once |
 | `setDecoder(target, selector, decoder)` | Approves one function of one market contract         | At once |
 | `removeDecoder(target, selector)`       | Withdraws that approval                              | At once |
 
 
-The account, the gate and the zero address can be neither agents nor targets.
+The account, the gate, the ledger and the zero address can never be targets.
 
 ### Policies
 
@@ -403,7 +421,6 @@ configuration.
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PolicyGate.sol`      | The executor module. `onInstall`, `onUninstall`; `submit`, the agent's one entry point; `reconcile`, open to anyone. Inherits the four parts below |
 | `GateBase.sol`        | Which accounts have the gate installed, the installation generation, the owner-path check (`onlyAccount`), the reentrancy lock                     |
-| `AgentRegistry.sol`   | `registerAgent`, `revokeAgent`, `isAgentActive`                                                                                                    |
 | `DecoderRegistry.sol` | `setDecoder`, `removeDecoder`, `decoderOf`, and the rule that the account and the gate are never targets                                           |
 | `ConfigManager.sol`   | The policy list, proposals, and the tighten-now, widen-later rule                                                                                  |
 | `PositionLedger.sol`  | Every booked order and the per-slot positions. Written only by writers the account appointed                                                       |
@@ -444,7 +461,7 @@ configuration.
 
 | File              | What it is                                                                                                                                                                                                                |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MiniAccount.sol` | The smallest account that behaves like an ERC-7579 account where the gate needs it. For tests and the local system only: it stands in for a real account (Safe7579, Nexus, Kernel) and validates no signatures of its own |
+| `MiniAccount.sol` | The smallest account that behaves like an ERC-7579 account where the gate needs it, with sessions that stand in for Smart Sessions: a key may have the account call one function of one contract, until a time. For tests and the local system only: it stands in for a real account (Safe7579, Nexus, Kernel) and validates no signatures of its own |
 | `WindowProbe.sol` | `WindowLib` on its own, as the smallest possible policy: admits an amount if it fits, takes credits for earlier admissions, and emits an event for every call, so the verifier can rebuild each window from the log       |
 
 
@@ -461,7 +478,7 @@ what `npm run` starts. Packages depend on `chain/` and on nothing else, except
 | Package      | What it does                                                                                                                                                                                                                                                                                               | Started by                          |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `chain/`     | The connection to the local node, the test keys by index, the compiled contracts (deploy, send, read), transactions that report the contract's own error when they revert, the node's clock, `deployments/local.json`, and the units Wh and EUR                                                            | imported by every other package     |
-| `deploy/`    | Deploys the market and the gate, then one smart account and prosumer contract per prosumer in `prosumers.json`; registers them, funds them, sets every approval, installs the gate and registers the agent where there is one. Writes `deployments/local.json`                                             | `npm run demo:deploy`               |
+| `deploy/`    | Deploys the market and the gate, then one smart account and prosumer contract per prosumer in `prosumers.json`; registers them, funds them, sets every approval, installs the gate and gives the agent its session where there is one. Writes `deployments/local.json`                                             | `npm run demo:deploy`               |
 | `matcher/`   | The matching service. `rule.js` is the rule, a pure function you can replace; `index.js` reads a closed session, registers the trades and finalises it                                                                                                                                                     | `npm run demo:match`, or a scenario |
 | `keeper/`    | Expires the orders a finalised session left unmatched and reconciles the gate's ledger. Anyone may do both                                                                                                                                                                                                 | a scenario                          |
 | `sensor/`    | A prosumer's meter reporting what it measured in a slot, which settles that slot. Where a real meter feed would be connected                                                                                                                                                                               | a scenario                          |
@@ -491,7 +508,7 @@ limit and agent validity.
 
 | Path                                | Tests                                           | Runs under          |
 | ----------------------------------- | ----------------------------------------------- | ------------------- |
-| `gate/KeyModel.t.sol`               | 36                                              | Hardhat and Foundry |
+| `gate/KeyModel.t.sol`               | 38                                              | Hardhat and Foundry |
 | `gate/ConfigManager.t.sol`          | 33                                              | Hardhat and Foundry |
 | `gate/OrderLifecycle.t.sol`         | 26                                              | Hardhat and Foundry |
 | `gate/PositionLedger.t.sol`         | 8                                               | Hardhat and Foundry |
@@ -569,7 +586,7 @@ documented in `docs/earlier-design/`.
 
 
 
-### `test/gate/KeyModel.t.sol`: 36 tests
+### `test/gate/KeyModel.t.sol`: 38 tests
 
 The permission table of section 2, one row at a time, then every escalation
 route.
@@ -577,13 +594,13 @@ route.
 
 | Group                                    | Tests | What it establishes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ---------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| The path that must work                  | 2     | A registered agent's approved call is made by the account: the market sees the account as caller, not the agent and not the gate. The two events carry the decoded order and the order hash. Two identical calls get different hashes                                                                                                                                                                                                                                                                        |
-| Who may submit (A8)                      | 7     | An unregistered caller is rejected. The owner's own key is not an agent. An agent is valid through its last second and rejected one second later. Revocation acts at once. An agent of one account has no authority on another. The account, the gate and the zero address cannot be registered as agents, and an expiry in the past is refused                                                                                                                                                              |
+| The path that must work                  | 2     | Through its session, the agent's approved call is made by the account: the market sees the account as caller, not the agent and not the gate. The two events carry the decoded order and the order hash. Two identical calls get different hashes |
+| Who may submit (A8)                      | 7     | Only an account with the gate installed may call `submit`: not the agent from its own key, not a stranger. The owner's own submission is the account's, like the agent's. A key without a session cannot make the account submit. The session is valid through its last second and refused one second later. Removing it acts at once. It reaches `submit` and nothing else: not the market, the account, another gate function or the ledger. A session on one account has no authority on another |
 | What may be submitted (A7)               | 7     | An unapproved function of an approved market is rejected. An unapproved market is rejected. Withdrawing an approval acts at once. Calldata shorter than a selector is rejected. A call its decoder reads as no order, or as more than `maxLegs` legs, is rejected; `maxLegs` is at least 2. A market call that reverts reverts the whole submission                                                                                                                                                          |
-| Escalation: module management            | 5     | The agent cannot call `installModule`, `uninstallModule`, `execute` or `executeFromExecutor` on the account. The account is never accepted as a target, whatever the call. The owner cannot approve the account or the gate as a target either, nor register a zero decoder                                                                                                                                                                                                                                  |
-| Escalation: registries and configuration | 7     | Each of the gate's ten owner-path functions refuses the agent directly. The gate is never accepted as a target for any of them, nor is the ledger. The agent cannot write the ledger directly. The policy refuses `configure` from the agent, and from the account itself. A fuzz test sends arbitrary bytes to the account, the gate, the market, the policy and the ledger, 256 runs, and checks afterwards that modules, agents, approvals, ledger writers, policies and parameters are exactly as before |
-| Hostile targets                          | 2     | A target that forwards calls, like a multicall contract, carries no authority: what it forwards arrives from the forwarder. A target that is also an agent and calls `submit` again mid-call is stopped by the lock                                                                                                                                                                                                                                                                                          |
-| Install and uninstall                    | 6     | The gate reports itself as an executor and nothing else. Installing it grants nobody anything. A stranger who calls `onInstall` gets a private namespace and no hold on the account. Installing twice is refused. Uninstall withdraws the agent, and a reinstall starts empty. Uninstall succeeds even when a policy refuses to drop its state                                                                                                                                                               |
+| Escalation: module management            | 6     | The agent cannot call `installModule`, `uninstallModule`, `execute` or `executeFromExecutor` on the account, nor widen its own session. The account is never accepted as a target, whatever the call, a session change included. The owner cannot approve the account, the gate or the ledger as a target either, nor register a zero decoder |
+| Escalation: registries and configuration | 8     | Each of the gate's eight owner-path functions refuses the agent directly. The gate is never accepted as a target for any of them, nor is the ledger. The agent cannot write the ledger directly. The policy refuses `configure` from the agent, and from the account itself. Two fuzz tests, 256 runs each: arbitrary bytes submitted to the account, the gate, the market, the policy and the ledger; and arbitrary calls through the session, which reach `submit` or nothing. Afterwards modules, sessions, approvals, ledger writers, policies and parameters are exactly as before |
+| Hostile targets                          | 2     | A target that forwards calls, like a multicall contract, carries no authority: what it forwards arrives from the forwarder. A target that calls back into the gate's `reconcile` while the account is calling it is stopped by the lock |
+| Install and uninstall                    | 6     | The gate reports itself as an executor and nothing else. Installing it grants nobody anything. A stranger who calls `onInstall` gets a private namespace, where nothing is approved, and no hold on the account. Installing twice is refused. After an uninstall the session reaches nothing, and a reinstall starts empty. Uninstall succeeds even when a policy refuses to drop its state |
 
 
 
@@ -744,17 +761,18 @@ Kernel. One test per account, same scenario:
   `accountId()`. A test that silently ran on the wrong account type would
    otherwise still pass.
 2. The owner installs the gate, appoints it as the account's ledger writer,
-  registers the agent, approves the market function and adds a policy, all
-  through the account.
-3. The agent's approved order is executed, and the market sees the account.
-4. An unregistered caller and an unapproved function are rejected.
-5. The agent tries to install a rogue module and uninstall the gate, by calling
-  the account directly and by routing through the gate. Afterwards the rogue
-   module is not installed and the gate still is.
-6. The agent cannot register another agent or change the configuration.
-7. The owner proposes a widening. It is not in force at once. After 24 hours
-  the agent still cannot apply it, and the owner can.
-8. The owner uninstalls the gate, and the agent's authority is gone.
+  approves the market function and adds a policy, all through the account,
+  and gives the agent a real Smart Session whose only action is `submit`.
+3. Through the session, the agent's approved order is executed, and the market
+  sees the account.
+4. A stranger calling `submit` directly, and an unapproved function through
+  the session, are rejected.
+5. The session cannot reach the market directly, the gate's owner path, or
+  `installModule` and `uninstallModule`; nor can it reach the account through
+  `submit`. Afterwards no rogue module is installed and the gate still is.
+6. The owner proposes a widening. It is not in force at once. After 24 hours
+  the agent's session still cannot apply it, and the owner can.
+7. The owner uninstalls the gate, and the session reaches nothing.
 
 ### `test/accounts/SessionGate.t.sol`: 4 tests
 
@@ -859,8 +877,8 @@ npm install
 
 ### The Hardhat suite
 
-Expect **361 passing** in about two minutes: 217 for the gate, the market and
-the windows (36 key model, 33 configuration, 26 order lifecycle on the mock
+Expect **363 passing** in about two minutes: 219 for the gate, the market and
+the windows (38 key model, 33 configuration, 26 order lifecycle on the mock
 market, 8 ledger, 23 token, 41 market flow, 12 gated market, 6 settlement rule,
 32 windows), 144 for the earlier design.
 
@@ -873,7 +891,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **369 passed**: the 361 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype).
+Expect **371 passed**: the 363 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype).
 
 With Foundry installed and allowed to run:
 
@@ -1055,9 +1073,9 @@ npm run demo:match
 
 Finding things without a database: from an account,
 `MarketManager.prosumerOf(account)` gives its prosumer contract;
-`Prosumer.owner()` goes back; `PolicyGate.agentValidUntil(account, agent)`
-says whether an agent may act for it; the events `ProsumerRegistered` and
-`AgentRegistered` are indexed by account and by agent.
+`Prosumer.owner()` goes back; `MiniAccount.sessionOf(agent)` says what an
+agent's session allows and until when; the events `ProsumerRegistered` and
+`SessionEnabled` are indexed by account and by agent.
 
 ### The earlier design's checks
 

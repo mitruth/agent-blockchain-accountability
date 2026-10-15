@@ -8,8 +8,9 @@ import {MiniAccount} from "../../contracts/harness/MiniAccount.sol";
 import {StubMarket, StubDecoder, CapPolicy} from "./mocks/GateMocks.sol";
 
 /// @notice One account with the gate installed and authorised to write the
-///         account's positions, one registered agent, one approved market
-///         function and one policy instance.
+///         account's positions, an agent whose session lets it have the account
+///         call the gate's `submit`, one approved market function and one
+///         policy instance.
 abstract contract GateFixture is Test {
     uint256 internal constant EXECUTOR = 2;
     bytes32 internal constant POLICY_ID = keccak256("cap");
@@ -29,7 +30,7 @@ abstract contract GateFixture is Test {
     address internal agent = makeAddr("agent");
     address internal stranger = makeAddr("stranger");
 
-    uint48 internal agentValidUntil;
+    uint48 internal sessionValidUntil;
 
     function setUp() public virtual {
         vm.warp(1_760_000_000);
@@ -47,10 +48,19 @@ abstract contract GateFixture is Test {
         vm.prank(owner);
         account.execute(address(ledger), 0, abi.encodeCall(ledger.setWriter, (address(gate), true)));
 
-        agentValidUntil = uint48(block.timestamp + 30 days);
-        _asAccount(abi.encodeCall(gate.registerAgent, (agent, agentValidUntil)));
+        sessionValidUntil = uint48(block.timestamp + 30 days);
+        vm.prank(owner);
+        account.enableSession(agent, address(gate), PolicyGate.submit.selector, sessionValidUntil);
         _asAccount(abi.encodeCall(gate.setDecoder, (address(market), StubMarket.placeOrder.selector, decoder)));
         _asAccount(abi.encodeCall(gate.addPolicy, (policy, POLICY_ID, _caps(SOFT, HARD))));
+    }
+
+    /// @dev The agent's path: through its session, the account calls submit.
+    function _submit(address target, bytes memory callData) internal returns (bytes32) {
+        vm.prank(agent);
+        bytes memory result = account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (target, callData)));
+        // Empty when the test expected the call to revert.
+        return result.length == 32 ? abi.decode(result, (bytes32)) : bytes32(0);
     }
 
     /// @dev The owner path: the owner has the account call the gate.

@@ -89,7 +89,7 @@ Off-chain: oracle relays · reconciler keeper · independent verifier (event rep
 
 **Key model.** The agent never signs for the prosumer account. Its authority is the AgentRegistry entry in PolicyGate and nothing else. The account's validator set is owner-only. Smart Sessions is not used.
 
-> **Amended (A7), decided 15 October 2026, built in step 4.** The agent's authority becomes a Rhinestone Smart Session on the account. Its only action is `PolicyGate.submit`, and it has no ERC-7739 content and no ERC-1271 policy, so it can sign nothing for the account. The account calls `submit`; the gate checks and executes as before. The AgentRegistry is replaced by the session: expiry by a time-frame policy, revocation by removing the session. The agent still holds no key that can sign for the account, which is what this paragraph protects. See `docs/analysis/delegation-architecture.md` section 10, and the prototype `test/accounts/SessionGate.t.sol`.
+> **Amended (A7), decided 15 October 2026, built in step 4.1.** The agent's authority becomes a Rhinestone Smart Session on the account. Its only action is `PolicyGate.submit`, and it has no ERC-7739 content and no ERC-1271 policy, so it can sign nothing for the account. The account calls `submit`; the gate checks and executes as before. The AgentRegistry is replaced by the session: expiry by a time-frame policy, revocation by removing the session. The agent still holds no key that can sign for the account, which is what this paragraph protects. See `docs/analysis/delegation-architecture.md` section 10, and the prototype `test/accounts/SessionGate.t.sol`.
 
 ### 4.1 `submit` flow
 

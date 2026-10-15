@@ -9,33 +9,35 @@ import {
 import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {GateBase} from "../../contracts/gate/GateBase.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
-import {AgentRegistry} from "../../contracts/gate/AgentRegistry.sol";
 import {DecoderRegistry} from "../../contracts/gate/DecoderRegistry.sol";
 import {ConfigManager} from "../../contracts/gate/ConfigManager.sol";
 import {IOrderDecoder} from "../../contracts/interfaces/IOrderDecoder.sol";
 import {IPolicy} from "../../contracts/interfaces/IPolicy.sol";
 import {Order, OrderKind, Side} from "../../contracts/gate/GateTypes.sol";
 
-/// Step 1 of the v0.1 build order: the key model.
+/// The key model, as decided for D1 (option 3, spec amendment A7).
 ///
-/// The agent holds no key on the prosumer account. Its authority is one entry
-/// in the gate's AgentRegistry, and the only thing that entry buys is `submit`
-/// on calls the owner approved. These tests assert the permission table one row
-/// at a time, and then the escalation paths: every way an agent might turn
-/// `submit` into module management, a registry write or a configuration change.
+/// The agent holds no key that can sign for the prosumer account. It holds a
+/// session on the account whose only action is the gate's `submit`; `submit`
+/// takes its caller to be the account. These tests assert the permission table
+/// one row at a time, and then the escalation paths: every way an agent might
+/// turn its session or `submit` into module management, a registry write or a
+/// configuration change.
 ///
 /// | Actor    | May                                         | May not                                   |
 /// |----------|---------------------------------------------|-------------------------------------------|
-/// | Owner    | install and uninstall the gate; register    | make the account or the gate a target     |
-/// |          | and revoke agents; approve market calls;    |                                           |
-/// |          | add and configure policies                  |                                           |
-/// | Agent    | submit approved calls while registered and  | install or uninstall a module; write any  |
-/// |          | unexpired                                   | registry; configure a policy; reach any   |
-/// |          |                                             | of those through the gate                 |
+/// | Owner    | install and uninstall the gate; give and    | make the account, the gate or the ledger  |
+/// |          | remove the agent's session; approve market  | a target                                  |
+/// |          | calls; add and configure policies; submit   |                                           |
+/// |          | itself, checked like the agent              |                                           |
+/// | Agent    | through its session, have the account call  | anything else: call the gate, the market  |
+/// |          | `submit`, while the session is valid        | or the account directly, or reach them    |
+/// |          |                                             | through `submit`                          |
 /// | Stranger | nothing on this account                     | everything                                |
 ///
-/// These run against MiniAccount. The same properties on the real account
-/// implementations are in test/accounts/, through ModuleKit.
+/// These run against MiniAccount, whose sessions stand in for Smart Sessions.
+/// The same properties with real Smart Sessions on real account
+/// implementations are in test/accounts/.
 contract KeyModelTest is GateFixture {
     address internal evilModule = makeAddr("evilModule");
 
@@ -43,7 +45,7 @@ contract KeyModelTest is GateFixture {
     // The row that must work
     // ------------------------------------------------------------------
 
-    function test_registeredAgentOrderIsExecutedByTheAccount() public {
+    function test_theAgentsOrderIsExecutedByTheAccount() public {
         bytes memory call = _order(1500);
         bytes32 orderHash = keccak256(
             abi.encode(block.chainid, address(gate), address(account), uint256(0), address(market), keccak256(call))
@@ -60,14 +62,11 @@ contract KeyModelTest is GateFixture {
         });
 
         vm.expectEmit(true, true, true, true, address(gate));
-        emit PolicyGate.OrderSubmitted(
-            address(account), agent, address(market), StubMarket.placeOrder.selector, expected, orderHash
-        );
+        emit PolicyGate.OrderSubmitted(address(account), address(market), StubMarket.placeOrder.selector, expected, orderHash);
         vm.expectEmit(true, true, true, true, address(gate));
         emit PolicyGate.Executed(address(account), orderHash);
 
-        vm.prank(agent);
-        bytes32 returned = gate.submit(address(account), address(market), call);
+        bytes32 returned = _submit(address(market), call);
 
         assertEq(returned, orderHash);
         assertEq(market.orderCount(), 1);
@@ -79,11 +78,8 @@ contract KeyModelTest is GateFixture {
     }
 
     function test_orderHashesAreDistinctForIdenticalCalls() public {
-        vm.startPrank(agent);
-        bytes32 first = gate.submit(address(account), address(market), _order(1500));
-        bytes32 second = gate.submit(address(account), address(market), _order(1500));
-        vm.stopPrank();
-
+        bytes32 first = _submit(address(market), _order(1500));
+        bytes32 second = _submit(address(market), _order(1500));
         assertTrue(first != second);
     }
 
@@ -91,53 +87,91 @@ contract KeyModelTest is GateFixture {
     // A8: who may submit
     // ------------------------------------------------------------------
 
-    function test_unregisteredAgentIsRejected() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyGate.PolicyGate_AgentNotAuthorized.selector, address(account), stranger)
-        );
-        vm.prank(stranger);
-        gate.submit(address(account), address(market), _order(1500));
-
+    /// `submit` takes its caller to be the account. Nobody else may call it:
+    /// not the agent from its own key, not a stranger.
+    function test_onlyAnAccountWithTheGateInstalledMaySubmit() public {
+        address[2] memory callers = [agent, stranger];
+        for (uint256 i = 0; i < callers.length; ++i) {
+            vm.expectRevert(abi.encodeWithSelector(GateBase.Gate_NotInstalled.selector, callers[i]));
+            vm.prank(callers[i]);
+            gate.submit(address(market), _order(1500));
+        }
         assertEq(market.orderCount(), 0);
     }
 
-    function test_ownerKeyIsNotAnAgent() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyGate.PolicyGate_AgentNotAuthorized.selector, address(account), owner)
-        );
+    /// What option 3 gives up: the gate sees the account, not who in it asked.
+    /// The owner's own submission goes through `submit` like the agent's, and
+    /// is booked and, from step 4.2, checked the same way.
+    function test_theOwnersOwnSubmissionIsTheAccountsLikeTheAgents() public {
         vm.prank(owner);
-        gate.submit(address(account), address(market), _order(1500));
+        account.execute(address(gate), 0, abi.encodeCall(gate.submit, (address(market), _order(1500))));
+        assertEq(market.lastCaller(), address(account));
+        assertEq(ledger.openOrderCount(address(account)), 1);
     }
 
-    function test_agentIsValidThroughItsLastSecondAndNotAfter() public {
-        vm.warp(agentValidUntil);
-        vm.prank(agent);
-        gate.submit(address(account), address(market), _order(1500));
+    function test_aKeyWithoutASessionCannotMakeTheAccountSubmit() public {
+        bytes memory call = abi.encodeCall(gate.submit, (address(market), _order(1500)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MiniAccount.MiniAccount_OutsideSession.selector, stranger, address(gate), PolicyGate.submit.selector
+            )
+        );
+        vm.prank(stranger);
+        account.executeAsSession(address(gate), call);
+        assertEq(market.orderCount(), 0);
+    }
+
+    function test_theSessionIsValidThroughItsLastSecondAndNotAfter() public {
+        vm.warp(sessionValidUntil);
+        _submit(address(market), _order(1500));
         assertEq(market.orderCount(), 1);
 
-        vm.warp(uint256(agentValidUntil) + 1);
+        vm.warp(uint256(sessionValidUntil) + 1);
         vm.expectRevert(
-            abi.encodeWithSelector(PolicyGate.PolicyGate_AgentNotAuthorized.selector, address(account), agent)
+            abi.encodeWithSelector(
+                MiniAccount.MiniAccount_OutsideSession.selector, agent, address(gate), PolicyGate.submit.selector
+            )
         );
-        vm.prank(agent);
-        gate.submit(address(account), address(market), _order(1500));
+        _submit(address(market), _order(1500));
         assertEq(market.orderCount(), 1);
     }
 
-    function test_revocationTakesEffectAtOnce() public {
-        vm.expectEmit(true, true, true, true, address(gate));
-        emit AgentRegistry.AgentRevoked(address(account), agent);
-        _asAccount(abi.encodeCall(gate.revokeAgent, (agent)));
+    function test_removingTheSessionTakesEffectAtOnce() public {
+        vm.prank(owner);
+        account.removeSession(agent);
 
-        assertFalse(gate.isAgentActive(address(account), agent));
         vm.expectRevert(
-            abi.encodeWithSelector(PolicyGate.PolicyGate_AgentNotAuthorized.selector, address(account), agent)
+            abi.encodeWithSelector(
+                MiniAccount.MiniAccount_OutsideSession.selector, agent, address(gate), PolicyGate.submit.selector
+            )
         );
-        vm.prank(agent);
-        gate.submit(address(account), address(market), _order(1500));
+        _submit(address(market), _order(1500));
     }
 
-    function test_agentOfOneAccountHasNoAuthorityOnAnother() public {
+    /// The session names one function of one contract. The agent cannot use it
+    /// to call the market, the account or any other function of the gate.
+    function test_theSessionReachesSubmitAndNothingElse() public {
+        address[4] memory targets = [address(market), address(account), address(gate), address(ledger)];
+        bytes[4] memory calls = [
+            _order(1500),
+            abi.encodeCall(MiniAccount.installModule, (EXECUTOR, evilModule, "")),
+            abi.encodeCall(gate.setDecoder, (address(market), StubMarket.withdrawAll.selector, decoder)),
+            abi.encodeCall(ledger.setWriter, (agent, true))
+        ];
+        for (uint256 i = 0; i < targets.length; ++i) {
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    MiniAccount.MiniAccount_OutsideSession.selector, agent, targets[i], bytes4(calls[i])
+                )
+            );
+            vm.prank(agent);
+            account.executeAsSession(targets[i], calls[i]);
+        }
+        assertEq(market.orderCount(), 0);
+        _assertAuthorityUnchanged();
+    }
+
+    function test_aSessionOnOneAccountHasNoAuthorityOnAnother() public {
         address otherOwner = makeAddr("otherOwner");
         address otherAgent = makeAddr("otherAgent");
         MiniAccount other = new MiniAccount(otherOwner);
@@ -145,42 +179,34 @@ contract KeyModelTest is GateFixture {
         vm.startPrank(otherOwner);
         other.installModule(EXECUTOR, address(gate), "");
         other.execute(address(ledger), 0, abi.encodeCall(ledger.setWriter, (address(gate), true)));
-        other.execute(address(gate), 0, abi.encodeCall(gate.registerAgent, (otherAgent, agentValidUntil)));
+        other.enableSession(otherAgent, address(gate), PolicyGate.submit.selector, sessionValidUntil);
         other.execute(
             address(gate), 0, abi.encodeCall(gate.setDecoder, (address(market), StubMarket.placeOrder.selector, decoder))
         );
         vm.stopPrank();
 
+        bytes memory call = abi.encodeCall(gate.submit, (address(market), _order(1500)));
         vm.expectRevert(
-            abi.encodeWithSelector(PolicyGate.PolicyGate_AgentNotAuthorized.selector, address(account), otherAgent)
-        );
-        vm.prank(otherAgent);
-        gate.submit(address(account), address(market), _order(1500));
-
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyGate.PolicyGate_AgentNotAuthorized.selector, address(other), agent)
+            abi.encodeWithSelector(
+                MiniAccount.MiniAccount_OutsideSession.selector, agent, address(gate), PolicyGate.submit.selector
+            )
         );
         vm.prank(agent);
-        gate.submit(address(other), address(market), _order(1500));
+        other.executeAsSession(address(gate), call);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MiniAccount.MiniAccount_OutsideSession.selector, otherAgent, address(gate), PolicyGate.submit.selector
+            )
+        );
+        vm.prank(otherAgent);
+        account.executeAsSession(address(gate), call);
 
         // Each agent still works on its own account.
         vm.prank(otherAgent);
-        gate.submit(address(other), address(market), _order(1500));
+        other.executeAsSession(address(gate), call);
         assertEq(market.lastCaller(), address(other));
-    }
-
-    function test_registerAgentRefusesTheAccountTheGateAndZero() public {
-        address[3] memory bad = [address(account), address(gate), address(0)];
-        for (uint256 i = 0; i < bad.length; ++i) {
-            vm.expectRevert(abi.encodeWithSelector(AgentRegistry.AgentRegistry_InvalidAgent.selector, bad[i]));
-            _asAccount(abi.encodeCall(gate.registerAgent, (bad[i], agentValidUntil)));
-        }
-    }
-
-    function test_registerAgentRefusesAnExpiryInThePast() public {
-        uint48 past = uint48(block.timestamp - 1);
-        vm.expectRevert(abi.encodeWithSelector(AgentRegistry.AgentRegistry_AlreadyExpired.selector, past));
-        _asAccount(abi.encodeCall(gate.registerAgent, (stranger, past)));
+        assertEq(ledger.openOrderCount(address(account)), 0);
     }
 
     // ------------------------------------------------------------------
@@ -193,8 +219,7 @@ contract KeyModelTest is GateFixture {
                 PolicyGate.PolicyGate_UnknownCall.selector, address(market), StubMarket.withdrawAll.selector
             )
         );
-        vm.prank(agent);
-        gate.submit(address(account), address(market), abi.encodeCall(StubMarket.withdrawAll, ()));
+        _submit(address(market), abi.encodeCall(StubMarket.withdrawAll, ()));
 
         assertEq(market.withdrawals(), 0);
     }
@@ -207,8 +232,7 @@ contract KeyModelTest is GateFixture {
                 PolicyGate.PolicyGate_UnknownCall.selector, address(other), StubMarket.placeOrder.selector
             )
         );
-        vm.prank(agent);
-        gate.submit(address(account), address(other), _order(1500));
+        _submit(address(other), _order(1500));
 
         assertEq(other.orderCount(), 0);
     }
@@ -221,8 +245,7 @@ contract KeyModelTest is GateFixture {
                 PolicyGate.PolicyGate_UnknownCall.selector, address(market), StubMarket.placeOrder.selector
             )
         );
-        vm.prank(agent);
-        gate.submit(address(account), address(market), _order(1500));
+        _submit(address(market), _order(1500));
     }
 
     /// Every approved call must be an order of at least one leg and at most
@@ -242,8 +265,7 @@ contract KeyModelTest is GateFixture {
                     PolicyGate.PolicyGate_NotAnOrder.selector, address(market), StubMarket.withdrawAll.selector
                 )
             );
-            vm.prank(agent);
-            gate.submit(address(account), address(market), abi.encodeCall(StubMarket.withdrawAll, ()));
+            _submit(address(market), abi.encodeCall(StubMarket.withdrawAll, ()));
         }
         assertEq(market.withdrawals(), 0);
     }
@@ -256,14 +278,12 @@ contract KeyModelTest is GateFixture {
 
     function test_callDataShorterThanASelectorIsRejected() public {
         vm.expectRevert(PolicyGate.PolicyGate_CallDataTooShort.selector);
-        vm.prank(agent);
-        gate.submit(address(account), address(market), hex"aabbcc");
+        _submit(address(market), hex"aabbcc");
     }
 
     function test_aRevertingMarketCallRevertsTheWholeSubmission() public {
         vm.expectRevert(StubMarket.StubMarket_ZeroQuantity.selector);
-        vm.prank(agent);
-        gate.submit(address(account), address(market), _order(0));
+        _submit(address(market), _order(0));
 
         assertEq(gate.submissionCount(address(account)), 0);
     }
@@ -294,19 +314,29 @@ contract KeyModelTest is GateFixture {
         account.executeFromExecutor(bytes32(0), abi.encodePacked(address(market), uint256(0), _order(1500)));
     }
 
-    /// The nested self-call. The account accepts `installModule` from itself,
-    /// and `submit` makes the account call things, so the account must never be
-    /// what it calls.
+    function test_agentCannotWidenItsOwnSession() public {
+        vm.expectRevert(abi.encodeWithSelector(MiniAccount.MiniAccount_Unauthorized.selector, agent));
+        vm.prank(agent);
+        account.enableSession(agent, address(market), StubMarket.placeOrder.selector, type(uint48).max);
+
+        _assertAuthorityUnchanged();
+    }
+
+    /// The nested self-call. The account accepts `installModule` and
+    /// `enableSession` from itself, and `submit` makes the account call things,
+    /// so the account must never be what it calls.
     function test_accountIsNeverATargetWhateverTheCall() public {
-        bytes[3] memory calls = [
+        bytes[4] memory calls = [
             abi.encodeCall(MiniAccount.installModule, (EXECUTOR, evilModule, "")),
             abi.encodeCall(MiniAccount.uninstallModule, (EXECUTOR, address(gate), "")),
-            abi.encodeCall(MiniAccount.execute, (address(market), 0, _order(1500)))
+            abi.encodeCall(MiniAccount.execute, (address(market), 0, _order(1500))),
+            abi.encodeCall(
+                MiniAccount.enableSession, (agent, address(market), StubMarket.placeOrder.selector, type(uint48).max)
+            )
         ];
         for (uint256 i = 0; i < calls.length; ++i) {
             vm.expectRevert(abi.encodeWithSelector(PolicyGate.PolicyGate_ForbiddenTarget.selector, address(account)));
-            vm.prank(agent);
-            gate.submit(address(account), address(account), calls[i]);
+            _submit(address(account), calls[i]);
         }
         _assertAuthorityUnchanged();
     }
@@ -332,7 +362,7 @@ contract KeyModelTest is GateFixture {
     // ------------------------------------------------------------------
 
     function test_agentCannotWriteAnyRegistryDirectly() public {
-        bytes[10] memory writes = _ownerPathCalls();
+        bytes[8] memory writes = _ownerPathCalls();
         for (uint256 i = 0; i < writes.length; ++i) {
             vm.prank(agent);
             (bool ok, bytes memory err) = address(gate).call(writes[i]);
@@ -345,11 +375,10 @@ contract KeyModelTest is GateFixture {
     /// The other nested self-call: have the account call the gate, where it
     /// would arrive on the owner path.
     function test_gateIsNeverATargetWhateverTheCall() public {
-        bytes[10] memory writes = _ownerPathCalls();
+        bytes[8] memory writes = _ownerPathCalls();
         for (uint256 i = 0; i < writes.length; ++i) {
             vm.expectRevert(abi.encodeWithSelector(PolicyGate.PolicyGate_ForbiddenTarget.selector, address(gate)));
-            vm.prank(agent);
-            gate.submit(address(account), address(gate), writes[i]);
+            _submit(address(gate), writes[i]);
         }
         _assertAuthorityUnchanged();
     }
@@ -359,8 +388,7 @@ contract KeyModelTest is GateFixture {
     /// a writer. It is never a target.
     function test_ledgerIsNeverATarget() public {
         vm.expectRevert(abi.encodeWithSelector(PolicyGate.PolicyGate_ForbiddenTarget.selector, address(ledger)));
-        vm.prank(agent);
-        gate.submit(address(account), address(ledger), abi.encodeCall(ledger.setWriter, (agent, true)));
+        _submit(address(ledger), abi.encodeCall(ledger.setWriter, (agent, true)));
 
         assertFalse(ledger.isWriter(address(account), agent));
     }
@@ -392,9 +420,7 @@ contract KeyModelTest is GateFixture {
         _asAccount(abi.encodeCall(gate.setDecoder, (address(policy), IPolicy.configure.selector, new NullDecoder())));
 
         vm.expectRevert(CapPolicy.CapPolicy_OnlyGate.selector);
-        vm.prank(agent);
-        gate.submit(
-            address(account),
+        _submit(
             address(policy),
             abi.encodeCall(IPolicy.configure, (address(account), POLICY_ID, _caps(type(uint64).max, type(uint64).max)))
         );
@@ -402,14 +428,30 @@ contract KeyModelTest is GateFixture {
         assertEq(_hardCap(), HARD);
     }
 
-    /// Whatever bytes an agent sends, to whichever contract, the account's
-    /// modules, the registries and the configuration are as they were.
+    /// Whatever bytes an agent submits, to whichever contract, the account's
+    /// modules, its sessions, the registries and the configuration are as they
+    /// were.
     function testFuzz_noSubmissionChangesAuthority(uint8 which, bytes calldata data) public {
         address[5] memory targets =
             [address(account), address(gate), address(market), address(policy), address(ledger)];
 
         vm.prank(agent);
-        try gate.submit(address(account), targets[which % 5], data) {} catch {}
+        try account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (targets[which % 5], data))) {} catch {}
+
+        _assertAuthorityUnchanged();
+    }
+
+    /// Whatever the agent asks of its session, it gets `submit` or nothing.
+    function testFuzz_theSessionReachesNothingButSubmit(uint8 which, bytes calldata data) public {
+        address[5] memory targets =
+            [address(account), address(gate), address(market), address(policy), address(ledger)];
+        address target = targets[which % 5];
+
+        vm.prank(agent);
+        try account.executeAsSession(target, data) {
+            assertEq(target, address(gate));
+            assertEq(bytes4(data[:4]), PolicyGate.submit.selector);
+        } catch {}
 
         _assertAuthorityUnchanged();
     }
@@ -425,7 +467,7 @@ contract KeyModelTest is GateFixture {
         RelayTarget relay = new RelayTarget();
         _asAccount(abi.encodeCall(gate.setDecoder, (address(relay), RelayTarget.forward.selector, new NullDecoder())));
 
-        bytes[3] memory attempts = [
+        bytes[4] memory attempts = [
             abi.encodeCall(
                 RelayTarget.forward,
                 (address(account), abi.encodeCall(MiniAccount.installModule, (EXECUTOR, evilModule, "")))
@@ -435,12 +477,21 @@ contract KeyModelTest is GateFixture {
                 (address(account), abi.encodeCall(MiniAccount.uninstallModule, (EXECUTOR, address(gate), "")))
             ),
             abi.encodeCall(
-                RelayTarget.forward, (address(gate), abi.encodeCall(gate.registerAgent, (stranger, agentValidUntil)))
+                RelayTarget.forward,
+                (
+                    address(account),
+                    abi.encodeCall(
+                        MiniAccount.enableSession, (agent, address(market), StubMarket.placeOrder.selector, type(uint48).max)
+                    )
+                )
+            ),
+            abi.encodeCall(
+                RelayTarget.forward,
+                (address(gate), abi.encodeCall(gate.setDecoder, (address(market), StubMarket.withdrawAll.selector, decoder)))
             )
         ];
         for (uint256 i = 0; i < attempts.length; ++i) {
-            vm.prank(agent);
-            gate.submit(address(account), address(relay), attempts[i]);
+            _submit(address(relay), attempts[i]);
             assertFalse(relay.lastOk());
         }
 
@@ -448,25 +499,19 @@ contract KeyModelTest is GateFixture {
         _assertAuthorityUnchanged();
     }
 
-    /// A target that is also an agent calls `submit` again while the account is
-    /// calling it. The lock refuses the inner call.
-    function test_targetCannotReenterSubmit() public {
+    /// A target calls back into the gate while the account is calling it:
+    /// `reconcile`, which anyone may call, so that volume would be released
+    /// half-way through a submission. The lock refuses it.
+    function test_targetCannotReenterTheGate() public {
         ReentrantTarget hostile = new ReentrantTarget(gate);
         _asAccount(
             abi.encodeCall(gate.setDecoder, (address(hostile), ReentrantTarget.poke.selector, new NullDecoder()))
         );
-        _asAccount(abi.encodeCall(gate.registerAgent, (address(hostile), agentValidUntil)));
 
-        vm.prank(agent);
-        gate.submit(
-            address(account),
-            address(hostile),
-            abi.encodeCall(ReentrantTarget.poke, (address(account), address(market), _order(1500)))
-        );
+        _submit(address(hostile), abi.encodeCall(ReentrantTarget.poke, (address(account), address(market), bytes32(uint256(1)))));
 
         assertFalse(hostile.reentryOk());
         assertEq(hostile.reentryError(), abi.encodeWithSelector(GateBase.Gate_Reentrancy.selector));
-        assertEq(market.orderCount(), 0);
     }
 
     // ------------------------------------------------------------------
@@ -490,7 +535,7 @@ contract KeyModelTest is GateFixture {
         vm.prank(owner);
         fresh.installModule(EXECUTOR, address(gate), "");
 
-        assertFalse(gate.isAgentActive(address(fresh), agent));
+        assertEq(fresh.sessionOf(agent).validUntil, 0);
         assertEq(address(gate.decoderOf(address(fresh), address(market), StubMarket.placeOrder.selector)), address(0));
         assertEq(gate.policiesOf(address(fresh)).length, 0);
     }
@@ -500,17 +545,20 @@ contract KeyModelTest is GateFixture {
     function test_strangerCallingOnInstallGainsNothingOverTheAccount() public {
         vm.startPrank(stranger);
         gate.onInstall("");
-        gate.registerAgent(agent, agentValidUntil);
         gate.setDecoder(address(market), StubMarket.withdrawAll.selector, decoder);
         vm.stopPrank();
 
         _assertAuthorityUnchanged();
 
+        // Its submissions run in its own namespace, where nothing is approved.
         vm.expectRevert(
-            abi.encodeWithSelector(PolicyGate.PolicyGate_AgentNotAuthorized.selector, address(account), stranger)
+            abi.encodeWithSelector(
+                PolicyGate.PolicyGate_UnknownCall.selector, address(market), StubMarket.placeOrder.selector
+            )
         );
         vm.prank(stranger);
-        gate.submit(address(account), address(market), _order(1500));
+        gate.submit(address(market), _order(1500));
+        assertEq(market.orderCount(), 0);
     }
 
     function test_installTwiceIsRefused() public {
@@ -519,22 +567,19 @@ contract KeyModelTest is GateFixture {
         gate.onInstall("");
     }
 
-    function test_uninstallWithdrawsTheAgentAndReinstallStartsEmpty() public {
+    function test_uninstallStopsTheAgentAndReinstallStartsEmpty() public {
         vm.expectEmit(true, true, true, true, address(gate));
         emit GateBase.GateUninstalled(address(account), 1);
         vm.prank(owner);
         account.uninstallModule(EXECUTOR, address(gate), "");
 
-        assertFalse(gate.isAgentActive(address(account), agent));
         // The policy was told to drop its state.
         (bool set,,) = policy.caps(address(account), POLICY_ID);
         assertFalse(set);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyGate.PolicyGate_AgentNotAuthorized.selector, address(account), agent)
-        );
-        vm.prank(agent);
-        gate.submit(address(account), address(market), _order(1500));
+        // The session still names submit, but the gate no longer serves the account.
+        vm.expectRevert(abi.encodeWithSelector(GateBase.Gate_NotInstalled.selector, address(account)));
+        _submit(address(market), _order(1500));
 
         vm.expectEmit(true, true, true, true, address(gate));
         emit GateBase.GateInstalled(address(account), 2);
@@ -542,11 +587,15 @@ contract KeyModelTest is GateFixture {
         account.installModule(EXECUTOR, address(gate), "");
 
         // Nothing registered under the first installation carries over.
-        assertEq(gate.agentValidUntil(address(account), agent), 0);
-        assertFalse(gate.isAgentActive(address(account), agent));
         assertEq(address(gate.decoderOf(address(account), address(market), StubMarket.placeOrder.selector)), address(0));
         assertEq(gate.policiesOf(address(account)).length, 0);
         assertFalse(gate.hasPolicy(address(account), policy, POLICY_ID));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PolicyGate.PolicyGate_UnknownCall.selector, address(market), StubMarket.placeOrder.selector
+            )
+        );
+        _submit(address(market), _order(1500));
     }
 
     function test_uninstallSucceedsEvenIfAPolicyRefusesToLetGo() public {
@@ -564,18 +613,16 @@ contract KeyModelTest is GateFixture {
 
     /// @dev Every state-changing owner-path function of the gate, with
     ///      arguments that would hand the agent more than it has.
-    function _ownerPathCalls() internal view returns (bytes[10] memory calls) {
+    function _ownerPathCalls() internal view returns (bytes[8] memory calls) {
         bytes memory wide = _caps(type(uint64).max, type(uint64).max);
-        calls[0] = abi.encodeCall(gate.registerAgent, (stranger, type(uint48).max));
-        calls[1] = abi.encodeCall(gate.revokeAgent, (agent));
-        calls[2] = abi.encodeCall(gate.setDecoder, (address(market), StubMarket.withdrawAll.selector, decoder));
-        calls[3] = abi.encodeCall(gate.removeDecoder, (address(market), StubMarket.placeOrder.selector));
-        calls[4] = abi.encodeCall(gate.addPolicy, (policy, keccak256("second"), wide));
-        calls[5] = abi.encodeCall(gate.setConfig, (policy, POLICY_ID, wide));
-        calls[6] = abi.encodeCall(gate.applyConfig, (policy, POLICY_ID, wide));
-        calls[7] = abi.encodeCall(gate.proposeRemovePolicy, (policy, POLICY_ID));
-        calls[8] = abi.encodeCall(gate.applyRemovePolicy, (policy, POLICY_ID));
-        calls[9] = abi.encodeCall(gate.cancelProposal, (policy, POLICY_ID));
+        calls[0] = abi.encodeCall(gate.setDecoder, (address(market), StubMarket.withdrawAll.selector, decoder));
+        calls[1] = abi.encodeCall(gate.removeDecoder, (address(market), StubMarket.placeOrder.selector));
+        calls[2] = abi.encodeCall(gate.addPolicy, (policy, keccak256("second"), wide));
+        calls[3] = abi.encodeCall(gate.setConfig, (policy, POLICY_ID, wide));
+        calls[4] = abi.encodeCall(gate.applyConfig, (policy, POLICY_ID, wide));
+        calls[5] = abi.encodeCall(gate.proposeRemovePolicy, (policy, POLICY_ID));
+        calls[6] = abi.encodeCall(gate.applyRemovePolicy, (policy, POLICY_ID));
+        calls[7] = abi.encodeCall(gate.cancelProposal, (policy, POLICY_ID));
     }
 
     function _assertAuthorityUnchanged() internal view {
@@ -585,9 +632,12 @@ contract KeyModelTest is GateFixture {
         assertTrue(gate.isInstalled(address(account)));
         assertEq(gate.generationOf(address(account)), 1);
 
-        // Agents.
-        assertEq(gate.agentValidUntil(address(account), agent), agentValidUntil);
-        assertEq(gate.agentValidUntil(address(account), stranger), 0);
+        // Sessions: the agent's names submit only; nobody else has one.
+        MiniAccount.Session memory s = account.sessionOf(agent);
+        assertEq(s.target, address(gate));
+        assertEq(s.selector, PolicyGate.submit.selector);
+        assertEq(s.validUntil, sessionValidUntil);
+        assertEq(account.sessionOf(stranger).validUntil, 0);
 
         // Approved calls.
         assertEq(

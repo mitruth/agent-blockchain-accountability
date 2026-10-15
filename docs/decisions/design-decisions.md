@@ -1750,6 +1750,64 @@ owner's own `submit` is checked like the agent's.
 
 ---
 
+## Step 4. The session entry point, StaticOrderPolicy, S1, S2, S6
+
+Started 15 October 2026.
+
+### 4.1 — The agent's entry point is a session on the account
+
+**Status.** Settled by Dan (D1, entry 3.9); built.
+
+**Decision.**
+
+- **`submit(target, callData)`** is called by the account itself. The gate
+  checks "the caller is an account with the gate installed", the check every
+  owner-path function already makes.
+- **The gate's agent registry is removed**, with `registerAgent`,
+  `revokeAgent` and `isAgentActive`. Who may act, until when and whether
+  revoked is the session's business: on a real account a Smart Session with a
+  time-frame policy and `removeSession`.
+- **`OrderSubmitted`** names the account, the target and the selector; it no
+  longer names an agent, which the gate cannot see.
+- **Tests on `MiniAccount`.** Its session stand-in (`enableSession`,
+  `removeSession`, `executeAsSession`) lets a key have the account call one
+  function of one contract, until a time. The Hardhat tests use it.
+- **Tests on real accounts.** `test/accounts/` uses real Smart Sessions on the
+  four real accounts, now with the real gate. The session helpers moved to
+  `test/accounts/SessionFixture.sol`.
+- **Off-chain.** `deploy` gives each agent its session, and the day-ahead
+  scenario sends the agent's orders through it.
+
+**What the tests now show.**
+
+- **The key model.** `KeyModel.t.sol` grew from 36 to 38 tests. The "who may
+  submit" group now covers the session:
+  - it reaches `submit` and nothing else;
+  - it is valid through its last second;
+  - removing it acts at once;
+  - it gives no authority on another account.
+  A second fuzz test sends arbitrary calls through the session; each reaches
+  `submit` or nothing.
+- **Re-entry.** The hostile-target test now re-enters `reconcile`, which anyone
+  may call. A target can no longer call `submit`, since it is not an account
+  with the gate installed. A re-entered `reconcile` would release volume
+  half-way through a submission once credits exist (step 4.2). The lock
+  refuses it.
+- **Real accounts.** On all four, through a real Smart Session, the agent's
+  order reaches the market and every route around the session is refused.
+
+**Rejected.** *Keeping `submit(account, target, callData)` with a check that
+`account == msg.sender`*: a parameter that can only take one value.
+
+**Results.** `npm test`: 363 passing. Foundry, `test/accounts/`: 8 passing.
+The day-ahead scenario gives the same day, figure for figure.
+
+**Also.** `DEPLOYMENT_FILE` in the environment points the off-chain programs at
+another deployment file, so a second node can run without touching
+`deployments/local.json`.
+
+---
+
 ## Open decisions
 
 Waiting for Dan. None blocks step 4: item 7, D1, was decided on 15 October (3.9).

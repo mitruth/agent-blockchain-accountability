@@ -15,17 +15,34 @@ import {IERC7579Module} from "../interfaces/IERC7579.sol";
 /// real implementations, where `installModule` accepts the EntryPoint or a
 /// self-call. That self-call is the escalation path the gate has to close, so
 /// the mock keeps it open on purpose.
+///
+/// Sessions stand in for Rhinestone Smart Sessions (decision D1, option 3): the
+/// owner lets a key make the account call one function of one contract, until a
+/// time, and nothing else. On the real accounts the agent's session is a Smart
+/// Session scoped the same way (test/accounts/).
 contract MiniAccount {
     uint256 internal constant MODULE_TYPE_EXECUTOR = 2;
 
     address public immutable owner;
 
+    /// @notice A key's session: the one call it may have the account make.
+    struct Session {
+        address target;
+        bytes4 selector;
+        uint48 validUntil;
+    }
+
     mapping(uint256 moduleTypeId => mapping(address module => bool)) private _installed;
+    mapping(address key => Session) private _sessions;
+
+    event SessionEnabled(address indexed key, address indexed target, bytes4 selector, uint48 validUntil);
+    event SessionRemoved(address indexed key);
 
     error MiniAccount_Unauthorized(address caller);
     error MiniAccount_AlreadyInstalled(address module);
     error MiniAccount_NotInstalled(address module);
     error MiniAccount_UnsupportedMode(bytes32 mode);
+    error MiniAccount_OutsideSession(address key, address target, bytes4 selector);
 
     constructor(address owner_) {
         owner = owner_;
@@ -49,6 +66,35 @@ contract MiniAccount {
         returns (bytes memory)
     {
         return _call(target, value, data);
+    }
+
+    /// @notice Let `key` have the account call `selector` on `target`, through
+    ///         its last second `validUntil`. Replaces the key's session, if any.
+    function enableSession(address key, address target, bytes4 selector, uint48 validUntil) external onlyOwnerOrSelf {
+        _sessions[key] = Session({target: target, selector: selector, validUntil: validUntil});
+        emit SessionEnabled(key, target, selector, validUntil);
+    }
+
+    /// @notice End `key`'s session at once.
+    function removeSession(address key) external onlyOwnerOrSelf {
+        delete _sessions[key];
+        emit SessionRemoved(key);
+    }
+
+    function sessionOf(address key) external view returns (Session memory) {
+        return _sessions[key];
+    }
+
+    /// @notice A session key's call from the account: exactly the target and
+    ///         function its session names, while the session is valid, with no
+    ///         value.
+    function executeAsSession(address target, bytes calldata data) external returns (bytes memory) {
+        Session memory s = _sessions[msg.sender];
+        bytes4 selector = data.length >= 4 ? bytes4(data[:4]) : bytes4(0);
+        if (s.validUntil < block.timestamp || target != s.target || selector != s.selector) {
+            revert MiniAccount_OutsideSession(msg.sender, target, selector);
+        }
+        return _call(target, 0, data);
     }
 
     function installModule(uint256 moduleTypeId, address module, bytes calldata initData) external onlyOwnerOrSelf {

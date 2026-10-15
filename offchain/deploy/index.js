@@ -4,10 +4,13 @@
 //
 // No database: every address is written to deployments/local.json, and every
 // link between them is also on chain (MarketManager.prosumerOf(account),
-// Prosumer.owner(), PolicyGate.agentValidUntil(account, agent)).
+// Prosumer.owner(), MiniAccount.sessionOf(agent)).
 
 import fs from "node:fs";
-import { key, deploy, send, read, selector, calldata as encode, now, saveDeployment, price, EUR, eur } from "../chain/index.js";
+import path from "node:path";
+import {
+  ROOT, DEPLOYMENT_FILE, key, deploy, send, read, selector, calldata as encode, now, saveDeployment, price, EUR, eur,
+} from "../chain/index.js";
 
 export const DEFAULT_CONFIG = new URL("./prosumers.json", import.meta.url);
 
@@ -83,12 +86,14 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     };
 
     if (p.agent) {
-      // Owner path: install the gate, appoint it ledger writer, register the
-      // agent, and approve the four order functions of the prosumer contract.
+      // Owner path: install the gate, appoint it ledger writer, give the agent
+      // a session that may have the account call the gate's submit and nothing
+      // else (decision D1), and approve the four order functions of the
+      // prosumer contract.
       const agent = key(roles.agent).address;
       await send(roles.owner, account, "MiniAccount", "installModule", [EXECUTOR_MODULE, gate, "0x"]);
       await asAccount(ledger, "PositionLedger", "setWriter", [gate, true]);
-      await asAccount(gate, "PolicyGate", "registerAgent", [agent, validUntil]);
+      await send(roles.owner, account, "MiniAccount", "enableSession", [agent, gate, selector("PolicyGate", "submit"), validUntil]);
       for (const sel of orderFunctions) {
         await asAccount(gate, "PolicyGate", "setDecoder", [prosumer, sel, decoder]);
       }
@@ -119,6 +124,6 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     prosumers,
   };
   saveDeployment(deployment);
-  log("\nWritten: deployments/local.json");
+  log(`\nWritten: ${path.relative(ROOT, DEPLOYMENT_FILE)}`);
   return deployment;
 }
