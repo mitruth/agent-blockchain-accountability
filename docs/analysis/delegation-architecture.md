@@ -1,8 +1,8 @@
 # Delegation architecture: comparison with deployed systems
 
-Written 2026-10-14. Status: analysis. It reopens spec decision D1, "executor
-module; the agent holds no key on the account", which the brief settled without
-a comparison with existing systems.
+Written 2026-10-14. Status: **decided on 2026-10-15: option 3** (section 10).
+It reopened spec decision D1, "executor module; the agent holds no key on the
+account", which the brief settled without a comparison with existing systems.
 
 The question: how should an autonomous agent be given bounded authority over a
 prosumer's smart account, given that the bounds this project needs are
@@ -248,6 +248,95 @@ project's own code.
 
 ---
 
+## 10. Results of the checks, and the decision
+
+Run on 15 October 2026. Checks 2, 3 and 4 decided between the options; check 1
+only matters for option 2, which check 2 rules out; check 5 is a written
+argument for the paper and remains open.
+
+| # | Check | Result | How |
+|---|---|---|---|
+| 2 | Can a MetaMask caveat refuse without reverting? | **No.** The four hooks are plain calls with no try/catch; the code's own comment: "If any hook fails, the entire transaction reverts." The execution mode is passed to the account unchanged | Read `DelegationManager.sol`, main **[source]** |
+| 4 | What do the deployed period limits enforce? | **Tumbling windows, both.** MetaMask's `ERC20PeriodTransferEnforcer`: period index (now − startDate) / periodDuration + 1; "unused tokens are forfeited once the period ends". Coinbase's `SpendPermissionManager`: periods "[start + n * period, ...)", spend reset each period | Read both, main **[source]** |
+| 3a | Can a Smart Session be scoped to one function of one contract? | **Yes.** A call to a (target, selector) with no policies falls to the fallback action; with no fallback policy it reverts. Delegatecall, try-mode, `executeUserOp` and nested `execute` self-calls are refused outright; a direct call to the account needs its own action | Read `SmartSession.sol`, `PolicyLib.sol` at v1.0.0 and main **[source]**; prototype |
+| 3b | Can such a session sign for the account (ERC-1271)? | **No, if it has no ERC-7739 content.** Every session signature must be ERC-7739 nested typed data (`PersonalSign` is refused); the content type must be on the session's allowlist; v1.0.0 and later also require at least one ERC-1271 policy | Read the same at v1.0.0, main, and the 2024 build ModuleKit bundles **[source]**; prototype |
+| 3c | Does the hybrid work on real accounts? | **Yes, on all four.** Prototype below | `test/accounts/SessionGate.t.sol` |
+
+**The prototype.** `test/accounts/SessionGate.t.sol`, Foundry in Docker, on the
+ERC-7579 reference account, Safe7579, Nexus and Kernel, with ModuleKit 0.5.9's
+Smart Sessions. A test double of the gate as option 3 would make it
+(`SessionGateProbe`) is installed as an executor; the agent holds a session
+whose only action is the gate's `submit`, with no signing content. On every
+account:
+
+1. Through the session, `submit` runs, and the gate makes the account call the
+   market from inside the same execution: the account is re-entered through
+   `executeFromExecutor`, and the market sees the account as caller.
+2. A refusal by the gate is recorded: the user operation succeeds and the
+   refusal's event is in its log.
+3. The session reaches nothing else: not the market directly, not the gate's
+   owner function, not `installModule` or `uninstallModule`, not the
+   account's own `execute`. Giving the session a second action, the market's
+   `placeOrder`, makes all four tests fail at exactly that assertion: the
+   test can tell.
+4. The session cannot sign for the account. On Nexus a session configured to
+   sign does sign, with the same signature format: the refusal is the
+   session's scope.
+
+**What the prototype found about the accounts.**
+
+- **Kernel** runs a hooked validator's user operations through
+  `executeUserOp`, which Smart Sessions refuses. The Smart Sessions validator
+  must be installed on Kernel without a hook.
+- **Kernel** hands a validator its own wrapped hash for ERC-1271, so on Kernel
+  no session signature verifies at all.
+- **The reference account and Safe7579**, as ModuleKit deploys them, have no
+  `eip712Domain()`, which Smart Sessions reads to check a session signature: on
+  them too no session can sign. Only Nexus supports session signatures here,
+  and there the content allowlist is what refuses the agent.
+
+**A version difference to carry into deployment.** ModuleKit 0.5.9 bundles a
+Smart Sessions build of September 2024, before v1.0.0. In it, only the ERC-7739
+content allowlist guards signing (its ERC-1271 policy minimum is 0). From
+v1.0.0 a session needs both allowed content and at least one ERC-1271 policy.
+A deployment should use v1.0.0 or later, and give the agent's session an empty
+`erc7739Policies`.
+
+### The decision
+
+**Option 3: the agent authenticates with a Rhinestone Smart Session scoped to
+`PolicyGate.submit`; the policies run in the gate, an ERC-7579 executor.**
+Dan agreed to option 3 on condition that the checks work out (15 October); they
+did. It answers section 5's first two questions:
+
+- **Why not Smart Sessions?** It is used, for what it is built for:
+  authenticating the agent with a scoped key.
+- **Why not ERC-7710?** MetaMask's manager can only refuse by reverting, so a
+  refused order would leave no record.
+
+The policies stay in execution for section 3's reasons, as Rhinestone's own
+automation executors do.
+
+**What changes, in step 4 (section 7, column "option 3").**
+
+- `submit` is called by the account itself: "the caller is an account with the
+  gate installed", the owner-path check of step 1.
+- The gate's agent registry goes. Who may act, until when and whether revoked
+  becomes the session's business: `removeSession`, and a time-frame user-op
+  policy for expiry.
+- The agent's operations are user operations of the account. They are paid by
+  the account or a paymaster, not by an agent key.
+- Everything from steps 2 and 3 is unchanged: the ledger, the decoders,
+  reconcile, `WindowLib`, the verifier, the mutation suite. So is the
+  configuration manager.
+
+**What is given up.** The gate no longer sees which agent submitted; it sees the
+account. A policy cannot tell the owner's own `submit` from the agent's, and
+checks both, which is the safe direction. Events name the account, not the
+agent.
+
+---
+
 ## Sources
 
 Primary texts:
@@ -270,3 +359,12 @@ Audits and secondary:
 - [Biconomy: Smart Session policies](https://docs.biconomy.io/new/smart-sessions/policies)
 - [OpenZeppelin: account modules](https://docs.openzeppelin.com/community-contracts/account-modules)
 - [Rhinestone on Alchemy](https://www.alchemy.com/dapps/rhinestone)
+
+Read for the checks of section 10:
+
+- [MetaMask Delegation Framework, `DelegationManager.sol`](https://github.com/MetaMask/delegation-framework/blob/main/src/DelegationManager.sol)
+- [MetaMask Delegation Framework, `ERC20PeriodTransferEnforcer.sol`](https://github.com/MetaMask/delegation-framework/blob/main/src/enforcers/ERC20PeriodTransferEnforcer.sol)
+- [Coinbase, `SpendPermissionManager.sol`](https://github.com/coinbase/spend-permissions/blob/main/src/SpendPermissionManager.sol)
+- [Smart Sessions, `SmartSession.sol` at v1.0.0](https://github.com/erc7579/smartsessions/blob/v1.0.0/contracts/SmartSession.sol), and at main and at commit `49498d2` (September 2024, the build ModuleKit 0.5.9 bundles)
+- [Smart Sessions, `PolicyLib.sol` at v1.0.0](https://github.com/erc7579/smartsessions/blob/v1.0.0/contracts/lib/PolicyLib.sol)
+- [ModuleKit v0.5.9](https://github.com/rhinestonewtf/modulekit/tree/v0.5.9)

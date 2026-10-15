@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "hardhat test solidity test/gate/KeyModel.t.sol test/gate/ConfigManager.t.sol test/gate/OrderLifecycle.t.sol test/gate/PositionLedger.t.sol test/market/LockableERC1155.t.sol test/market/MarketFlow.t.sol test/market/GatedMarket.t.sol test/market/ClassicSettlement.t.sol test/earlier-design/Authorization.t.sol test/earlier-design/Differential.t.sol test/earlier-design/Enforcement.t.sol test/earlier-design/MeterReadings.t.sol test/earlier-design/PriceOracle.t.sol test/earlier-design/Retention.t.sol test/earlier-design/Settlement.t.sol",
+    "test": "hardhat test solidity test/gate/KeyModel.t.sol test/gate/ConfigManager.t.sol test/gate/OrderLifecycle.t.sol test/gate/PositionLedger.t.sol test/market/LockableERC1155.t.sol test/market/MarketFlow.t.sol test/market/GatedMarket.t.sol test/market/ClassicSettlement.t.sol test/policies/WindowLib.t.sol test/earlier-design/Authorization.t.sol test/earlier-design/Differential.t.sol test/earlier-design/Enforcement.t.sol test/earlier-design/MeterReadings.t.sol test/earlier-design/PriceOracle.t.sol test/earlier-design/Retention.t.sol test/earlier-design/Settlement.t.sol",
     "test:sol": "npm test",
     "test:forge": "forge test",
     "test:accounts": "forge test --match-path \"test/accounts/*\"",
@@ -13,7 +13,10 @@
     "node": "hardhat node",
     "demo:deploy": "hardhat build --no-tests && node offchain/deploy/cli.js",
     "demo:flow": "node offchain/scenarios/day-ahead.js",
-    "demo:match": "node offchain/matcher/cli.js"
+    "demo:match": "node offchain/matcher/cli.js",
+    "verify:window": "hardhat build --no-tests && node offchain/verifier/cli.js",
+    "test:offchain": "node --test \"offchain/**/*.test.js\"",
+    "mutate": "node offchain/mutation/cli.js"
   },
   "keywords": [],
   "author": "",

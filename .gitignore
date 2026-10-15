@@ -14,3 +14,8 @@ deployments/
 
 __pycache__/
 *.pyc
+
+# Left beside a contract while the mutation suite runs; restored automatically.
+*.mutation-backup
+# The mutation suite's lock while a run is in progress.
+offchain/mutation/.running

@@ -1438,11 +1438,321 @@ the same day as before, figure for figure (entry 2.58).
 **Earlier entries keep their paths.** The entries above name files where they
 were when the decision was taken. This table maps them to where they are now.
 
+### 3.2 — WindowLib: five classes behind one interface
+
+**Status.** Proposed.
+
+**Decision.** `contracts/policies/WindowLib.sol`, a library of internal
+functions on a `Window` in the policy's storage:
+
+| Function | Meaning |
+| -------- | ------- |
+| `used(t)` | What the window counts as consumed at time t |
+| `limit(t)` | What it allows at time t |
+| `fits(t, amount)` | `used(t) + amount <= limit(t)`, the cap inclusive |
+| `add(t, amount)` | Consume; does not check the limit |
+| `credit(t, placedAt, amount)` | Give back an amount consumed at `placedAt`; returns what was given back |
+
+Every class fits this shape:
+
+- **SLIDING, TUMBLING, LIFETIME:** the limit is the cap.
+- **REFILL:** reports cap − balance as its use.
+- **STREAM:** reports everything consumed as its use and what has unlocked as
+  its limit.
+
+A policy therefore runs the same check whatever class is configured. That is
+what the evaluation needs: the same attacks, the same decoder, only the
+class changed (spec 5.3).
+
+**Why time is a parameter.** The policy passes `block.timestamp`. A check
+and its commit are then evaluated at the same instant, and the tests can
+probe any time without the chain.
+
+**Why `add` does not check.** The policy decides, with soft and hard
+bounds and flags (spec 5.5), and only then commits. A library that refused
+would take that decision away from it.
+
+### 3.3 — SLIDING: a ring of packed buckets, a running total, a lazy reset
+
+**Status.** Proposed.
+
+**Decision.**
+
+- **Storage.**
+  - n buckets of 64 bits, four to a storage word.
+  - A running total.
+  - `mark`, the last bucket the ring was advanced to.
+  - A generation number. The ring is keyed by it, so a word of an old
+    generation is simply never read again.
+- **Advancing** from `mark` to the current bucket c subtracts and zeroes the
+  positions of buckets mark + 1 ... c, which held the buckets that left the
+  window. It reads each storage word once.
+- **Lazy reset.** If c − mark ≥ n, everything has left the window: the
+  generation goes up and the total is zero, in constant gas.
+- **Bounds.** At most 2016 buckets, a week of 5-minute buckets.
+
+**Measured.** The worst case for S1's default week of hourly buckets is a
+write after 167 buckets, where every position is swept. It costs 339,872 gas
+for the whole `tryAdd` through the probe
+(`test_theWorstCaseSweepOfAWeekOfHourlyBucketsIsBounded`). S2 and S6
+windows (48 and 12 buckets) cost proportionally less.
+
+**Rejected.**
+
+- *One storage word per bucket:* four times the reads for the same sweep.
+- *Clearing the ring on reset:* gas proportional to n after any long idle
+  period, the case the lazy reset exists for.
+- *No running total, summing on every check:* O(n) on every order rather
+  than only on a sweep.
+
+### 3.4 — Where the spec is silent: the edges of each class
+
+**Status.** Proposed.
+
+**Decision.**
+
+- **Credits (all classes).** A credit gives back at most what the window
+  still counts for that moment, and nothing for a moment in the future. It
+  never takes a bucket below zero.
+- **SLIDING.** A credit goes to the bucket of `placedAt`, and only while that
+  bucket is in the window (spec 5.3).
+- **TUMBLING.**
+  - Before the anchor, time counts in the first period.
+  - A credit applies only within the period of the consumption.
+- **REFILL.** A credit applies only within the same refill interval as the
+  consumption. After a refill the amount may already have come back, and
+  crediting it again would refund it twice. The spec's rule "only if that
+  bucket is still in the window" has no direct meaning for a token bucket;
+  this is the reading that keeps the bound.
+- **STREAM.** Before the anchor only `initial` has unlocked. Credits always
+  apply, since nothing is ever given back by time.
+- **Overflow.** A count beyond 64 bits reverts; it never wraps.
+
+### 3.5 — Configuration: a new cap keeps the count, a new shape starts afresh
+
+**Status.** Proposed.
+
+**Decision.**
+
+- **Same shape.** Changing the cap, the rate or the initial amount keeps what
+  has been counted.
+- **New shape.** Changing the class, the step, the number of buckets or the
+  anchor starts the window afresh, because the old buckets mean nothing in
+  the new shape.
+- **Malformed configurations are refused:**
+  - a zero step;
+  - a sliding window with no buckets, or more than 2016;
+  - a stream starting above its cap.
+
+**Consequence for step 4.** Starting afresh forgets consumption, so it
+loosens the window. A policy must classify a change of shape as `WIDEN`, so
+that it waits the 24 hours (spec 5.6). This joins the carried-forward item
+"structural configuration changes need carry-over of old totals".
+
+### 3.6 — WindowProbe: the library on its own, for tests and the verifier
+
+**Status.** Proposed.
+
+**Decision.** `contracts/harness/WindowProbe.sol` holds windows by id and acts
+as the smallest possible policy:
+
+- It admits an amount if it fits, and consumes it.
+- A credit refers to an earlier admission, at most once and at most its
+  amount, as an order would.
+- Every call emits an event with the block time: `Configured`, `Admitted`,
+  `Refused`, `Credited`, `Observed`.
+
+It lives in `contracts/harness/`, with `MiniAccount`, because it is not part of
+the system. The verifier needs it deployed, which a contract under `test/`
+could not be.
+
+### 3.7 — The verifier is JavaScript, and recomputes by different algorithms
+
+**Status.** Settled by Dan (JavaScript, not the Python the spec names).
+
+**Decision.** `offchain/verifier/` rebuilds every window from the probe's
+event log alone (spec 8), then compares every figure the chain reported:
+
+- the count and the limit at each decision and observation;
+- the decision itself;
+- the amount each credit gave back.
+
+It reports the first disagreement.
+
+**Different algorithms, on purpose.** The spec says "never port the
+Solidity". Each class is computed from its definition:
+
+| Class | Chain | Verifier |
+| ----- | ----- | -------- |
+| SLIDING | Ring, running total, lazy reset | Sums every admission made at or after the window's start time; no buckets, no ring |
+| TUMBLING | Resets the count at a boundary | Groups admissions by period |
+| REFILL | Subtracts refills since a stored mark | Closed form: the most any run of recent intervals consumed beyond what was refilled meanwhile (a reflected random walk) |
+| STREAM, LIFETIME | Running counters | Sums from the log |
+
+A unit test checks REFILL's closed form against a step-by-step simulation
+over 200 random runs (`offchain/verifier/verifier.test.js`).
+
+**The guarantees, over every interval.** Spec 5.3's bounds are measured by
+brute force over all intervals between events, not only bucket-aligned ones:
+
+- **G1:** any interval of length ≤ W − b admits at most the cap.
+- **G2:** an interval of length ≤ W admits at most the cap plus what it holds
+  of the one bucket that has just left the window.
+- For TUMBLING, the most admitted within one period's length is reported.
+
+**It can disagree.** A self-test tampers with one figure at a time in every
+history it accepted and checks the verifier rejects each:
+
+- an admission reported as a refusal, and the reverse;
+- a count one unit off;
+- a credit wrongly given or withheld;
+- an observation one unit off.
+
+**On its own chain.** The fuzz runs use Hardhat's in-process chain
+(`useInProcessChain` in `offchain/chain/`), so `npm run verify:window` needs
+no node and touches none.
+
+**Result.**
+
+- **Random histories:** 30 seeds × 5 classes × 80 steps, about 12,000
+  transactions. 152 windows and 33,945 figures compared, no disagreement.
+- **G1:** reached 1.00 × cap in the random histories and was never exceeded.
+- **Self-test:** 720 of 720 tamperings caught.
+- **Scripted boundary burst:** the cap in the last second before midnight and
+  again just after. SLIDING admits 1.00 × cap; TUMBLING admits 2.00 × cap
+  within 3 seconds. This is the step 3 criterion, also asserted in
+  `test_aBoundaryBurstAdmitsTwiceTheCapUnderTumblingAndOnceUnderSliding`.
+
+### 3.8 — The mutation suite is committed tooling
+
+**Status.** Proposed.
+
+**Decision.** `offchain/mutation/`. A mutant is a find-and-replace in one
+file. The runner:
+
+1. applies the mutant in place, keeping the original as
+   `<file>.mutation-backup`;
+2. runs the catalogue's tests, and the verifier for the window catalogue;
+3. restores the original.
+
+It reports each mutant as caught (and by what), not caught, did not build,
+or bad pattern.
+
+| Catalogue | Mutants | From |
+| --------- | ------- | ---- |
+| `gate` | 51 | The step 1 list, unchanged |
+| `ledger` | 51 | The step 2 list. "Expiry one second late" is dropped: expiry is no longer a clock comparison but the market's report (2.40). Three patterns move to the code the market port changed. "Empty decode accepted" splits into that and "leg limit ignored". `GatedMarket.t.sol` joins its tests |
+| `market` | 55 | The market-port list, plus spec 8's "rounding switched": valuation to nearest instead of up |
+| `window` | 35 | New: the window mutants of spec 8 and the defects specific to WindowLib |
+| `accounts` | 9 | The step 1 list on real accounts. Foundry only, so it runs in Docker, and only when asked: `npm run mutate -- accounts --docker` |
+
+**Spec 8 mutants for code not yet written.** These are listed in
+`catalogs/pending.js` and shown by `npm run mutate -- --list`:
+
+- the cap comparison of a policy, S6's expiry, and the reading timestamp:
+  steps 4 and 5;
+- the H_slots ≤ k check and the S3 floor: step 5.
+
+**Safety.** Contracts are changed in place, so only one run may be alive:
+
+- a lock file holds the running process's id;
+- a run that finds a dead lock restores the backups first;
+- `--list` and `--check` touch no file.
+
+This was added after a `--check` run, made while a mutation run was going,
+restored a file under it (14 October). That run's verdicts were discarded and
+the catalogue was run again.
+
+`npm run mutate -- --check` reports any pattern a later code change has
+moved, without running anything.
+
+**Accepted survivors.** A mutant may carry an `accepted` reason. A survivor
+with one is reported as accepted, not as a hole. This is for faults in test
+doubles, which are not part of the system.
+
+**Result** (`docs/reports/mutation-2026-10-15.md`). The four Hardhat
+catalogues ran in 113 minutes: 192 mutants, 187 caught, 4 not caught, 1 that
+no longer built. Each was then dealt with:
+
+- **"Restart does not bump the generation" (window).** A real gap. The next
+  write's lazy reset usually hides it; it shows only while the time is in
+  bucket 0. `test_aRestartLeavesNothingOfTheOldRing` was added; caught.
+- **"Market call skipped" (gate).** It no longer built, because since the
+  market port the line it removed assigns the call's results. It now replaces
+  the call with an empty result; caught.
+- **Three in the mock market and its decoder** ("modify keeps BUY whatever the
+  side", "gate closes at slot start", "anyone cancels"). The same three that
+  survived in step 2. They are faults in test doubles, now marked accepted.
+
+Final: **189 caught, 3 accepted, 0 not caught.** In the window catalogue, 34 of
+35 were caught by the tests and the verifier both. The other, the restart, was
+caught by the tests only: the verifier's histories never change a window's
+shape.
+
+### 3.9 — D1 decided: a Smart Session for the agent, the policies in the gate
+
+**Status.** Settled by Dan on 15 October, on condition that the checks of
+`docs/analysis/delegation-architecture.md` section 8 work out. They did. This
+closes the question reopened in 1.20.
+
+**Decision.** Option 3:
+
+- The agent holds a Rhinestone Smart Session on the account. Its only action is
+  `PolicyGate.submit`, and it has no ERC-7739 content and no ERC-1271 policy.
+- The account calls `submit`, and the gate checks and executes as built.
+- Step 4 makes the change: the gate's agent registry is replaced by the
+  session, and `submit` takes the account as its caller.
+
+**The checks** (analysis, section 10):
+
+| Check | Found |
+| ----- | ----- |
+| 2. Can a MetaMask caveat refuse without reverting? | No. The manager's hooks are plain calls; any failure reverts the whole redemption. Option 2 would lose the refusal record the evaluation counts |
+| 4. What do the deployed period limits enforce? | Tumbling windows: MetaMask's `ERC20PeriodTransferEnforcer` and Coinbase's `SpendPermissionManager`. The boundary burst of step 3 is a property of both |
+| 3. Can a session be held to one function, and sign nothing? | Yes, from the source (v1.0.0, main, and the 2024 build ModuleKit bundles), and on four real accounts in `test/accounts/SessionGate.t.sol` |
+
+**The prototype.** `test/accounts/SessionGate.t.sol` runs on the reference
+account, Safe7579, Nexus and Kernel. It shows four things:
+
+1. A session limited to `submit` reaches the market through the gate: the
+   account is re-entered through `executeFromExecutor` mid-execution, and the
+   market sees the account.
+2. A refusal leaves its event in a successful user operation.
+3. The session reaches nothing else. A session given one more action makes the
+   test fail at that assertion.
+4. The session cannot sign. On Nexus a session configured to sign does sign,
+   with the same signature: that is the positive control.
+
+The gate there is a test double (`SessionGateProbe`). The real gate does not
+change until step 4.
+
+**Found on the way, for the deployment and the security analysis:**
+
+- **Kernel** must have the Smart Sessions validator installed without a hook.
+  Its hooked path, `executeUserOp`, is refused by Smart Sessions.
+- **ERC-1271 on three accounts.** On Kernel, Safe7579 and the reference account
+  as deployed, no session can sign at all. Kernel wraps the hash itself; the
+  other two lack `eip712Domain()`.
+- **Use Smart Sessions v1.0.0 or later.** ModuleKit 0.5.9's bundled build of
+  September 2024 guards session signing with the content allowlist alone.
+  v1.0.0 also requires an ERC-1271 policy.
+
+**Given up.** The gate sees the account, not which agent, as the submitter. The
+owner's own `submit` is checked like the agent's.
+
+**Rejected.**
+
+- *Option 1, as built:* the weakest answer to "why not the standard tools".
+- *Option 2, ERC-7710:* revert-only refusal, and signed delegations have no
+  equivalent of "tighten now, widen after 24 hours".
+- *Policies in validation:* ERC-7562 forbids reading the time, and a refusal
+  leaves no record (analysis, section 3).
+
 ---
 
 ## Open decisions
 
-Waiting for Dan. None blocks step 2.
+Waiting for Dan. None blocks step 4: item 7, D1, was decided on 15 October (3.9).
 
 
 | #   | Question                                                                                                                                                                                                                    | Where                | Default if nothing is said                    |
@@ -1453,8 +1763,9 @@ Waiting for Dan. None blocks step 2.
 | 4   | The honest-arm data is in USD and the settlement token is a mock EUR. A 1:1 relabel, or a conversion?                                                                                                                       | spec amendment A4    | Undecided; needed by step 4                   |
 | 5   | Is 16 the right bound on policies per account?                                                                                                                                                                              | 1.16                 | Revisit with gas in step 4                    |
 | 6   | Add a real owner validator to the tests, so "only the owner can make the account act" is asserted?                                                                                                                          | 1.18                 | Not planned before a deployment script exists |
-| 7   | D1: keep the bespoke gate, move to MetaMask's ERC-7710 framework, or authenticate the agent with a Smart Session? Decide before step 4, after the prototype checks | 1.20, spec D1, `docs/analysis/delegation-architecture.md` | Keep as built; decide before step 4 |
+| 7   | ~~D1: keep the bespoke gate, move to MetaMask's ERC-7710 framework, or authenticate the agent with a Smart Session?~~ **Decided 15 October: option 3, the Smart Session** | 1.20, 3.9, spec D1 and A7, `docs/analysis/delegation-architecture.md` section 10 | Decided |
 | 8   | Market port: manager separate from the prosumers (2.22), a price per order in a batch (2.23), the sensor submitting from its own address (2.27), caller checks everywhere (2.29) | 2.22, 2.23, 2.27, 2.29, `docs/analysis/market-structure.md` | As proposed |
 | 9   | Settlement basis: measured net export against committed net export (as built), or flexibility against a baseline (thesis), with the baseline set by the operator or a signed forecast | 2.46 | Net export, as built |
+| 10  | Window edges the spec leaves open: REFILL credits only within the same interval (3.4); a change of a window's shape starts it afresh and must be a WIDEN (3.5) | 3.4, 3.5 | As built |
 
 

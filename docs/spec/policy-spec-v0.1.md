@@ -4,7 +4,7 @@ Owner-side sequence policies for delegated energy-trading agents. Draft, 9 Octob
 
 This brief supersedes `Policy_Spec_Energy_Agent_v0.md` for implementation purposes. It folds in the review of v0 and the decisions taken on 9 October 2026. Read it fully before touching code. Section 10 must be filled in from the repo before step 1 starts.
 
-> **Build status, 14 October 2026.** Steps 1 and 2 of 6 are built and meet their acceptance criteria (Section 9). Decision D1 is reopened and must be settled before step 4. What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
+> **Build status, 15 October 2026.** Steps 1, 2 and 3 of 6 are built and meet their acceptance criteria (Section 9). Decision D1 is decided: option 3, a Smart Session for the agent and the policies in the gate (amendment A7); step 4 changes the entry point accordingly. What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
 >
 > The text below is the brief as written on 9 October. Where it has since been changed or implemented, a marked note says so: *Amended* points to Section 12, *As built* describes the implementation, *Status* reports a build step.
 
@@ -88,6 +88,8 @@ Off-chain: oracle relays · reconciler keeper · independent verifier (event rep
 ```
 
 **Key model.** The agent never signs for the prosumer account. Its authority is the AgentRegistry entry in PolicyGate and nothing else. The account's validator set is owner-only. Smart Sessions is not used.
+
+> **Amended (A7), decided 15 October 2026, built in step 4.** The agent's authority becomes a Rhinestone Smart Session on the account. Its only action is `PolicyGate.submit`, and it has no ERC-7739 content and no ERC-1271 policy, so it can sign nothing for the account. The account calls `submit`; the gate checks and executes as before. The AgentRegistry is replaced by the session: expiry by a time-frame policy, revocation by removing the session. The agent still holds no key that can sign for the account, which is what this paragraph protects. See `docs/analysis/delegation-architecture.md` section 10, and the prototype `test/accounts/SessionGate.t.sol`.
 
 ### 4.1 `submit` flow
 
@@ -190,6 +192,17 @@ Used by S1, S2, S4 and S6.
   - any interval of length ≤ W − b admits at most H;
   - an interval of exactly W can span n + 1 buckets and admits at most H plus one bucket's content;
   - a tumbling window admits 2H within an arbitrarily short interval around a boundary.
+
+> **As built, step 3.** `contracts/policies/WindowLib.sol`. One interface for the five classes: `used(t)`, `limit(t)`, `fits(t, amount)`, `add`, `credit(t, placedAt, amount)`. REFILL reports cap − balance as its use; STREAM reports its unlocked amount as its limit.
+>
+> **SLIDING storage.** 64-bit buckets, packed four to a storage word, plus a running total. The ring is keyed by the generation, so the lazy reset is O(1). At most 2016 buckets. The worst-case sweep of S1's default week of hourly buckets costs 339,872 gas.
+>
+> **Edges the spec leaves open.**
+> - TUMBLING counts time before its anchor in the first period.
+> - REFILL credits only within the interval of the consumption, so an amount a refill has already returned is not refunded twice.
+> - A change of a window's shape starts it afresh, so a policy must classify it as WIDEN.
+>
+> See decisions 3.2 to 3.5.
 
 ### 5.4 Oracles
 
@@ -300,7 +313,7 @@ Used by S1, S2, S4 and S6.
 
 | ID | Decision | Status |
 |---|---|---|
-| D1 | Executor module; agent holds no key on the account | Settled in the brief; **reopened** 2026-10-14, decide before step 4 (log 1.20, `docs/analysis/delegation-architecture.md`) |
+| D1 | Executor module; agent holds no key on the account | **Decided 2026-10-15: option 3**, a Smart Session scoped to `PolicyGate.submit` with no signing, policies in the executor (amendment A7, log 3.9, `docs/analysis/delegation-architecture.md` section 10) |
 | D2 | Credit back on cancel and on expiry, to the original bucket, if still in window | Settled |
 | D3 | S3 floor credits cleared buys only; ceiling charges placed buys | Settled |
 | D4 | reserveLoad as owner constant; signed load forecast later | Settled for this build |
@@ -345,6 +358,13 @@ Used by S1, S2, S4 and S6.
 - Report the first disagreement with the on-chain decision.
 - It must be able to disagree. Never port the Solidity.
 
+> **Amended (A6), step 3.** The verifier is **JavaScript**, at Dan's request, not Python: `offchain/verifier/`. It is independent by algorithm, not by language.
+> - **SLIDING:** sums admissions from the window's start time, with no ring.
+> - **REFILL:** a closed form, the reflected random walk.
+> - **Self-test:** it tampers with accepted histories and must reject every one.
+>
+> Run it with `npm run verify:window`. It works through `contracts/harness/WindowProbe.sol` on an in-process chain. See decision 3.7.
+
 **Mutation suite.** Each mutant must make at least one test fail. A surviving mutant is a hole.
 - `<=` → `<` on any cap comparison.
 - Bucket index off by one; window start shifted one bucket.
@@ -355,6 +375,8 @@ Used by S1, S2, S4 and S6.
 - Placed buys credited in the S3 floor.
 - Expiry counted as cancel in S6.
 - Generation counter not bumped on full reset.
+
+> **As built, step 3.** `offchain/mutation/`, run with `npm run mutate`. One catalogue per part of the system (gate, ledger, market, window, accounts); the window catalogue is also run against the verifier. The mutants above whose code does not exist yet are listed in `catalogs/pending.js`, for steps 4 and 5. See decision 3.8.
 
 ## 9. Build order and acceptance criteria
 
@@ -407,7 +429,12 @@ Do not reorder. Each step has to pass before the next starts.
 >
 > Beyond the criteria: `testFuzz_theBooksBalanceAndAgreeWithTheMarket` checks the ledger after every step of random trading and matching on the port, and that it agrees with the prosumer contract's commitments.
 
-> **Status of step 3: not started.**
+> **Status: built; criteria met on 15 October 2026.**
+>
+> - **Invariant fuzz.** `test/policies/WindowLib.t.sol` has five fuzz tests, one per class, 256 runs each, against a reference model. For sliding windows, after every step, the running total equals the buckets summed one by one.
+> - **The verifier agrees.** `npm run verify:window` on 30 seeds × 5 classes × 80 steps compared 33,945 figures with no disagreement. It rejected all 720 tampered histories.
+> - **Every mutant of Section 8 whose code exists is caught.** The window mutants, the rounding mutant and the expiry-as-cancellation mutant on the ledger side are caught. The others wait for steps 4 and 5 (`offchain/mutation/catalogs/pending.js`). Over the whole suite: 192 mutants, 189 caught, 3 accepted survivors in test doubles (`docs/reports/mutation-2026-10-15.md`).
+> - **The scripted boundary burst** admits 2H within 3 seconds under `TUMBLING` and H under `SLIDING`, in the test (`test_aBoundaryBurstAdmitsTwiceTheCapUnderTumblingAndOnceUnderSliding`) and in the verifier.
 
 **Step 3. WindowLib, verifier, mutation suite.**
 - All five window classes, lazy reset, credits.
@@ -512,3 +539,10 @@ Decided with Dan on 9 October 2026, after Section 10 was filled in. Where these 
 - **A3. Toolchain.** Foundry 1.8.5 with ModuleKit 0.5.9 is added, on Solidity 0.8.25 and EVM `cancun`. The custom `SmartAccount` cannot host an executor; PolicyGate is installed as an executor module on real ERC-7579 accounts. Hardhat stays as a second runner for every test except the real-account ones (log 0.5 to 0.7).
 - **A4. Open.** The honest-arm data is in USD and the settlement token is a mock EUR (D7). Whether that is a 1:1 relabel or a conversion is not decided.
 - **A5. The market is a port of Dan's P2P energy flexibility market.** Decided on 14 October 2026. Section 1's "market rules belong to the market contract and are assumed" still holds, but the market is now concrete: BRIGHT's and DEDALUS's structure (manager, session, prosumer contract, lockable ERC-1155, settlement), with batches over a configurable number of slots, cancel and modify until the session closes, off-chain matching by a registered matcher, settlement by registered sensors, and caller checks added throughout. See `docs/analysis/market-structure.md` and log 2.20 to 2.52.
+- **A6. The independent verifier is JavaScript, not Python.** Decided on 14 October 2026, with the rule that every off-chain program is JavaScript. Independence comes from the algorithm: the verifier computes each window from its definition, never from the contract's data structure. See Section 8 and log 3.7.
+- **A7. D1 decided: the agent holds a Smart Session, the policies stay in the gate.** Decided on 15 October 2026, by Dan, on condition that three checks passed. They did:
+  - MetaMask's caveats can only refuse by reverting, so option 2 would lose the refusal record.
+  - The deployed period limits, MetaMask's and Coinbase's, are tumbling windows.
+  - On the reference account, Safe7579, Nexus and Kernel, a session scoped to `submit` reaches the market through the gate, has its refusals recorded, reaches nothing else, and cannot sign.
+
+  Section 4's key model is amended there. See `docs/analysis/delegation-architecture.md` section 10 and log 3.9.
