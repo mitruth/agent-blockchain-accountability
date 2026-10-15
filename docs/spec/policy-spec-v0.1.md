@@ -4,7 +4,7 @@ Owner-side sequence policies for delegated energy-trading agents. Draft, 9 Octob
 
 This brief supersedes `Policy_Spec_Energy_Agent_v0.md` for implementation purposes. It folds in the review of v0 and the decisions taken on 9 October 2026. Read it fully before touching code. Section 10 must be filled in from the repo before step 1 starts.
 
-> **Build status, 15 October 2026.** Steps 1, 2 and 3 of 6 are built and meet their acceptance criteria (Section 9). Decision D1 is decided: option 3, a Smart Session for the agent and the policies in the gate (amendment A7); step 4 changes the entry point accordingly. What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
+> **Build status, 15 October 2026.** Steps 1, 2 and 3 of 6 are built and meet their acceptance criteria (Section 9). Step 4 is in progress: the Smart Session entry point (D1, amendment A7) and the policy check, commit and credit phases are built; the policies themselves are not yet. What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
 >
 > The text below is the brief as written on 9 October. Where it has since been changed or implemented, a marked note says so: *Amended* points to Section 12, *As built* describes the implementation, *Status* reports a build step.
 
@@ -105,13 +105,17 @@ Off-chain: oracle relays · reconciler keeper · independent verifier (event rep
 8. Emit `Executed`, per-policy results and any `PolicyFlag`.
 
 > **As built, steps 1 and 2.** Flow steps 1, 2, 7 and 8, and the ledger half of step 6. The signature is `submit(account, target, callData)`: there is no readings argument until step 5, and no policy is consulted until step 4, so no order is rejected by a policy yet. The target is never the account, the gate, the position ledger or the zero address. The ledger books each leg after the market call, because a placement's id exists only once the market has answered; the transaction is atomic. See decisions 1.4, 1.9, 2.8 and 2.14 in the log.
+>
+> **As built, step 4.1 (amendment A7).** The signature is `submit(target, callData)`, called by the account itself. Flow step 1 is the agent's Smart Session, which lets it have the account call `submit` and nothing else; the gate checks that its caller is an account with the gate installed. See log 4.1.
+>
+> **As built, step 4.2.** Flow steps 4 to 6 and 8. Every instance is checked with all the legs of the call at once, and each result is emitted as `PolicyResult`, even after a rejection. Any REJECT emits `Rejected` and returns without reverting; nothing is committed, booked or sent. A FLAG emits `PolicyFlag` and goes ahead (flag mode EMIT; COSIGN is not built). Commits run before the market call, the ledger after it. Released volume is credited to every instance on a cancellation through the gate and on `reconcile`; a credit that fails is caught and recorded (`CreditFailed`), and the policy keeps the charge. A reverting `check` or `commit` reverts the submission. See log 4.2.
 
 Rules for the flow:
 - Policy rejection is the only non-reverting failure.
 - `nonReentrant` on `submit` and `reconcile`.
 - Batch submission, if added, iterates this flow per call. Nested multicall or delegatecall targets are never registered.
 
-### 4.2 Policy contract interface (described, not coded)
+### 4.2 Policy contract interface
 
 - `check(account, order, ctx) → results[]` (view). Each result carries:
   - policyId;
@@ -136,6 +140,15 @@ One policy contract can host several policy instances per account, each with its
 > - `deconfigure(account, policyId)`: only PolicyGate may call it; used on removal and uninstall.
 >
 > `check`, `commit` and `credit` arrive with the first policies in step 4. See decision 1.11 in the log.
+>
+> **As built, step 4.2.** One result per instance rather than `results[]` per contract: the gate lists instances, not contracts.
+>
+> - `check(account, policyId, legs[], ctx) → CheckResult` (view): `valueBefore`, `valueAfter`, `soft`, `hard`, `verdict`.
+> - `commit(account, policyId, legs[], ctx)`: only PolicyGate.
+> - `credit(account, policyId, release)`: only PolicyGate. A `Release` carries the order's record (side, slot, placement time, quantity, price, filled part) and the released Wh.
+> - `ctx` carries the market, the call's decoder and the block time; the readings join it in step 5, and the ledger is read through its own views.
+>
+> See log 4.2.
 
 ## 5. Shared components
 
@@ -446,6 +459,8 @@ Do not reorder. Each step has to pass before the next starts.
 
 > **Status: not started.**
 
+> **Status: in progress.** Built: the Smart Session entry point (4.1) and the check, commit and credit phases (4.2), tested with test-double policies in `test/gate/PolicyPhases.t.sol`. Not yet: `StaticOrderPolicy`, S1, S2, S6, the attacks and the gas report. See `docs/plan/roadmap.md`.
+
 **Step 4. StaticOrderPolicy, S1, S2, S6.**
 - Accept when, under `SLIDING`, these are blocked:
   - split-leg drain;
@@ -454,8 +469,6 @@ Do not reorder. Each step has to pass before the next starts.
   - place-and-cancel near the gate.
 - The same attacks must pass under the baseline classes.
 - Report gas per order per policy and combined.
-
-> **Status: not started.**
 
 **Step 5. OracleVerifier, PV relay, S3, S4, S5.**
 - Accept when:

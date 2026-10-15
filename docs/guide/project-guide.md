@@ -2,7 +2,9 @@
 
 What the project contains today, what every file does, what the tests prove,
 and how to run everything. Current as of 2026-10-15: steps 1, 2 and 3 of 6 are
-built, step 2 on a port of Dan's P2P energy flexibility market.
+built, step 2 on a port of Dan's P2P energy flexibility market. Step 4 is in
+progress: the agent's session entry point (4.1) and the policy phases (4.2) are
+built; the policies themselves are not yet.
 
 
 | For                                     | Read                                 |
@@ -40,7 +42,7 @@ The build follows six steps, fixed by Section 9 of the spec.
 | 1    | The gate, the key model, the registries, configuration          | **Built and passing** |
 | 2    | Position ledger, reconcile, the P2P market port and its decoder | **Built and passing** |
 | 3    | `WindowLib`, independent verifier, mutation suite               | **Built and passing** |
-| 4    | Per-action policies, S1, S2, S6                                 | Not started           |
+| 4    | The session entry point, the policy phases; per-action policies, S1, S2, S6 | **In progress**: entry point and phases built |
 | 5    | Oracle verification, PV relay, S3, S4, S5                       | Not started           |
 | 6    | Evaluation                                                      | Not started           |
 
@@ -58,6 +60,10 @@ call the gate's `submit` and nothing else, until it expires or is removed.
 call.
 - **A configuration manager:** the list of policies per account, with the
 rule "tighten now, widen after 24 hours".
+- **The policy phases** (step 4.2): every policy instance checks every
+submission before it reaches the market, all legs at once. A rejection is
+recorded on chain without reverting and leaves nothing behind; a soft-bound
+crossing is flagged and goes ahead; released volume is credited back.
 - **A position ledger:** every order the agent placed, and per delivery slot
 the account's committed and cleared volume, buy and sell.
 - **The P2P energy market, ported from Dan's BRIGHT and DEDALUS projects:** a
@@ -83,11 +89,12 @@ under Hardhat; the other 3 are faults in test doubles.
 
 ### What does not exist yet
 
-**No policy checks an order yet.** Today an order the agent submits through its
-session to an approved market function is executed and booked in the ledger. Policies can be
-added and configured, but `submit` does not consult them until step 4.
-`WindowLib` is built and tested on its own; no policy uses it yet. There
-is no oracle and no sequence policy. Nothing is deployed to a network.
+**No real policy exists yet.** The gate consults every policy an account has
+added, and acts on its verdict, but the only policies written so far are test
+doubles. The first real one, `StaticOrderPolicy` (A1 to A6), is step 4.3; the
+sequence policies S1, S2 and S6 follow. `WindowLib` is built and tested on its
+own; no policy uses it yet. There is no oracle. Nothing is deployed to a
+network.
 
 Two roles of the market are outside the repository by design: the off-chain
 matching service, linked to the chain by an oracle, which registers trades; and
@@ -1127,13 +1134,10 @@ python earlier-design/differential/run_diff.py
 
 | Step | Adds                                                                                                                                                                        |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4    | The agent's Smart Session replaces the gate's agent registry (D1). The check and commit phases of `submit`. Per-action policies, the owner budget S1, export and import caps S2, the cancellation quota S6. The earlier design is removed here |
+| 4    | Built: the agent's Smart Session replaces the gate's agent registry (D1); the check, commit and credit phases of `submit`. To come: per-action policies, the owner budget S1, export and import caps S2, the cancellation quota S6, the attacks and the gas report. The earlier design is removed here. Sub-step status in `docs/plan/roadmap.md` |
 | 5    | Signed oracle readings, the PV relay, deliverability S3, battery cycles S4, ramp S5                                                                                         |
 | 6    | The attack matrix against all baselines, the false-positive rate on honest arms, gas                                                                                        |
 
 
-D1 is decided (option 3, decision log 3.9), so step 4 builds on the Smart
-Session entry point from the start.
-
-Decisions taken in steps 1 to 3 are proposed and not yet confirmed. The open
+Decisions taken in steps 1 to 4 are proposed and not yet confirmed. The open
 ones are listed at the end of `docs/decisions/design-decisions.md`.
