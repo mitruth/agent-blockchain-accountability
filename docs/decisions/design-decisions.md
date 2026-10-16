@@ -1931,6 +1931,70 @@ EXECUTE; anything else is REJECT, and the log says exactly which bounds failed.
 `test/policies/PolicyFixture.sol` is the setup the policy tests share.
 `npm test`: 393 passing.
 
+
+### 4.4 — WindowPolicy: S1 and S2 on WindowLib
+
+**Status.** Proposed.
+
+**Decision.** `contracts/policies/WindowPolicy.sol` hosts any number of
+instances per account. Each counts one quantity on a `WindowLib` window:
+
+| Quantity | Policy | Counts | Credited on release |
+| -------- | ------ | ------ | ------------------- |
+| `BUY_VALUE` | S1, the owner's budget | The value of BUY legs at their limit price, as the decoder computed it, rounded up | The value charged less the value of the filled part, both rounded up |
+| `SELL_WH` | S2, the export cap | Wh of SELL legs | The released Wh |
+| `BUY_WH` | S2, the import cap | Wh of BUY legs | The released Wh |
+
+- **The bounds.** The window's cap is the hard bound H; the instance's `soft`
+  is S. A submission whose total goes above S is flagged; one that would go
+  above H is rejected (`WindowLib.fits`); one that adds nothing is executed
+  (D10).
+- **Placement-time indexing (D9).** An order counts in the bucket of the
+  submission's time, whatever its delivery slot. A credit goes to the bucket
+  of the order's placement time, read from the ledger's record.
+- **Gross, never net.** S1 ignores sales: a sale neither counts nor makes room,
+  so sell-and-rebuy cannot refill the budget (audit finding F3). S2's export
+  and import are two instances and are never netted.
+
+**The S1 credit never exceeds the charge.** A partly filled order was charged
+ceil(qty × price) and keeps ceil(filled × price) charged; their difference is
+credited. Recomputing ceil(released × price) instead could round up twice and
+give back one unit more than was ever charged.
+
+**The direction table.**
+
+- **INVALID:** malformed, a window `WindowLib` refuses, or S above H. "b
+  divides W" holds by construction, since W is n × b.
+- **WIDEN:** a higher cap, soft bound, refill or stream rate, or stream start.
+  A higher S is looser: fewer flags.
+- **WIDEN, as restarts:** a change of shape (class, bucket length, bucket
+  count, anchor) or of the quantity counted. The window starts afresh, which
+  forgets what was counted.
+
+**Deviation from spec 5.6: no carry-over.** The spec applies structural changes
+"with carry-over: the old total stays charged until it would have expired".
+Here a structural change waits the 24 hours of any widening and then starts the
+window afresh. An agent that spent the cap just before the change could spend
+it again just after. The owner accepts that by making the change, with a day's
+notice in the log. Carry-over stays a carried-forward item.
+
+**Baselines.** The same contract with a TUMBLING, REFILL, STREAM or LIFETIME
+window is the evaluation's baseline for each attack (spec 9.1): same decoder,
+same gate, only the class changes. Step 4.6 runs them.
+
+**Tests.** `test/policies/WindowPolicy.t.sol`, 10 tests:
+
+- S1 through execute, flag at the soft bound and reject above the cap, with
+  the logged values;
+- S1 gross: a sale neither counts nor refills;
+- S2 export and import separate and never netted;
+- the window sliding to the second;
+- credits on a cancellation and on an expiry;
+- S1's credit for a partly filled order with rounding prices;
+- a release after its bucket left the window giving nothing back;
+- the direction table;
+- a tighter cap applying at once and keeping the count.
+
 ---
 
 ## Open decisions
