@@ -110,6 +110,12 @@ contract ProsumerDecoder is IOrderDecoder {
         return 0;
     }
 
+    /// @inheritdoc IOrderDecoder
+    /// @dev The market's grid: slot number times the slot length.
+    function slotStart(address market, uint32 slot) external view override returns (uint64) {
+        return uint64(Prosumer(market).manager().slotStart(slot));
+    }
+
     function _placeLeg(Side side, uint32 firstSlot, MarketTypes.OrderRequest memory request)
         private
         pure

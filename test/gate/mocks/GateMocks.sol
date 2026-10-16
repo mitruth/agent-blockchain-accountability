@@ -67,6 +67,11 @@ contract StubDecoder is IOrderDecoder {
     function gateTime(address, uint32) external pure override returns (uint64) {
         return type(uint64).max;
     }
+
+    /// @dev Hourly slots from 1970.
+    function slotStart(address, uint32 slot) external pure override returns (uint64) {
+        return uint64(slot) * 3600;
+    }
 }
 
 /// @notice A decoder that reads every call as the wrong number of legs.
@@ -97,6 +102,8 @@ contract LeglessDecoder is IOrderDecoder {
     function fillState(address, bytes32) external pure override returns (FillState memory state) {}
 
     function gateTime(address, uint32) external pure override returns (uint64) {}
+
+    function slotStart(address, uint32) external pure override returns (uint64) {}
 }
 
 /// @notice Accepts any calldata and reads it as a placement of 1 Wh, with an
@@ -128,6 +135,11 @@ contract NullDecoder is IOrderDecoder {
 
     function gateTime(address, uint32) external pure override returns (uint64) {
         return type(uint64).max;
+    }
+
+    /// @dev Hourly slots from 1970.
+    function slotStart(address, uint32 slot) external pure override returns (uint64) {
+        return uint64(slot) * 3600;
     }
 }
 

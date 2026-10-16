@@ -45,4 +45,8 @@ interface IOrderDecoder {
     /// @notice When trading in `slot` closes. No order for the slot can be
     ///         placed, changed or filled from this time on.
     function gateTime(address market, uint32 slot) external view returns (uint64);
+
+    /// @notice When delivery in `slot` starts, in seconds. Policies read the
+    ///         time of day and the horizon of an order from it.
+    function slotStart(address market, uint32 slot) external view returns (uint64);
 }

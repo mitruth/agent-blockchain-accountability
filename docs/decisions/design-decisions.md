@@ -1873,6 +1873,64 @@ bounds and can be made to fail at any phase.
 
 **Tests.** `test/gate/PolicyPhases.t.sol`, 15 tests. `npm test`: 378 passing.
 
+
+### 4.3 — StaticOrderPolicy: the per-action bounds
+
+**Status.** Proposed.
+
+**Decision.** `contracts/policies/StaticOrderPolicy.sol` checks every PLACE leg
+on its own (spec 6.1):
+
+| Bound | Check | Parameter |
+| ----- | ----- | --------- |
+| A1 quantity | `qtyWh <= maxQtyWh` | The owner sets `maxQtyWh` to min(qMax, P_rated × slot length) |
+| A2 value | `value <= maxValue`, at the limit price, rounded up (D12) | Token units |
+| A3 price | SELL: `price >= sellFloor`; BUY: `price <= buyCeiling` | Absolute; tariff-relative waits for the tariff oracle of step 5 |
+| A4 time of day | The slot does not start in a blocked hour for that side | `buyBlockedHours`, `sellBlockedHours`: one bit per UTC hour |
+| A6 horizon | The slot starts after now and no later than `now + horizonSeconds` | Seconds |
+
+A5 is S3 at horizon 1 (step 5); A7 and A8 are the allowlist and the session.
+
+**How it reports.** A per-action bound holds or it does not, so there is no
+soft bound and no flag. The result's `valueAfter` is a bitmask of the bounds
+broken across all legs: A1 = 1, A2 = 2, A3 = 4, A4 = 8, A6 = 16. Zero is
+EXECUTE; anything else is REJECT, and the log says exactly which bounds failed.
+
+**Choices the spec leaves open.**
+
+- **A4 in UTC hours.** The contracts know only UTC times; a Brussels-time
+  window is the owner's tool translating it, and moves by an hour at the clock
+  change. One bit per hour is enough for the time-of-use tariffs of the HEMS
+  data.
+- **A6 in seconds rather than slots.** The spec's "currentSlot < slot ≤
+  currentSlot + H_slots" needs the slot length, which belongs to the market.
+  Seconds from the slot's start, read from the decoder, say the same for any
+  slot length.
+- **A slot already started is out of horizon.** "currentSlot < slot" excludes
+  the slot in delivery.
+- **The decoder gives the start.** `IOrderDecoder` gained `slotStart(market,
+  slot)`. Each decoder answers from its market: `ProsumerDecoder` from the
+  manager's grid.
+- **Direction table.** Tighter is: a lower `maxQtyWh`, `maxValue` or
+  `buyCeiling`; a higher `sellFloor`; more blocked hours; a shorter horizon.
+  Any looser parameter makes the change a WIDEN.
+
+**Shared.** `contracts/policies/PolicyBase.sol`: the gate's address and the
+"only the gate" check every policy uses.
+
+**Tests.** `test/policies/StaticOrderPolicy.t.sol`, 15 tests:
+
+- every bound at its edge;
+- several broken bounds reported together;
+- one bad leg rejecting a batch, and a cancellation never checked;
+- a rejection through the gate, with the bitmask in the log;
+- a modification checked as its new order;
+- the direction table, parameter by parameter;
+- only the gate writing the policy.
+
+`test/policies/PolicyFixture.sol` is the setup the policy tests share.
+`npm test`: 393 passing.
+
 ---
 
 ## Open decisions

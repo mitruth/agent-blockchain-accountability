@@ -34,6 +34,10 @@ contract ScriptedDecoder is IOrderDecoder {
     function gateTime(address, uint32) external pure override returns (uint64) {
         return type(uint64).max;
     }
+
+    function slotStart(address, uint32 slot) external pure override returns (uint64) {
+        return uint64(slot) * 3600;
+    }
 }
 
 /// The position ledger on its own, written by a test address the account has

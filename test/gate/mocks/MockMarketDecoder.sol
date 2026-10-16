@@ -73,6 +73,10 @@ contract MockMarketDecoder is IOrderDecoder {
         return MockEnergyMarket(market).gateTime(slot);
     }
 
+    function slotStart(address market, uint32 slot) external view override returns (uint64) {
+        return MockEnergyMarket(market).slotStart(slot);
+    }
+
     function _placeLeg(Side side, uint32 slot, uint64 qtyWh, uint64 price) private pure returns (Order memory leg) {
         leg.kind = OrderKind.PLACE;
         leg.side = side;
