@@ -2045,6 +2045,58 @@ five-minute buckets.
 - the quota renewing after an hour;
 - the direction table.
 
+
+### 4.6 — The acceptance attacks, and gas
+
+**Status.** Proposed: the reading of "the same attacks must pass under the
+baseline classes".
+
+**Decision.** Each attack runs against the baseline the attack matrix (spec
+9.1) names for it, on the ported market through the gate, in
+`test/policies/Step4Acceptance.t.sol`. The spec's sentence read literally, every
+attack passing under every baseline, cannot hold: any capped window stops a
+split-leg drain, and a boundary burst is a weakness of tumbling windows, not of
+token buckets.
+
+| Attack | Under SLIDING | Under its baseline |
+| ------ | ------------- | ------------------ |
+| Split-leg drain: 24 orders of 1000 Wh, each within A1 | S1, a 5 kWh day, refuses the 24-leg batch, and the sixth order when spread over calls: 1,250,000 units at most | Per-action bounds only: all 24 placed, 6,000,000 units |
+| Boundary burst: the budget at 23:59:59 and 00:00:01 UTC | 1,250,000 units | TUMBLING, daily from midnight UTC: 2,500,000 units within two seconds |
+| Idle-then-burst: a week idle, then an hour of orders | One day's budget, H | REFILL (H/24 an hour, up to 7H) and STREAM (H/24 an hour, up to 30H): 7H each |
+| Place-and-cancel near the gate: four reservations of 1500 Wh, cancelled 20 minutes before the gate | S6 with a threefold weight within 30 minutes: one withdrawn, three must stand | S6 without the weight: all four withdrawn |
+
+**The baselines are matched.**
+
+- **Idle-then-burst.** REFILL and STREAM run at the same long-run rate as the
+  sliding window, H a day. What differs is only that they keep unused
+  allowance.
+- **Boundary burst.** TUMBLING has the same cap and period as the sliding
+  window.
+
+These are the comparisons the paper makes.
+
+**Gas** (`docs/reports/gas-2026-10-16.md`). Steady state, the agent's whole
+submission:
+
+- **One bid:** 304,906 gas bare; all five instances add 100,072.
+- **A 24-leg batch:** 6,509,320 bare; all five add 465,979, about 19,400 a leg.
+- **A cancellation:** 73,681 bare; all five add 128,228, since each instance is
+  credited and S6 counts it.
+
+Per policy, on one bid:
+
+| Policy | Adds |
+| ------ | ---: |
+| `StaticOrderPolicy` | 15,571 |
+| S1 | 21,769 |
+| S2, two instances | 36,183 |
+| S6 | 26,778 |
+
+A monolithic variant (spec D14) was not measured.
+
+**Tests.** 15: nine for the attacks, each blocked and passing under its
+baseline, and six for gas. `npm test`: 427 passing.
+
 ---
 
 ## Open decisions
