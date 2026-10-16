@@ -13,6 +13,8 @@ import {StaticOrderPolicy} from "../../contracts/policies/StaticOrderPolicy.sol"
 import {WindowPolicy} from "../../contracts/policies/WindowPolicy.sol";
 import {CancelQuotaPolicy} from "../../contracts/policies/CancelQuotaPolicy.sol";
 import {WindowLib} from "../../contracts/policies/WindowLib.sol";
+import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 
 /// Step 4's acceptance criteria (spec Section 9), on the ported P2P market
 /// through the gate: an agent trading for Alice attacks her policies.
@@ -64,7 +66,7 @@ contract Step4AcceptanceTest is MarketFixture {
     function setUp() public override {
         super.setUp();
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger, 48);
+        gate = new PolicyGate(ledger, new OracleVerifier(), 48);
         decoder = new ProsumerDecoder();
         statics = new StaticOrderPolicy(address(gate));
         windows = new WindowPolicy(address(gate));
@@ -340,7 +342,7 @@ contract Step4AcceptanceTest is MarketFixture {
 
     function _submit(bytes memory call) internal {
         vm.prank(agent);
-        aliceAccount.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(aliceP), call)));
+        aliceAccount.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(aliceP), call, new SignedReading[](0))));
     }
 
     function _bidsCall(uint16 n, uint64 qtyWh) internal pure returns (bytes memory) {
@@ -363,7 +365,7 @@ contract Step4AcceptanceTest is MarketFixture {
     }
 
     function _gasOf(bytes memory call) internal returns (uint256 used) {
-        bytes memory sub = abi.encodeCall(gate.submit, (address(aliceP), call));
+        bytes memory sub = abi.encodeCall(gate.submit, (address(aliceP), call, new SignedReading[](0)));
         vm.prank(agent);
         uint256 before = gasleft();
         aliceAccount.executeAsSession(address(gate), sub);

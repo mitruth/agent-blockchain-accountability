@@ -8,6 +8,8 @@ import {ConfigManager} from "./ConfigManager.sol";
 import {PositionLedger} from "./PositionLedger.sol";
 import {IPolicy} from "../interfaces/IPolicy.sol";
 import {Order, OrderKind, Verdict, CheckContext, CheckResult, Release} from "./GateTypes.sol";
+import {OracleVerifier} from "../oracle/OracleVerifier.sol";
+import {SignedReading} from "../oracle/OracleTypes.sol";
 
 /// @title PolicyGate
 /// @notice ERC-7579 executor module through which an autonomous trading agent
@@ -31,6 +33,7 @@ import {Order, OrderKind, Verdict, CheckContext, CheckResult, Release} from "./G
 ///                               `submit` never targets the account
 ///   this gate's registries      its session names `submit` only, and
 ///                               `submit` never targets the gate
+///   the oracle's signer list    `submit` never targets the verifier
 ///   a policy's configuration    policies accept `configure` from the gate
 ///                               only, and the gate calls it on the owner path
 ///
@@ -40,8 +43,8 @@ import {Order, OrderKind, Verdict, CheckContext, CheckResult, Release} from "./G
 ///
 /// Built so far: the key model, the registries, the booking of every order in
 /// the position ledger (steps 1 and 2), the session entry point (step 4.1),
-/// and the policy check, commit and credit phases (step 4.2). Signed readings
-/// arrive in step 5.
+/// the policy check, commit and credit phases (step 4.2), and signed readings
+/// handed in with an order (step 5.1).
 contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     uint256 private constant MODULE_TYPE_EXECUTOR = 2;
 
@@ -52,6 +55,14 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     /// @notice Where every order is booked. The account must authorise this
     ///         gate as a writer there, or every submission reverts.
     PositionLedger public immutable ledger;
+
+    /// @notice Where signed readings are verified and kept. The policies read
+    ///         the latest from it.
+    OracleVerifier public immutable oracle;
+
+    /// @notice Most readings one submission may bring: one per kind, twice
+    ///         over.
+    uint256 public constant MAX_READINGS = 4;
 
     /// @notice Most legs one call may decode to: a batch of this many orders,
     ///         or a modification's two. Bounds the booking loop.
@@ -118,11 +129,14 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     error PolicyGate_NoReturnData();
     error PolicyGate_PlacedIdsMismatch(uint256 placeLegs, uint256 ids);
     error PolicyGate_MaxLegsTooSmall(uint256 maxLegs);
+    error PolicyGate_TooManyReadings(uint256 readings);
+    error PolicyGate_ReadingForAnotherAccount(address account);
 
     /// @param maxLegs_ At least 2, so that a modification fits.
-    constructor(PositionLedger ledger_, uint256 maxLegs_) {
+    constructor(PositionLedger ledger_, OracleVerifier oracle_, uint256 maxLegs_) {
         if (maxLegs_ < 2) revert PolicyGate_MaxLegsTooSmall(maxLegs_);
         ledger = ledger_;
+        oracle = oracle_;
         maxLegs = maxLegs_;
     }
 
@@ -168,6 +182,11 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     /// the market call reverts, and when the ledger refuses a leg: an order it
     /// does not hold, or an open order beyond its bound.
     ///
+    /// The readings come next (spec 4.1, step 3): each must be a reading the
+    /// oracle verifier accepts for this account -- signed by the account's
+    /// device, fresh, and not older than the last from that device -- or the
+    /// submission reverts. The policies then read the latest from the verifier.
+    ///
     /// Every policy instance of the account checks the submission first, all
     /// legs at once. If any rejects, the submission stops there: `Rejected`
     /// and every instance's `PolicyResult` are emitted, nothing is committed,
@@ -184,41 +203,28 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     ///
     /// @param target   The market contract.
     /// @param callData The call, selector included.
+    /// @param readings Signed readings to hand in first, at most MAX_READINGS.
+    ///                 May be empty.
     /// @return orderHash Identifier of this submission.
-    function submit(address target, bytes calldata callData)
+    function submit(address target, bytes calldata callData, SignedReading[] calldata readings)
         external
         onlyAccount
         nonReentrant
         returns (bytes32 orderHash)
     {
         address account = msg.sender;
-        if (callData.length < 4) revert PolicyGate_CallDataTooShort();
-
-        // Independent of the registry: even a decoder entry that should never
-        // have existed cannot turn the account or the gate into a target.
-        if (_isForbiddenTarget(account, target)) revert PolicyGate_ForbiddenTarget(target);
-
-        bytes4 selector = bytes4(callData[:4]);
-        IOrderDecoder decoder = decoderOf(account, target, selector);
-        if (address(decoder) == address(0)) revert PolicyGate_UnknownCall(target, selector);
-
-        Order[] memory legs = decoder.decode(target, callData);
-        if (legs.length == 0 || legs.length > maxLegs) revert PolicyGate_NotAnOrder(target, selector);
+        (IOrderDecoder decoder, Order[] memory legs) = _decode(account, target, callData);
 
         orderHash = keccak256(
             abi.encode(block.chainid, address(this), account, submissionCount[account]++, target, keccak256(callData))
         );
-        emit OrderSubmitted(account, target, selector, legs, orderHash);
+        emit OrderSubmitted(account, target, bytes4(callData[:4]), legs, orderHash);
 
-        // Check phase, then commit phase (spec 4.1, steps 4 to 6).
-        CheckContext memory ctx = CheckContext({market: target, decoder: address(decoder), time: uint64(block.timestamp)});
-        (IPolicy[] memory policies, bytes32[] memory policyIds) = _policyList(account);
-        if (!_checkAll(account, orderHash, policies, policyIds, legs, ctx)) {
+        _acceptReadings(account, readings);
+
+        if (!_checkAndCommit(account, orderHash, target, decoder, legs)) {
             emit Rejected(account, orderHash);
             return orderHash;
-        }
-        for (uint256 i = 0; i < policies.length; ++i) {
-            policies[i].commit(account, policyIds[i], legs, ctx);
         }
 
         bytes[] memory results =
@@ -250,10 +256,63 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     // ------------------------------------------------------------------
 
     /// @dev The ledger trusts "the caller is the account" for its writer list,
-    ///      so it is a forbidden target for the same reason the account and the
-    ///      gate are.
+    ///      and the oracle verifier for its signer list, so both are forbidden
+    ///      targets for the same reason the account and the gate are.
     function _isForbiddenTarget(address account, address target) internal view override returns (bool) {
-        return super._isForbiddenTarget(account, target) || target == address(ledger);
+        return super._isForbiddenTarget(account, target) || target == address(ledger) || target == address(oracle);
+    }
+
+    /// @dev The approved decoder for the call, and the legs it reads.
+    function _decode(address account, address target, bytes calldata callData)
+        private
+        view
+        returns (IOrderDecoder decoder, Order[] memory legs)
+    {
+        if (callData.length < 4) revert PolicyGate_CallDataTooShort();
+
+        // Independent of the registry: even a decoder entry that should never
+        // have existed cannot turn the account or the gate into a target.
+        if (_isForbiddenTarget(account, target)) revert PolicyGate_ForbiddenTarget(target);
+
+        bytes4 selector = bytes4(callData[:4]);
+        decoder = decoderOf(account, target, selector);
+        if (address(decoder) == address(0)) revert PolicyGate_UnknownCall(target, selector);
+
+        legs = decoder.decode(target, callData);
+        if (legs.length == 0 || legs.length > maxLegs) revert PolicyGate_NotAnOrder(target, selector);
+    }
+
+    /// @dev Check phase, then commit phase (spec 4.1, steps 4 to 6). Commits
+    ///      only when no instance rejects.
+    function _checkAndCommit(
+        address account,
+        bytes32 orderHash,
+        address target,
+        IOrderDecoder decoder,
+        Order[] memory legs
+    ) private returns (bool accepted) {
+        CheckContext memory ctx = CheckContext({
+            market: target,
+            decoder: address(decoder),
+            time: uint64(block.timestamp),
+            oracle: address(oracle)
+        });
+        (IPolicy[] memory policies, bytes32[] memory policyIds) = _policyList(account);
+        if (!_checkAll(account, orderHash, policies, policyIds, legs, ctx)) return false;
+        for (uint256 i = 0; i < policies.length; ++i) {
+            policies[i].commit(account, policyIds[i], legs, ctx);
+        }
+        return true;
+    }
+
+    /// @dev Every reading must be for the submitting account. A reading the
+    ///      verifier refuses reverts the submission.
+    function _acceptReadings(address account, SignedReading[] calldata readings) private {
+        if (readings.length > MAX_READINGS) revert PolicyGate_TooManyReadings(readings.length);
+        for (uint256 i = 0; i < readings.length; ++i) {
+            address forAccount = oracle.accept(readings[i]);
+            if (forAccount != account) revert PolicyGate_ReadingForAnotherAccount(forAccount);
+        }
     }
 
     function _book(

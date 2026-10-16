@@ -2374,6 +2374,130 @@ Also:
 - **The simulation's sanity report fails one check:** B1 improves on B0 by
   9.07 %, outside its expected 10 % to 30 %. Its other nine checks pass.
 
+
+---
+
+## Step 5. Oracle verification, the relays, S3, S4, S5
+
+Before starting, Dan chose (16 October), on the proposals:
+
+- **No tariff oracle in step 5.** None of its acceptance criteria needs one; A3
+  stays absolute (spec A8).
+- **The demo moves to 30-minute slots,** like the data.
+- **The demo prosumers' batteries:** Alice gets home_01 with the arms' settings
+  (`data/arms/home_01/2022/settings.csv`), Bob home_03 and Carol home_05 with
+  the dataset's.
+- **The PV forecast:** the demo posts the actual PV, a perfect forecast; the
+  tests also use forecasts with errors.
+
+### 5.1 — The oracle verifier
+
+**Status.** Proposed.
+
+**Decision.** `contracts/oracle/OracleVerifier.sol`, one deployment beside
+the gate, all state keyed by account:
+
+- **Two kinds of reading.**
+  - A **BMS reading**: account, timestamp (a slot start), stored energy in Wh,
+    and the discharge odometer in Wh.
+  - A **PV forecast**: account, issue time, the start of its first slot, the
+    slot length, and Wh per slot, at most 96.
+  - Both are EIP-712 typed data. The domain binds the chain and the verifier;
+    the reading names its account.
+- **The signer registry.** `setDevice(kind, signer, maxAge)` is called by the
+  account itself, on the owner path. One signer per kind, and the oldest a
+  reading may be when accepted: up to 7 days. A zero signer removes it.
+- **`accept`, open to anyone.** A reading is accepted when:
+  - its signature recovers to the registered signer (65 bytes, low-s only);
+  - it is not in the future, and no older than the maximum age;
+  - it is not older than the last accepted from that device.
+
+  The same reading again is a no-op. A different reading with the same
+  timestamp is refused, so one signer cannot be made to choose. A BMS
+  odometer that goes down is refused. Each accepted reading is emitted in full
+  (`ReadingAccepted`) and stored as the latest.
+- **Views for the policies.**
+  - `bmsOf(account)` gives the latest battery reading and whether it is fresh.
+  - `pvAt(account, slotStart)` gives the forecast for that slot, and whether
+    it is usable: covered exactly, and fresh.
+- **The gate.**
+  - `submit(target, callData, readings)` hands each reading to the verifier
+    after decoding and before the check phase (spec 4.1, step 3), at most four
+    per submission. A refused reading reverts the submission, and so does a
+    reading for another account.
+  - `CheckContext` gains `oracle`, so a policy can read the verifier.
+  - The verifier is a forbidden target, like the ledger, so the agent cannot
+    register a signer.
+
+**Why a separate contract.** The gate is at 16.9 KB of the 24 KB limit, and
+the PV relay posts to the verifier directly, not through the gate. The pattern
+is the ledger's: keyed by account, owner path by `msg.sender`, and out of the
+agent's reach because `submit` refuses it as a target.
+
+**Why times, not slot numbers.** A BMS and a forecast provider know clocks,
+not a market's slot numbering. The policies map a slot to its start through
+the decoder's `slotStart`, already in place since step 4.
+
+**Why anyone may hand in a reading.** Authenticity is in the signature.
+Monotonicity means a reading handed in can only move the device's clock
+forward, and the maximum age means only the current slot's reading is fresh.
+So letting the agent choose when to hand one in gives it nothing.
+
+**Why the maximum age is per account and applies at once.** τ_soc is one slot
+and the slot length is a deployment parameter (A2), so it cannot be a
+constant. Registering a signer and setting its age is like approving a decoder:
+it needs the owner's key, and Dan chose immediate application for that (4.9,
+item 1).
+
+**Changing the signer drops the stored reading.** What a replaced or
+compromised device said no longer counts. The device's last timestamp is kept,
+so the account's clock still only moves forward.
+
+**Rejected.**
+
+- **Inside the gate:** the size, and a relay would then post through the gate.
+- **Readings only through `submit`:** the PV forecast is pushed hourly by a
+  relay (D11), not by the agent.
+- **Readings without `submit`, posted beforehand by the agent:** the spec puts
+  them in `submit`, and a reading that comes with its order is recorded in
+  the same transaction as the decision.
+- **A staleness rule fixed in the verifier:** the slot length varies by
+  deployment.
+- **ERC-1271 signers** (a contract as the device): the trust anchor is a key in
+  a secure element (spec 3). Not needed now.
+
+**Changed with it.**
+
+- **Every test that calls `submit` passes an empty `readings`,** and every
+  gate is built with a verifier. The edit was mechanical, by script.
+- **The gate's `submit` is split into `_decode` and `_checkAndCommit`.** The
+  extra calldata argument took it past the stack limit; behaviour is
+  unchanged.
+- **The `ledger` mutation catalogue's "ledger allowed as target"** follows the
+  new line. Re-run: caught.
+- **Off-chain:** the deploy script deploys the verifier and the scenario
+  passes an empty `readings`.
+
+**Checked.**
+
+- `npm test`: 333 passing: the 284 before, 35 verifier tests
+  (`test/oracle/OracleVerifier.t.sol`) and 14 through the gate
+  (`test/gate/GateReadings.t.sol`).
+- `npm run test:offchain`: 15 passing.
+- The demo on a fresh node: the same day, figure for figure.
+- `npm run mutate -- --check`: every pattern found.
+- **Foundry: not re-run.** It needs Docker; `test/accounts/` was updated for
+  the new `submit` by the same script, but only Foundry builds it, so it is
+  not yet compiled.
+
+**Gas, execution only, into empty storage:**
+
+- a BMS reading: 87,468;
+- a day's forecast (48 slots): 395,306.
+
+Re-posting over a stored forecast costs far less, since the storage is no
+longer empty. Per-transaction figures come with the gas report of 5.6.
+
 ---
 
 ## Open decisions

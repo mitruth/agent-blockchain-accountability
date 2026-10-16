@@ -9,6 +9,8 @@ import {Side, CheckResult} from "../../contracts/gate/GateTypes.sol";
 import {MiniAccount} from "../../contracts/harness/MiniAccount.sol";
 import {MockEnergyMarket} from "../gate/mocks/MockEnergyMarket.sol";
 import {MockMarketDecoder} from "../gate/mocks/MockMarketDecoder.sol";
+import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 
 /// @notice One account with the gate installed, an agent with a session, and
 ///         the mock market's three order functions approved. Policies are
@@ -39,7 +41,7 @@ abstract contract PolicyFixture is Test {
     function setUp() public virtual {
         vm.warp(GENESIS);
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger, 48);
+        gate = new PolicyGate(ledger, new OracleVerifier(), 48);
         account = new MiniAccount(owner);
         market = new MockEnergyMarket(GENESIS, SLOT_SECONDS, GATE_LEAD, operator);
         decoder = new MockMarketDecoder();
@@ -75,7 +77,7 @@ abstract contract PolicyFixture is Test {
     function _submit(bytes memory marketCall) internal returns (bytes32) {
         vm.prank(agent);
         bytes memory result =
-            account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(market), marketCall)));
+            account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(market), marketCall, new SignedReading[](0))));
         return result.length == 32 ? abi.decode(result, (bytes32)) : bytes32(0);
     }
 

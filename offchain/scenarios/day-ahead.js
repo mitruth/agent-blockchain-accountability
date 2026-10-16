@@ -65,7 +65,7 @@ const profiles = {
  */
 async function viaAgent(name, fn, args) {
   const p = P[name];
-  const submit = calldata("PolicyGate", "submit", [p.prosumer, calldata("Prosumer", fn, args)]);
+  const submit = calldata("PolicyGate", "submit", [p.prosumer, calldata("Prosumer", fn, args), []]);
   const receipt = await send(p.agent.keyIndex, p.account, "MiniAccount", "executeAsSession", [gate, submit]);
   const legs = events(receipt, "PolicyGate", "OrderSubmitted")[0].args.legs.length;
   const rejected = events(receipt, "PolicyGate", "Rejected").length > 0;

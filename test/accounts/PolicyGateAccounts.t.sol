@@ -11,6 +11,8 @@ import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
 import {GateBase} from "../../contracts/gate/GateBase.sol";
 import {StubMarket, StubDecoder, CapPolicy} from "../gate/mocks/GateMocks.sol";
+import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 
 interface IAccountId {
     function accountId() external view returns (string memory);
@@ -52,7 +54,7 @@ contract PolicyGateAccountsTest is SessionFixture {
         vm.warp(1_760_000_000);
 
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger, 48);
+        gate = new PolicyGate(ledger, new OracleVerifier(), 48);
         market = new StubMarket();
         decoder = new StubDecoder();
         policy = new CapPolicy(address(gate));
@@ -109,7 +111,7 @@ contract PolicyGateAccountsTest is SessionFixture {
 
         // Through its session, the agent's approved call is made by the account.
         bytes memory order = abi.encodeCall(StubMarket.placeOrder, (0, 100, 1500, 250_000));
-        _sessionOp(instance, agent, address(gate), abi.encodeCall(gate.submit, (address(market), order)));
+        _sessionOp(instance, agent, address(gate), abi.encodeCall(gate.submit, (address(market), order, new SignedReading[](0))));
         assertEq(market.orderCount(), 1);
         assertEq(market.lastCaller(), account, "the market sees the account");
         assertEq(ledger.openOrderCount(account), 1, "the order is booked against the account");
@@ -117,11 +119,11 @@ contract PolicyGateAccountsTest is SessionFixture {
         // Nobody but the account may call submit.
         vm.expectRevert(abi.encodeWithSelector(GateBase.Gate_NotInstalled.selector, stranger));
         vm.prank(stranger);
-        gate.submit(address(market), order);
+        gate.submit(address(market), order, new SignedReading[](0));
 
         // An unapproved function of an approved market is rejected.
         _expectSessionRefused(
-            instance, agent, address(gate), abi.encodeCall(gate.submit, (address(market), abi.encodeCall(StubMarket.withdrawAll, ())))
+            instance, agent, address(gate), abi.encodeCall(gate.submit, (address(market), abi.encodeCall(StubMarket.withdrawAll, ()), new SignedReading[](0)))
         );
 
         // The session reaches nothing but submit: not the market directly, not
@@ -141,8 +143,8 @@ contract PolicyGateAccountsTest is SessionFixture {
         _expectSessionRefused(instance, agent, account, uninstall);
 
         // Nor through submit: the account is never a target.
-        _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (account, install)));
-        _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (account, uninstall)));
+        _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (account, install, new SignedReading[](0))));
+        _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (account, uninstall, new SignedReading[](0))));
 
         assertEq(market.orderCount(), 1, "nothing else reached the market");
         assertFalse(instance.isModuleInstalled(MODULE_TYPE_EXECUTOR, address(rogue)), "rogue module not installed");
@@ -164,7 +166,7 @@ contract PolicyGateAccountsTest is SessionFixture {
         // The owner uninstalls; the session can no longer reach anything.
         instance.uninstallModule({moduleTypeId: MODULE_TYPE_EXECUTOR, module: address(gate), data: ""});
         assertFalse(gate.isInstalled(account));
-        _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (address(market), order)));
+        _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (address(market), order, new SignedReading[](0))));
         assertEq(market.orderCount(), 1);
     }
 

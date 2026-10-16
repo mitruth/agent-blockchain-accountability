@@ -4,7 +4,7 @@ Owner-side sequence policies for delegated energy-trading agents. Draft, 9 Octob
 
 This brief supersedes `Policy_Spec_Energy_Agent_v0.md` for implementation purposes. It folds in the review of v0 and the decisions taken on 9 October 2026. Read it fully before touching code. Section 10 must be filled in from the repo before step 1 starts.
 
-> **Build status, 16 October 2026.** Steps 1 to 4 of 6 are built and meet their acceptance criteria (Section 9). Step 5 is next. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
+> **Build status, 16 October 2026.** Steps 1 to 4 of 6 are built and meet their acceptance criteria (Section 9). Step 5 is in progress: 5.1, the oracle verifier, is built. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
 >
 > The text below is the brief as written on 9 October. Where it has since been changed or implemented, a marked note says so: *Amended* points to Section 12, *As built* describes the implementation, *Status* reports a build step.
 
@@ -470,13 +470,6 @@ Do not reorder. Each step has to pass before the next starts.
 >
 > Beyond the criteria: `testFuzz_theBooksBalanceAndAgreeWithTheMarket` checks the ledger after every step of random trading and matching on the port, and that it agrees with the prosumer contract's commitments.
 
-> **Status: built; criteria met on 15 October 2026.**
->
-> - **Invariant fuzz.** `test/policies/WindowLib.t.sol` has five fuzz tests, one per class, 256 runs each, against a reference model. For sliding windows, after every step, the running total equals the buckets summed one by one.
-> - **The verifier agrees.** `npm run verify:window` on 30 seeds × 5 classes × 80 steps compared 33,945 figures with no disagreement. It rejected all 720 tampered histories.
-> - **Every mutant of Section 8 whose code exists is caught.** The window mutants, the rounding mutant and the expiry-as-cancellation mutant on the ledger side are caught. The others wait for steps 4 and 5 (`offchain/mutation/catalogs/pending.js`). Over the whole suite: 192 mutants, 189 caught, 3 accepted survivors in test doubles (`docs/reports/mutation-2026-10-15.md`).
-> - **The scripted boundary burst** admits 2H within 3 seconds under `TUMBLING` and H under `SLIDING`, in the test (`test_aBoundaryBurstAdmitsTwiceTheCapUnderTumblingAndOnceUnderSliding`) and in the verifier.
-
 **Step 3. WindowLib, verifier, mutation suite.**
 - All five window classes, lazy reset, credits.
 - Accept when:
@@ -485,12 +478,12 @@ Do not reorder. Each step has to pass before the next starts.
   - every mutant in Section 8 is caught;
   - a scripted boundary burst admits 2H under `TUMBLING` and at most H under `SLIDING`.
 
-> **Status: not started.**
-
-> **Status: built; criteria met on 16 October 2026.** `test/policies/Step4Acceptance.t.sol`, on the ported market through the gate.
-> - **The attacks.** Under `SLIDING`, split-leg drain, boundary burst and idle-then-burst are blocked by S1, and place-and-cancel near the gate by S6.
-> - **The baselines.** Each attack passes under the baseline the attack matrix (9.1) names for it: per-action bounds only; `TUMBLING`; `REFILL` and `STREAM` at the same long-run rate; S6 without the gate weight. The sentence below is read that way (log 4.6).
-> - **Gas** per order, per policy and combined: `docs/reports/gas-2026-10-16.md`.
+> **Status: built; criteria met on 15 October 2026.**
+>
+> - **Invariant fuzz.** `test/policies/WindowLib.t.sol` has five fuzz tests, one per class, 256 runs each, against a reference model. For sliding windows, after every step, the running total equals the buckets summed one by one.
+> - **The verifier agrees.** `npm run verify:window` on 30 seeds × 5 classes × 80 steps compared 33,945 figures with no disagreement. It rejected all 720 tampered histories.
+> - **Every mutant of Section 8 whose code exists is caught.** The window mutants, the rounding mutant and the expiry-as-cancellation mutant on the ledger side are caught. The others wait for steps 4 and 5 (`offchain/mutation/catalogs/pending.js`). Over the whole suite: 192 mutants, 189 caught, 3 accepted survivors in test doubles (`docs/reports/mutation-2026-10-15.md`).
+> - **The scripted boundary burst** admits 2H within 3 seconds under `TUMBLING` and H under `SLIDING`, in the test (`test_aBoundaryBurstAdmitsTwiceTheCapUnderTumblingAndOnceUnderSliding`) and in the verifier.
 
 **Step 4. StaticOrderPolicy, S1, S2, S6.**
 - Accept when, under `SLIDING`, these are blocked:
@@ -501,6 +494,11 @@ Do not reorder. Each step has to pass before the next starts.
 - The same attacks must pass under the baseline classes.
 - Report gas per order per policy and combined.
 
+> **Status: built; criteria met on 16 October 2026.** `test/policies/Step4Acceptance.t.sol`, on the ported market through the gate.
+> - **The attacks.** Under `SLIDING`, split-leg drain, boundary burst and idle-then-burst are blocked by S1, and place-and-cancel near the gate by S6.
+> - **The baselines.** Each attack passes under the baseline the attack matrix (9.1) names for it: per-action bounds only; `TUMBLING`; `REFILL` and `STREAM` at the same long-run rate; S6 without the gate weight. The sentence below is read that way (log 4.6).
+> - **Gas** per order, per policy and combined: `docs/reports/gas-2026-10-16.md`.
+
 **Step 5. OracleVerifier, PV relay, S3, S4, S5.**
 - Accept when:
   - cross-slot over-commitment is blocked;
@@ -510,7 +508,7 @@ Do not reorder. Each step has to pass before the next starts.
   - an exposure-reducing cancel always passes;
   - gas is reported as a function of k.
 
-> **Status: not started.**
+> **Status: in progress.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). The relays, S3, S4 and S5 follow (log 5.1).
 
 **Step 6. Evaluation.**
 - Full attack matrix (Section 9.1), against all baselines.
@@ -590,3 +588,10 @@ Decided with Dan on 9 October 2026, after Section 10 was filled in. Where these 
   - On the reference account, Safe7579, Nexus and Kernel, a session scoped to `submit` reaches the market through the gate, has its refusals recorded, reaches nothing else, and cannot sign.
 
   Section 4's key model is amended there. See `docs/analysis/delegation-architecture.md` section 10 and log 3.9.
+- **A8. The oracles as built (step 5.1).** Decided with Dan on 16 October 2026: no tariff oracle in step 5, since none of its acceptance criteria needs one; A3's price bounds stay absolute. Where Section 5.4 leaves the shape open:
+  - `OracleVerifier` is a contract of its own beside the gate, like the position ledger, keyed by account. The gate refuses it as a target.
+  - Each account registers one signer per kind (BMS, PV forecast) and the oldest a reading may be when accepted: τ_soc and τ_pv are the account's settings, set on the owner path and applied at once, like decoder approvals (log 4.9, item 1).
+  - Readings carry times, not market slot numbers: a BMS reading is measured at a slot start; a forecast starts at a slot start and gives one value per slot.
+  - Anyone may hand in a signed reading. The agent's go with its order, in `submit`'s `readings` argument; the PV relay posts forecasts directly. The policies read the latest fresh reading from the verifier.
+  - A reading the verifier refuses reverts the submission: only a policy rejection is recorded without reverting (4.1).
+  See log 5.1.

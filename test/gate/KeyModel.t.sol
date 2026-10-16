@@ -14,6 +14,8 @@ import {ConfigManager} from "../../contracts/gate/ConfigManager.sol";
 import {IOrderDecoder} from "../../contracts/interfaces/IOrderDecoder.sol";
 import {IPolicy} from "../../contracts/interfaces/IPolicy.sol";
 import {Order, OrderKind, Side} from "../../contracts/gate/GateTypes.sol";
+import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 
 /// The key model, as decided for D1 (option 3, spec amendment A7).
 ///
@@ -94,7 +96,7 @@ contract KeyModelTest is GateFixture {
         for (uint256 i = 0; i < callers.length; ++i) {
             vm.expectRevert(abi.encodeWithSelector(GateBase.Gate_NotInstalled.selector, callers[i]));
             vm.prank(callers[i]);
-            gate.submit(address(market), _order(1500));
+            gate.submit(address(market), _order(1500), new SignedReading[](0));
         }
         assertEq(market.orderCount(), 0);
     }
@@ -104,13 +106,13 @@ contract KeyModelTest is GateFixture {
     /// is booked and, from step 4.2, checked the same way.
     function test_theOwnersOwnSubmissionIsTheAccountsLikeTheAgents() public {
         vm.prank(owner);
-        account.execute(address(gate), 0, abi.encodeCall(gate.submit, (address(market), _order(1500))));
+        account.execute(address(gate), 0, abi.encodeCall(gate.submit, (address(market), _order(1500), new SignedReading[](0))));
         assertEq(market.lastCaller(), address(account));
         assertEq(ledger.openOrderCount(address(account)), 1);
     }
 
     function test_aKeyWithoutASessionCannotMakeTheAccountSubmit() public {
-        bytes memory call = abi.encodeCall(gate.submit, (address(market), _order(1500)));
+        bytes memory call = abi.encodeCall(gate.submit, (address(market), _order(1500), new SignedReading[](0)));
         vm.expectRevert(
             abi.encodeWithSelector(
                 MiniAccount.MiniAccount_OutsideSession.selector, stranger, address(gate), PolicyGate.submit.selector
@@ -185,7 +187,7 @@ contract KeyModelTest is GateFixture {
         );
         vm.stopPrank();
 
-        bytes memory call = abi.encodeCall(gate.submit, (address(market), _order(1500)));
+        bytes memory call = abi.encodeCall(gate.submit, (address(market), _order(1500), new SignedReading[](0)));
         vm.expectRevert(
             abi.encodeWithSelector(
                 MiniAccount.MiniAccount_OutsideSession.selector, agent, address(gate), PolicyGate.submit.selector
@@ -272,8 +274,9 @@ contract KeyModelTest is GateFixture {
 
     function test_theLegLimitIsAtLeastTwo() public {
         assertEq(gate.maxLegs(), MAX_LEGS);
+        OracleVerifier oracle = new OracleVerifier();
         vm.expectRevert(abi.encodeWithSelector(PolicyGate.PolicyGate_MaxLegsTooSmall.selector, 1));
-        new PolicyGate(ledger, 1);
+        new PolicyGate(ledger, oracle, 1);
     }
 
     function test_callDataShorterThanASelectorIsRejected() public {
@@ -436,7 +439,7 @@ contract KeyModelTest is GateFixture {
             [address(account), address(gate), address(market), address(policy), address(ledger)];
 
         vm.prank(agent);
-        try account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (targets[which % 5], data))) {} catch {}
+        try account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (targets[which % 5], data, new SignedReading[](0)))) {} catch {}
 
         _assertAuthorityUnchanged();
     }
@@ -557,7 +560,7 @@ contract KeyModelTest is GateFixture {
             )
         );
         vm.prank(stranger);
-        gate.submit(address(market), _order(1500));
+        gate.submit(address(market), _order(1500), new SignedReading[](0));
         assertEq(market.orderCount(), 0);
     }
 

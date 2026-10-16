@@ -8,6 +8,8 @@ import {Order, OrderKind, Side} from "../../contracts/gate/GateTypes.sol";
 import {MockEnergyMarket} from "./mocks/MockEnergyMarket.sol";
 import {MockMarketDecoder} from "./mocks/MockMarketDecoder.sol";
 import {MiniAccount} from "../../contracts/harness/MiniAccount.sol";
+import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 
 /// Step 2 of the v0.1 build order: the order lifecycle.
 ///
@@ -44,7 +46,7 @@ contract OrderLifecycleTest is Test {
         vm.warp(GENESIS);
 
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger, 48);
+        gate = new PolicyGate(ledger, new OracleVerifier(), 48);
         account = new MiniAccount(owner);
         market = new MockEnergyMarket(GENESIS, SLOT_SECONDS, GATE_LEAD, operator);
         decoder = new MockMarketDecoder();
@@ -71,7 +73,7 @@ contract OrderLifecycleTest is Test {
     /// @dev The agent's path: through its session, the account calls submit.
     function _asAgent(bytes memory marketCall) internal {
         vm.prank(agent);
-        account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(market), marketCall)));
+        account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(market), marketCall, new SignedReading[](0))));
     }
 
     function _place(Side side, uint32 slot, uint64 qtyWh, uint64 price) internal returns (bytes32 orderId) {

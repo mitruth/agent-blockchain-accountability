@@ -230,7 +230,7 @@ contract StaticOrderPolicyTest is PolicyFixture {
     }
 
     function _ctx() internal view returns (CheckContext memory) {
-        return CheckContext({market: address(market), decoder: address(decoder), time: uint64(block.timestamp)});
+        return CheckContext({market: address(market), decoder: address(decoder), time: uint64(block.timestamp), oracle: address(0)});
     }
 
     function _checkLegs(Order[] memory legs) internal view returns (CheckResult memory) {

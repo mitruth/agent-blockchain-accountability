@@ -11,6 +11,8 @@ import {MiniAccount} from "../../contracts/harness/MiniAccount.sol";
 import {MockEnergyMarket} from "./mocks/MockEnergyMarket.sol";
 import {MockMarketDecoder} from "./mocks/MockMarketDecoder.sol";
 import {QtyPolicy, ReentrantPolicy} from "./mocks/PhaseMocks.sol";
+import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 
 /// Step 4.2: the gate's check, commit and credit phases (spec 4.1, steps 4 to
 /// 8), with a test-double policy that counts the Wh placed.
@@ -49,7 +51,7 @@ contract PolicyPhasesTest is Test {
     function setUp() public {
         vm.warp(GENESIS);
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger, 48);
+        gate = new PolicyGate(ledger, new OracleVerifier(), 48);
         account = new MiniAccount(owner);
         market = new MockEnergyMarket(GENESIS, SLOT_SECONDS, GATE_LEAD, operator);
         decoder = new MockMarketDecoder();
@@ -169,7 +171,7 @@ contract PolicyPhasesTest is Test {
         vm.expectEmit(true, false, false, false, address(gate));
         emit PolicyGate.Rejected(address(account), bytes32(0));
         vm.prank(owner);
-        account.execute(address(gate), 0, abi.encodeCall(gate.submit, (address(market), _placeCall(1500))));
+        account.execute(address(gate), 0, abi.encodeCall(gate.submit, (address(market), _placeCall(1500), new SignedReading[](0))));
         assertEq(market.orderCount(), 0);
     }
 
@@ -317,7 +319,7 @@ contract PolicyPhasesTest is Test {
     function _submit(bytes memory marketCall) internal returns (bytes32) {
         vm.prank(agent);
         bytes memory result =
-            account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(market), marketCall)));
+            account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (address(market), marketCall, new SignedReading[](0))));
         return result.length == 32 ? abi.decode(result, (bytes32)) : bytes32(0);
     }
 

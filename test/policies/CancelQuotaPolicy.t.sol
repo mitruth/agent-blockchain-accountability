@@ -229,7 +229,7 @@ contract CancelQuotaPolicyTest is PolicyFixture {
     }
 
     function _ctx(uint64 time) internal view returns (CheckContext memory) {
-        return CheckContext({market: address(market), decoder: address(decoder), time: time});
+        return CheckContext({market: address(market), decoder: address(decoder), time: time, oracle: address(0)});
     }
 
     /// @dev The weighted Wh a cancellation of `qtyWh` in FAR adds at `time`.

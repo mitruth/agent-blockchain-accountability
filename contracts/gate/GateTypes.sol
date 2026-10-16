@@ -78,10 +78,13 @@ struct CheckResult {
 /// @param decoder The decoder registered for the call (an IOrderDecoder): its
 ///                views give a slot's start and gate time.
 /// @param time    The block time of the submission.
+/// @param oracle  The OracleVerifier: the readings the submission brought are
+///                already accepted there, so its views give the latest.
 struct CheckContext {
     address market;
     address decoder;
     uint64 time;
+    address oracle;
 }
 
 /// @notice Volume an order no longer exposes: an order closed by a

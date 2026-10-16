@@ -24,6 +24,7 @@ project contains today, what the tests prove and how to run everything.
 | ------ | ------------- |
 | `contracts/gate/` | `PolicyGate` and its parts, the `PositionLedger` |
 | `contracts/policies/` | The policies: `StaticOrderPolicy` (A1 to A6), `WindowPolicy` (S1, S2), `CancelQuotaPolicy` (S6), and `WindowLib`, the counting over time they share |
+| `contracts/oracle/` | `OracleVerifier`: the signed battery readings and PV forecasts the physical policies rely on |
 | `contracts/market/` | The P2P market: token, manager, sessions, prosumer contracts, settlement, the gate's decoder |
 | `contracts/interfaces/` | ERC-7579 pieces, the decoder and policy interfaces |
 | `contracts/harness/` | Stand-ins for tests and the local system, not part of the system |

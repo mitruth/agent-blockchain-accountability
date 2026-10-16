@@ -42,7 +42,7 @@ The build follows six steps, fixed by Section 9 of the spec.
 | 2    | Position ledger, reconcile, the P2P market port and its decoder             | **Built and passing** |
 | 3    | `WindowLib`, independent verifier, mutation suite                           | **Built and passing** |
 | 4    | The session entry point, the policy phases; per-action policies, S1, S2, S6 | **Built and passing** |
-| 5    | Oracle verification, PV relay, S3, S4, S5                                   | Not started           |
+| 5    | Oracle verification, PV relay, S3, S4, S5                                   | In progress: 5.1 built |
 | 6    | Evaluation                                                                  | Not started           |
 
 
@@ -73,6 +73,11 @@ crossing is flagged and goes ahead; released volume is credited back.
   Section 3 explains what each checks; section 6 shows four attacks blocked.
 - **A position ledger:** every order the agent placed, and per delivery slot
 the account's committed and cleared volume, buy and sell.
+- **An oracle verifier** (step 5.1): the signed readings the physical policies
+will rely on, the battery's state from its BMS and the PV forecast. It checks
+each reading's signature against the signer the account registered, refuses a
+stale, future or reordered reading, and keeps the latest. The agent hands in
+readings with its order; it cannot register a signer.
 - **The P2P energy market, ported from Dan's BRIGHT and DEDALUS projects:** a
 market manager, market sessions, one prosumer contract per prosumer, a lockable
 ERC-1155 token for payment and energy, and the 10% settlement rule. Section 3
@@ -96,10 +101,11 @@ under Hardhat; the other 3 are faults in test doubles.
 
 ### What does not exist yet
 
-**No policy that needs an oracle.** The physical policies, S3 deliverability,
-S4 battery cycles and S5 ramp, need signed meter and BMS readings and a PV
-forecast; they are step 5, with the oracle verifier. A3's price bounds are
-absolute until a tariff oracle exists. Nothing is deployed to a network.
+**No policy that uses the readings yet.** The verifier is built (5.1); the
+relays that sign and post readings (5.2) and the physical policies, S3
+deliverability, S4 battery cycles and S5 ramp (5.3 to 5.5), come next. There
+is no tariff oracle, so A3's price bounds stay absolute (spec A8). Nothing is
+deployed to a network.
 
 Two roles of the market are outside the repository by design: the off-chain
 matching service, linked to the chain by an oracle, which registers trades; and
@@ -192,7 +198,7 @@ An agent that wanted more authority would aim at one of four things.
 ## 3. How an order flows today
 
 Through its session, the agent has the account call
-`PolicyGate.submit(target, callData)`. The spec's full flow has eight steps
+`PolicyGate.submit(target, callData, readings)`. The spec's full flow has eight steps
 (Section 4.1). This is what is built of it.
 
 
@@ -200,7 +206,7 @@ Through its session, the agent has the account call
 | --------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | 1         | The agent is authorised, unexpired and unrevoked                                                     | Yes, by its session on the account; the gate checks that the caller is an account with the gate installed |
 | 2         | The pair (target, function selector) is on the allowlist; its decoder turns the call into an `Order` | Yes, as one or two legs                                                                                   |
-| 3         | Verify signed oracle readings                                                                        | No, step 5. `submit` takes no readings yet                                                                |
+| 3         | Verify signed oracle readings                                                                        | Yes (step 5.1): each reading handed in is accepted by the oracle verifier, or the submission reverts      |
 | 4         | Check phase: every policy inspects the order                                                         | Yes (step 4.2): every instance, all legs at once                                                          |
 | 5         | Aggregate: execute, flag or reject                                                                   | Yes: any REJECT stops the submission without reverting; a FLAG is logged and goes ahead                   |
 | 6         | Commit phase: update policy state and the position ledger                                            | Yes: policies before the market call, the ledger after it                                                 |
@@ -214,7 +220,7 @@ In order, `submit` does this:
   gate installed. The agent reaches this only through its session.
 2. Reverts with `PolicyGate_CallDataTooShort` if the call has no selector.
 3. Reverts with `PolicyGate_ForbiddenTarget` if the target is the account, the
-  gate, the ledger or the zero address.
+  gate, the ledger, the oracle verifier or the zero address.
 4. Looks up the decoder for (target, selector). Reverts with
   `PolicyGate_UnknownCall` if the owner never approved that pair.
 5. Decodes the call into **legs**, each an `Order`: kind, side, slot, quantity
@@ -225,22 +231,27 @@ In order, `submit` does this:
 6. Computes `orderHash` from the chain id, the gate's address, the account, the
   account's submission counter, the target and the hash of the calldata. Emits
    `OrderSubmitted`.
-7. **Check.** Asks every policy instance of the account to check all the legs
+7. **Readings.** Hands each signed reading the call brought, at most four, to
+  the oracle verifier. A reading it refuses (wrong signer, stale, from the
+  future, older than the last from that device) reverts the submission, and so
+  does a reading for another account. The policies then read the latest from
+  the verifier, whether it came with this order or an earlier one.
+8. **Check.** Asks every policy instance of the account to check all the legs
   at once, and emits each one's `PolicyResult`: its quantity before and after,
   its soft and hard bounds, and its verdict. A FLAG also emits `PolicyFlag`.
   If any instance says REJECT, emits `Rejected` and **returns without
   reverting**: nothing is committed, booked or sent, and the refusal stays in
   the log. A policy whose check reverts reverts the submission.
-8. **Commit.** Asks every instance to commit.
-9. Asks the account to make the call: one call, zero value, never a batch and
+9. **Commit.** Asks every instance to commit.
+10. Asks the account to make the call: one call, zero value, never a batch and
   never a delegatecall. If the market reverts, everything reverts, the commits
   included.
-10. Books each leg in the position ledger, in order. A CANCEL leg books any fill
+11. Books each leg in the position ledger, in order. A CANCEL leg books any fill
   not yet booked and releases the rest, and the released volume is **credited**
   back to every instance; a PLACE leg reads the new order's id from the
   market's reply and books the order. If the ledger refuses a leg (an order it
   does not hold, or a 65th open order), everything reverts.
-11. Emits `Executed`.
+12. Emits `Executed`.
 
 A modification is checked as its two legs: the new order needs room before the
 old one is credited, which happens only once the market has taken the call.
@@ -516,6 +527,17 @@ configuration.
 
 
 
+### `contracts/oracle/`: signed readings
+
+
+| File                 | What it does                                                                                                                                                                                                                        |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OracleVerifier.sol` | One deployment for every account. `setDevice`, on the owner path: the account's BMS and PV signers and how old a reading may be. `accept`, open to anyone: checks a signed reading (EIP-712, low-s), its age, its order, and keeps it. `bmsOf` and `pvAt`: the latest, and whether it is fresh |
+| `OracleTypes.sol`    | What the oracles sign: `BmsReading` (state of charge and discharge odometer at a time), `PvForecast` (Wh per slot from a start time), and `SignedReading`, how either travels                                                     |
+
+
+
+
 ### `contracts/market/`: the P2P market
 
 
@@ -606,6 +628,9 @@ and agent validity; and `agentPolicies`, the policies every agent trades under
 | `gate/OrderLifecycle.t.sol`         | 26                                                    | Hardhat and Foundry |
 | `gate/PositionLedger.t.sol`         | 8                                                     | Hardhat and Foundry |
 | `gate/PolicyPhases.t.sol`           | 15                                                    | Hardhat and Foundry |
+| `gate/GateReadings.t.sol`           | 14                                                    | Hardhat and Foundry |
+| `oracle/OracleVerifier.t.sol`       | 35                                                    | Hardhat and Foundry |
+| `oracle/OracleFixture.sol`          | Signing helpers for the oracle tests                  |                     |
 | `market/LockableERC1155.t.sol`      | 23                                                    | Hardhat and Foundry |
 | `market/MarketFlow.t.sol`           | 41                                                    | Hardhat and Foundry |
 | `market/GatedMarket.t.sol`          | 12                                                    | Hardhat and Foundry |
@@ -762,6 +787,41 @@ double, `QtyPolicy`, that counts the Wh placed against a soft and a hard bound.
 | ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Check and commit | 9     | An accepted submission is committed, then executed, with the instance's result in the log. A soft bound crossed is flagged and executed; the hard bound is inclusive. A rejection returns normally and leaves nothing committed, booked or sent; one instance's rejection stops every instance, and every result is logged. The owner's own submission is checked too. A reverting check or commit reverts the submission. A policy cannot reconcile while the gate commits: the lock refuses it |
 | Credits          | 6     | A cancellation passes even at the hard bound and is credited, with the order's placement time, side, slot, quantity and price. A partly filled cancellation credits only the unfilled part. An expiry is credited on reconcile; nothing is credited while the order is still open. A failing credit is recorded and cannot block reconciliation. A modification needs room for the new order before the old is credited                                                                          |
+
+
+
+
+### `test/gate/GateReadings.t.sol`: 14 tests
+
+Readings handed in with an order, through the gate, with a test double,
+`FreshBatteryPolicy`, that rejects unless the account's battery reading is
+fresh and shows enough stored energy.
+
+
+| Group                         | Tests | What it establishes                                                                                                                                                                                                                                                          |
+| ----------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accepted                      | 6     | A reading that comes with an order is accepted and emitted before the policies check, and the policy sees its values. Without a fresh reading the policy rejects. A reading serves later orders until it goes stale; the same reading may come with every order of the slot. A rejected order keeps the genuine reading it brought |
+| Refused                       | 5     | A stale, reordered or forged reading reverts the whole submission, and nothing is placed. So does a genuine reading for another account. At most four readings per submission                                                                                              |
+| The signer list is out of reach | 3   | The agent cannot have the gate call the verifier, and the owner cannot approve a decoder for it either. The agent's session cannot call the verifier directly                                                                                                             |
+
+
+
+
+### `test/oracle/OracleVerifier.t.sol`: 35 tests
+
+The verifier on its own. The test fixture computes every EIP-712 digest from
+the type strings rather than asking the contract, so a wrong type hash shows up
+as a refused signature.
+
+
+| Group        | Tests | What it establishes                                                                                                                                                                                                                                                                                           |
+| ------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accepted     | 5     | A signed, fresh reading is accepted, emitted in full and stored, whoever hands it in. A reading exactly as old as the maximum is accepted. A newer reading replaces the last. The contract's digests match the type strings                                                                                  |
+| Who signed   | 8     | Another key and the PV key are refused for the battery; so are an account with no signer, a tampered reading, the high-s twin of a valid signature, a malformed signature, and a reading signed for another verifier or another chain                                       |
+| When         | 9     | A stale reading and one from the future are refused. A reordered reading is refused (the favourable-reading attack). The same reading again changes nothing and emits nothing; a different reading with the same timestamp is refused. The odometer cannot go down. A stored reading goes stale with time. Fuzz: in any order, only newer readings get through |
+| The registry | 4     | A new signer drops the old device's reading, and the old key is refused. Removing the signer makes its reading unusable. The maximum age is bounded. Each account has its own registry                                                                                                                       |
+| PV forecast  | 8     | A forecast is served slot by slot, and only for slots it covers exactly. It is emitted in full, goes stale after its maximum age, and a newer one replaces it whole. An older one, a malformed one (no slots, slot length zero, more than 96) and one signed by the battery key are refused; 96 slots fit                                       |
+| Gas          | 1     | What `accept` costs, printed: a battery reading, a day's and two days' forecast                                                                                                                                                                                                                              |
 
 
 
@@ -1058,10 +1118,11 @@ npm install
 
 ### The Hardhat suite
 
-Expect **284 passing** in about two minutes:
+Expect **333 passing** in about two minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
-  market, 8 ledger, 15 policy phases;
+  market, 8 ledger, 15 policy phases, 14 readings;
+- the oracle verifier: 35;
 - the market: 23 token, 41 market flow, 12 gated market, 6 settlement rule;
 - the windows and the policies: 32 `WindowLib`, 15 `StaticOrderPolicy`, 11
   `WindowPolicy`, 9 `CancelQuotaPolicy`, 15 acceptance (attacks and gas).
@@ -1075,7 +1136,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **292 passed**: the 284 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype).
+Expect **341 passed**: the 333 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 16 October, before step 5.1, with 292; not re-run since, as it needs Docker.
 
 With Foundry installed and allowed to run:
 
@@ -1304,7 +1365,7 @@ agent's session allows and until when; the events `ProsumerRegistered` and
 
 | Step | Adds                                                                                 |
 | ---- | ------------------------------------------------------------------------------------ |
-| 5    | Signed oracle readings, the PV relay, deliverability S3, battery cycles S4, ramp S5  |
+| 5    | 5.1 built: signed readings. Next, the relays (5.2), deliverability S3, battery cycles S4, ramp S5 |
 | 6    | The attack matrix against all baselines, the false-positive rate on honest arms, gas |
 
 

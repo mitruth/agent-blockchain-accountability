@@ -10,6 +10,8 @@ import {ProsumerDecoder} from "../../contracts/market/ProsumerDecoder.sol";
 import {Prosumer} from "../../contracts/market/Prosumer.sol";
 import {MarketSession} from "../../contracts/market/MarketSession.sol";
 import {MarketTypes} from "../../contracts/market/MarketTypes.sol";
+import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 
 /// The whole system: an agent trades for Alice on the ported P2P market, and
 /// can do so only through PolicyGate.
@@ -56,7 +58,7 @@ contract GatedMarketTest is MarketFixture {
         super.setUp();
 
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger, MAX_LEGS);
+        gate = new PolicyGate(ledger, new OracleVerifier(), MAX_LEGS);
         decoder = new ProsumerDecoder();
 
         vm.startPrank(aliceOwner);
@@ -84,7 +86,7 @@ contract GatedMarketTest is MarketFixture {
     /// @dev The agent's path: through its session, Alice's account calls submit.
     function _submitTo(address target, bytes memory call) internal {
         vm.prank(agent);
-        aliceAccount.executeAsSession(address(gate), abi.encodeCall(gate.submit, (target, call)));
+        aliceAccount.executeAsSession(address(gate), abi.encodeCall(gate.submit, (target, call, new SignedReading[](0))));
     }
 
     function _submit(bytes memory call) internal {

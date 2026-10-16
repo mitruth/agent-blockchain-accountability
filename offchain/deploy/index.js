@@ -48,14 +48,15 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
 
   // --- the enforcement layer -----------------------------------------------
   const ledger = await deploy(OPERATOR, "PositionLedger");
-  const gate = await deploy(OPERATOR, "PolicyGate", [ledger, BigInt(config.maxLegs)]);
+  const oracle = await deploy(OPERATOR, "OracleVerifier");
+  const gate = await deploy(OPERATOR, "PolicyGate", [ledger, oracle, BigInt(config.maxLegs)]);
   const decoder = await deploy(OPERATOR, "ProsumerDecoder");
   const policyContracts = {
     statics: await deploy(OPERATOR, "StaticOrderPolicy", [gate]),
     windows: await deploy(OPERATOR, "WindowPolicy", [gate]),
     quota: await deploy(OPERATOR, "CancelQuotaPolicy", [gate]),
   };
-  log(`gate        ${gate}  (ledger ${ledger}, decoder ${decoder})`);
+  log(`gate        ${gate}  (ledger ${ledger}, oracle ${oracle}, decoder ${decoder})`);
   log(`policies    per-action ${policyContracts.statics}, windows ${policyContracts.windows}, quota ${policyContracts.quota}\n`);
 
   const orderFunctions = ["placeBids", "placeOffers", "cancelOrder", "modifyOrder"].map((f) =>
@@ -130,7 +131,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     deployedAt: new Date().toISOString(),
     slotSeconds: config.slotSeconds,
     realTimePrice: realTimePrice.toString(),
-    contracts: { token, rule, manager, ledger, gate, decoder, ...policyContracts },
+    contracts: { token, rule, manager, ledger, oracle, gate, decoder, ...policyContracts },
     roles: {
       operator: { address: key(OPERATOR).address, keyIndex: OPERATOR },
       matcher: { address: key(MATCHER).address, keyIndex: MATCHER },

@@ -6,6 +6,8 @@ import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
 import {MiniAccount} from "../../contracts/harness/MiniAccount.sol";
 import {StubMarket, StubDecoder, CapPolicy} from "./mocks/GateMocks.sol";
+import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 
 /// @notice One account with the gate installed and authorised to write the
 ///         account's positions, an agent whose session lets it have the account
@@ -36,7 +38,7 @@ abstract contract GateFixture is Test {
         vm.warp(1_760_000_000);
 
         ledger = new PositionLedger();
-        gate = new PolicyGate(ledger, MAX_LEGS);
+        gate = new PolicyGate(ledger, new OracleVerifier(), MAX_LEGS);
         account = new MiniAccount(owner);
         market = new StubMarket();
         decoder = new StubDecoder();
@@ -58,7 +60,7 @@ abstract contract GateFixture is Test {
     /// @dev The agent's path: through its session, the account calls submit.
     function _submit(address target, bytes memory callData) internal returns (bytes32) {
         vm.prank(agent);
-        bytes memory result = account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (target, callData)));
+        bytes memory result = account.executeAsSession(address(gate), abi.encodeCall(gate.submit, (target, callData, new SignedReading[](0))));
         // Empty when the test expected the call to revert.
         return result.length == 32 ? abi.decode(result, (bytes32)) : bytes32(0);
     }
