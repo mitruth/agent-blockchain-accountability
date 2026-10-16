@@ -9,10 +9,10 @@ account call the gate's `submit`, and nothing else.
 Built so far: the gate, the key model and configuration (step 1); the order
 lifecycle and the position ledger (step 2); a port of the P2P energy market the
 agent trades on; the whole system running on a local node; `WindowLib`, its
-independent verifier and the mutation suite (step 3). Step 4 is in progress:
-the agent's session entry point and the policy check, commit and credit phases
-are built; the policies themselves come next. The status is in
-[`docs/plan/roadmap.md`](docs/plan/roadmap.md).
+independent verifier and the mutation suite (step 3); and the policies: the
+agent's session entry point, the check, commit and credit phases, the
+per-action bounds and the sequence policies S1, S2 and S6 (step 4). The status
+is in [`docs/plan/roadmap.md`](docs/plan/roadmap.md).
 
 **Documentation is in [`docs/`](docs/README.md).** Start with
 [`docs/guide/project-guide.md`](docs/guide/project-guide.md) for what the
@@ -23,14 +23,14 @@ project contains today, what the tests prove and how to run everything.
 | Folder | What is in it |
 | ------ | ------------- |
 | `contracts/gate/` | `PolicyGate` and its parts, the `PositionLedger` |
-| `contracts/policies/` | `WindowLib`, the counting over time the sequence policies share; the policies of step 4 go here |
+| `contracts/policies/` | The policies: `StaticOrderPolicy` (A1 to A6), `WindowPolicy` (S1, S2), `CancelQuotaPolicy` (S6), and `WindowLib`, the counting over time they share |
 | `contracts/market/` | The P2P market: token, manager, sessions, prosumer contracts, settlement, the gate's decoder |
 | `contracts/interfaces/` | ERC-7579 pieces, the decoder and policy interfaces |
 | `contracts/harness/` | Stand-ins for tests and the local system, not part of the system |
 | `test/` | Solidity tests, one folder per contract folder; `test/accounts/` runs under Foundry only |
 | `offchain/` | The JavaScript around the contracts, one package per job: `chain`, `deploy`, `matcher`, `keeper`, `sensor`, `scenarios`, `verifier`, `mutation` |
 | `docs/` | Guide, specification, decision log, roadmap, analyses |
-| `earlier-design/`, and `contracts/earlier-design/`, `test/earlier-design/` | The project this one replaces, kept running until step 4 |
+| `data/hems/` | The HEMS simulation's daily records, for calibrating the caps in step 6 |
 
 ## Running it
 

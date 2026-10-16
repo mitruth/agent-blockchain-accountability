@@ -5,6 +5,7 @@
 // npm run mutate -- --check               every pattern still where its catalogue says
 // npm run mutate -- window --report docs/reports/mutation-window.md
 // npm run mutate -- accounts --docker    the real-account tests, in Foundry's Docker image
+// npm run mutate -- policies --all-tests  every mutant against the catalogue's whole list
 //
 // Changes contract files in place while it runs (and restores them): do not
 // edit contracts or run other builds meanwhile.
@@ -40,6 +41,8 @@ if (args.includes("--check")) {
 
 // The accounts catalogue needs Docker, which the runner never starts on its
 // own: it runs only when named and given --docker.
+const allTests = args.includes("--all-tests");
+
 let chosen = names.length ? names.map((n) => CATALOGS[n] ?? (console.error(`No catalogue ${n}`), process.exit(2))) : Object.values(CATALOGS);
 const docker = chosen.filter((c) => c.runner === "forge-docker");
 if (docker.length && !(names.length && args.includes("--docker"))) {
@@ -58,7 +61,8 @@ const all = [];
 const started = Date.now();
 for (const catalog of chosen) {
   console.log(`\n${catalog.name}: ${catalog.mutants.length} mutants, tests ${catalog.tests.join(", ")}${catalog.verifier ? ", and the verifier" : ""}`);
-  const rows = runCatalog(catalog, {
+  const run = allTests ? { ...catalog, mutants: catalog.mutants.map(({ tests, ...m }) => m) } : catalog;
+  const rows = runCatalog(run, {
     only,
     log: (r) =>
       console.log(

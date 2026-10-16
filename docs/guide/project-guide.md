@@ -1,10 +1,10 @@
 # Project guide
 
 What the project contains today, what every file does, what the tests prove,
-and how to run everything. Current as of 2026-10-15: steps 1, 2 and 3 of 6 are
-built, step 2 on a port of Dan's P2P energy flexibility market. Step 4 is in
-progress: the agent's session entry point (4.1) and the policy phases (4.2) are
-built; the policies themselves are not yet.
+and how to run everything. Current as of 2026-10-16: steps 1 to 4 of 6 are
+built, step 2 on a port of Dan's P2P energy flexibility market. Step 4 gave the
+agent a session entry point, ran every policy on every submission, and built
+the per-action bounds and the sequence policies S1, S2 and S6.
 
 
 | For                                     | Read                                 |
@@ -37,14 +37,14 @@ built from individually legal orders.
 The build follows six steps, fixed by Section 9 of the spec.
 
 
-| Step | Content                                                         | Status                |
-| ---- | --------------------------------------------------------------- | --------------------- |
-| 1    | The gate, the key model, the registries, configuration          | **Built and passing** |
-| 2    | Position ledger, reconcile, the P2P market port and its decoder | **Built and passing** |
-| 3    | `WindowLib`, independent verifier, mutation suite               | **Built and passing** |
-| 4    | The session entry point, the policy phases; per-action policies, S1, S2, S6 | **In progress**: entry point and phases built |
-| 5    | Oracle verification, PV relay, S3, S4, S5                       | Not started           |
-| 6    | Evaluation                                                      | Not started           |
+| Step | Content                                                                     | Status                |
+| ---- | --------------------------------------------------------------------------- | --------------------- |
+| 1    | The gate, the key model, the registries, configuration                      | **Built and passing** |
+| 2    | Position ledger, reconcile, the P2P market port and its decoder             | **Built and passing** |
+| 3    | `WindowLib`, independent verifier, mutation suite                           | **Built and passing** |
+| 4    | The session entry point, the policy phases; per-action policies, S1, S2, S6 | **Built and passing** |
+| 5    | Oracle verification, PV relay, S3, S4, S5                                   | Not started           |
+| 6    | Evaluation                                                                  | Not started           |
 
 
 
@@ -64,6 +64,14 @@ rule "tighten now, widen after 24 hours".
 submission before it reaches the market, all legs at once. A rejection is
 recorded on chain without reverting and leaves nothing behind; a soft-bound
 crossing is flagged and goes ahead; released volume is credited back.
+- **The policies of step 4**, in `contracts/policies/`:
+  - `StaticOrderPolicy`, the per-action bounds A1 to A4 and A6: quantity,
+  value, price floor and ceiling, blocked hours, horizon.
+  - `WindowPolicy`, S1 (the owner's budget, BUY value) and S2 (the export and
+  import caps, Wh), on `WindowLib`.
+  - `CancelQuotaPolicy`, S6: cancelled volume weighted near the gate, the
+  cancel-to-place ratio and the message count.
+  Section 3 explains what each checks; section 6 shows four attacks blocked.
 - **A position ledger:** every order the agent placed, and per delivery slot
 the account's committed and cleared volume, buy and sell.
 - **The P2P energy market, ported from Dan's BRIGHT and DEDALUS projects:** a
@@ -89,12 +97,10 @@ under Hardhat; the other 3 are faults in test doubles.
 
 ### What does not exist yet
 
-**No real policy exists yet.** The gate consults every policy an account has
-added, and acts on its verdict, but the only policies written so far are test
-doubles. The first real one, `StaticOrderPolicy` (A1 to A6), is step 4.3; the
-sequence policies S1, S2 and S6 follow. `WindowLib` is built and tested on its
-own; no policy uses it yet. There is no oracle. Nothing is deployed to a
-network.
+**No policy that needs an oracle.** The physical policies, S3 deliverability,
+S4 battery cycles and S5 ramp, need signed meter and BMS readings and a PV
+forecast; they are step 5, with the oracle verifier. A3's price bounds are
+absolute until a tariff oracle exists. Nothing is deployed to a network.
 
 Two roles of the market are outside the repository by design: the off-chain
 matching service, linked to the chain by an oracle, which registers trades; and
@@ -140,13 +146,13 @@ On both paths the gate's caller is the account. What separates them is **what
 each key may make the account call**:
 
 - **The owner's key** passes the account's root validator, which may make the
-  account call anything.
+account call anything.
 - **The agent's key** passes only its session, which lets it make the account
-  call the gate's `submit` and nothing else: no other function of the gate, not
-  the market, not the account itself. The session expires at a set time and the
-  owner can remove it at once.
+call the gate's `submit` and nothing else: no other function of the gate, not
+the market, not the account itself. The session expires at a set time and the
+owner can remove it at once.
 - **Signing.** The session has no ERC-7739 content and no ERC-1271 policy, so
-  the agent cannot sign anything for the account, a token permit for instance.
+the agent cannot sign anything for the account, a token permit for instance.
 
 So `submit` accepts any account with the gate installed, and every other
 function the gate guards the same way is, in effect, the owner path.
@@ -158,11 +164,11 @@ agent's.
 ### Who may do what
 
 
-| Actor           | May                                                                                                                                                                           | May not                                                                                                                                                                     |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Owner**       | Install and uninstall the gate; give and remove the agent's session; approve and withdraw market calls; add, configure and remove policies; appoint who writes the account's positions; submit orders itself, checked like the agent's | Approve the account itself, the gate or the ledger as a target. Loosen a policy or remove one without the 24-hour wait                                                      |
-| **Agent**       | Through its session, while it is valid, have the account call `submit` on approved calls; cancel or modify the orders placed through the gate | Call anything but `submit` through its session; sign for the account; install or uninstall a module; write any registry or the ledger; configure a policy; widen its own session; touch an order not placed through the gate; reach any of those by routing a call through the gate |
-| **Anyone else** | Nothing on this account                                                                                                                                                       | Everything                                                                                                                                                                  |
+| Actor           | May                                                                                                                                                                                                                                    | May not                                                                                                                                                                                                                                                                             |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Owner**       | Install and uninstall the gate; give and remove the agent's session; approve and withdraw market calls; add, configure and remove policies; appoint who writes the account's positions; submit orders itself, checked like the agent's | Approve the account itself, the gate or the ledger as a target. Loosen a policy or remove one without the 24-hour wait                                                                                                                                                              |
+| **Agent**       | Through its session, while it is valid, have the account call `submit` on approved calls; cancel or modify the orders placed through the gate                                                                                          | Call anything but `submit` through its session; sign for the account; install or uninstall a module; write any registry or the ledger; configure a policy; widen its own session; touch an order not placed through the gate; reach any of those by routing a call through the gate |
+| **Anyone else** | Nothing on this account                                                                                                                                                                                                                | Everything                                                                                                                                                                                                                                                                          |
 
 
 
@@ -172,12 +178,12 @@ agent's.
 An agent that wanted more authority would aim at one of four things.
 
 
-| Target of the attack                | Why it would work if open                                                                                                                                 | How it is closed                                                                              |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Target of the attack                                  | Why it would work if open                                                                                                                                                     | How it is closed                                                                                                                  |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | The account's own module management, and its sessions | Real accounts accept `installModule` and session changes from themselves. `submit` makes the account call things. So `submit` with the account as target would be a self-call | The agent's session does not name the account. `submit` refuses the account as a target, and the allowlist refuses to register it |
-| The gate's registries               | A call from the account to the gate arrives on the owner path                                                                                             | The agent's session names `submit` only. `submit` refuses the gate as a target, and the allowlist refuses to register it |
-| A policy's parameters               | A looser cap is as good as no cap                                                                                                                         | A policy accepts `configure` from the gate only, and the gate calls it only on the owner path |
-| The ledger's list of writers        | The ledger appoints writers on the word of the account. A call from the account to the ledger would let the agent appoint itself                          | `submit` refuses the ledger as a target                                                       |
+| The gate's registries                                 | A call from the account to the gate arrives on the owner path                                                                                                                 | The agent's session names `submit` only. `submit` refuses the gate as a target, and the allowlist refuses to register it          |
+| A policy's parameters                                 | A looser cap is as good as no cap                                                                                                                                             | A policy accepts `configure` from the gate only, and the gate calls it only on the owner path                                     |
+| The ledger's list of writers                          | The ledger appoints writers on the word of the account. A call from the account to the ledger would let the agent appoint itself                                              | `submit` refuses the ledger as a target                                                                                           |
 
 
 ---
@@ -191,16 +197,16 @@ Through its session, the agent has the account call
 (Section 4.1). This is what is built of it.
 
 
-| Spec step | What it is                                                                                           | Built?                                                       |
-| --------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Spec step | What it is                                                                                           | Built?                                                                                                    |
+| --------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | 1         | The agent is authorised, unexpired and unrevoked                                                     | Yes, by its session on the account; the gate checks that the caller is an account with the gate installed |
-| 2         | The pair (target, function selector) is on the allowlist; its decoder turns the call into an `Order` | Yes, as one or two legs                                      |
-| 3         | Verify signed oracle readings                                                                        | No, step 5. `submit` takes no readings yet                   |
-| 4         | Check phase: every policy inspects the order                                                         | Yes (step 4.2): every instance, all legs at once |
-| 5         | Aggregate: execute, flag or reject                                                                   | Yes: any REJECT stops the submission without reverting; a FLAG is logged and goes ahead |
-| 6         | Commit phase: update policy state and the position ledger                                            | Yes: policies before the market call, the ledger after it |
-| 7         | The account calls the market                                                                         | Yes                                                          |
-| 8         | Emit the outcome                                                                                     | Yes: `OrderSubmitted`, a `PolicyResult` per instance, `PolicyFlag`s, then `Executed` or `Rejected` |
+| 2         | The pair (target, function selector) is on the allowlist; its decoder turns the call into an `Order` | Yes, as one or two legs                                                                                   |
+| 3         | Verify signed oracle readings                                                                        | No, step 5. `submit` takes no readings yet                                                                |
+| 4         | Check phase: every policy inspects the order                                                         | Yes (step 4.2): every instance, all legs at once                                                          |
+| 5         | Aggregate: execute, flag or reject                                                                   | Yes: any REJECT stops the submission without reverting; a FLAG is logged and goes ahead                   |
+| 6         | Commit phase: update policy state and the position ledger                                            | Yes: policies before the market call, the ledger after it                                                 |
+| 7         | The account calls the market                                                                         | Yes                                                                                                       |
+| 8         | Emit the outcome                                                                                     | Yes: `OrderSubmitted`, a `PolicyResult` per instance, `PolicyFlag`s, then `Executed` or `Rejected`        |
 
 
 In order, `submit` does this:
@@ -239,8 +245,6 @@ In order, `submit` does this:
 
 A modification is checked as its two legs: the new order needs room before the
 old one is credited, which happens only once the market has taken the call.
-
-
 
 ### What happens to an order after it is placed
 
@@ -294,6 +298,65 @@ the account.
 A reentrancy lock covers the whole function. The same lock covers every
 configuration write, so nothing can be registered or reconfigured while an order
 is part-way through.
+
+### The policies an order meets
+
+An account adds policy instances on the owner path (section 4). Each is one
+contract and an id; one contract can serve several instances, for example the
+export and the import cap. For every submission, each instance returns a
+`CheckResult`: its quantity before and after, its soft and hard bounds, and a
+verdict.
+
+`StaticOrderPolicy`**: each order on its own** (spec 6.1). Every PLACE leg is
+checked; a cancellation never is.
+
+
+| Bound          | Rule                                                                             |
+| -------------- | -------------------------------------------------------------------------------- |
+| A1 quantity    | qtyWh ≤ `maxQtyWh`                                                               |
+| A2 value       | value at the limit price, rounded up, ≤ `maxValue`                               |
+| A3 price       | SELL at least `sellFloor`; BUY at most `buyCeiling`                              |
+| A4 time of day | the slot does not start in an hour blocked for that side (UTC, one bit per hour) |
+| A6 horizon     | the slot starts after now and at most `horizonSeconds` ahead                     |
+
+
+There is no soft bound. The result's `valueAfter` is a bitmask of the bounds
+broken: A1 = 1, A2 = 2, A3 = 4, A4 = 8, A6 = 16.
+
+`WindowPolicy`**: the budget S1 and the caps S2** (spec 6.2, 6.3). Each instance
+counts one quantity on a `WindowLib` window; the window's cap is the hard bound
+H, the instance's `soft` the soft bound S.
+
+
+| Instance   | Counts                                                                    | Given back on a release                    |
+| ---------- | ------------------------------------------------------------------------- | ------------------------------------------ |
+| S1, budget | BUY value at the limit price, gross: a sale neither counts nor makes room | Value charged less the filled part's value |
+| S2, export | SELL Wh                                                                   | Released Wh                                |
+| S2, import | BUY Wh                                                                    | Released Wh                                |
+
+
+- **Counting.** An order counts when it is placed, in the bucket of that time.
+- **Credits.** A release goes back to that bucket, if the window still counts it.
+- **Verdicts.** Above S, flagged; above H, rejected.
+
+`CancelQuotaPolicy`**: S6, against spoofing** (spec 6.7). Three windows of one
+shape, by default an hour of five-minute buckets:
+
+
+| Window       | Rule                                                                              |
+| ------------ | --------------------------------------------------------------------------------- |
+| Cancelled Wh | Weighted w_g within δ_g of the slot's gate closure, once otherwise; at most C_max |
+| Placed Wh    | Cancelled at most ρ × placed + c0                                                 |
+| Messages     | Every accepted submission; at most M_max                                          |
+
+
+An expiry is never a cancellation. `reasons()` says which rule a refused
+submission broke.
+
+**Windows other than sliding.** `WindowPolicy` and `CancelQuotaPolicy` accept
+any of `WindowLib`'s five classes. Sliding is what the owner should use; the
+other four are the evaluation's baselines, and section 6 shows what each lets
+through.
 
 ### The market behind the gate
 
@@ -363,10 +426,11 @@ The agent's session is the account's, not the gate's. On a real account it is
 a Smart Session, enabled and removed through the Smart Sessions module; on
 `MiniAccount`, `enableSession` and `removeSession`. Either acts at once.
 
-| Call (on the gate)                      | Effect                                               | When    |
-| --------------------------------------- | ---------------------------------------------------- | ------- |
-| `setDecoder(target, selector, decoder)` | Approves one function of one market contract         | At once |
-| `removeDecoder(target, selector)`       | Withdraws that approval                              | At once |
+
+| Call (on the gate)                      | Effect                                       | When    |
+| --------------------------------------- | -------------------------------------------- | ------- |
+| `setDecoder(target, selector, decoder)` | Approves one function of one market contract | At once |
+| `removeDecoder(target, selector)`       | Withdraws that approval                      | At once |
 
 
 The account, the gate, the ledger and the zero address can never be targets.
@@ -473,9 +537,13 @@ configuration.
 ### `contracts/policies/`: what the policies share
 
 
-| File            | What it does                                                                                                                                                                                                                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `WindowLib.sol` | A quantity counted over time, in five classes behind one interface: `used`, `limit`, `fits`, `add`, `credit`. Sliding windows are a ring of 64-bit buckets packed four to a storage word, with a running total and an O(1) reset after a long idle gap. The policies of step 4 go in this folder |
+| File                    | What it does                                                                                                                                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `WindowLib.sol`         | A quantity counted over time, in five classes behind one interface: `used`, `limit`, `fits`, `add`, `credit`. Sliding windows are a ring of 64-bit buckets packed four to a storage word, with a running total and an O(1) reset after a long idle gap |
+| `PolicyBase.sol`        | What every policy shares: the gate's address and the "only the gate" check                                                                                                                                                                             |
+| `StaticOrderPolicy.sol` | A1 to A4 and A6, each order on its own; the result reports the bounds broken as a bitmask                                                                                                                                                              |
+| `WindowPolicy.sol`      | S1, the budget (BUY value), and S2, the export and import caps (Wh), on a `WindowLib` window per instance                                                                                                                                              |
+| `CancelQuotaPolicy.sol` | S6: cancelled Wh weighted near the gate, the cancel-to-place ratio, the message count                                                                                                                                                                  |
 
 
 
@@ -483,10 +551,10 @@ configuration.
 ### `contracts/harness/`: stand-ins, not part of the system
 
 
-| File              | What it is                                                                                                                                                                                                                |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File              | What it is                                                                                                                                                                                                                                                                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MiniAccount.sol` | The smallest account that behaves like an ERC-7579 account where the gate needs it, with sessions that stand in for Smart Sessions: a key may have the account call one function of one contract, until a time. For tests and the local system only: it stands in for a real account (Safe7579, Nexus, Kernel) and validates no signatures of its own |
-| `WindowProbe.sol` | `WindowLib` on its own, as the smallest possible policy: admits an amount if it fits, takes credits for earlier admissions, and emits an event for every call, so the verifier can rebuild each window from the log       |
+| `WindowProbe.sol` | `WindowLib` on its own, as the smallest possible policy: admits an amount if it fits, takes credits for earlier admissions, and emits an event for every call, so the verifier can rebuild each window from the log                                                                                                                                   |
 
 
 
@@ -502,7 +570,7 @@ what `npm run` starts. Packages depend on `chain/` and on nothing else, except
 | Package      | What it does                                                                                                                                                                                                                                                                                               | Started by                          |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `chain/`     | The connection to the local node, the test keys by index, the compiled contracts (deploy, send, read), transactions that report the contract's own error when they revert, the node's clock, `deployments/local.json`, and the units Wh and EUR                                                            | imported by every other package     |
-| `deploy/`    | Deploys the market and the gate, then one smart account and prosumer contract per prosumer in `prosumers.json`; registers them, funds them, sets every approval, installs the gate and gives the agent its session where there is one. Writes `deployments/local.json`                                             | `npm run demo:deploy`               |
+| `deploy/`    | Deploys the market and the gate, then one smart account and prosumer contract per prosumer in `prosumers.json`; registers them, funds them, sets every approval, installs the gate and gives the agent its session where there is one. Writes `deployments/local.json`                                     | `npm run demo:deploy`               |
 | `matcher/`   | The matching service. `rule.js` is the rule, a pure function you can replace; `index.js` reads a closed session, registers the trades and finalises it                                                                                                                                                     | `npm run demo:match`, or a scenario |
 | `keeper/`    | Expires the orders a finalised session left unmatched and reconciles the gate's ledger. Anyone may do both                                                                                                                                                                                                 | a scenario                          |
 | `sensor/`    | A prosumer's meter reporting what it measured in a slot, which settles that slot. Where a real meter feed would be connected                                                                                                                                                                               | a scenario                          |
@@ -512,8 +580,9 @@ what `npm run` starts. Packages depend on `chain/` and on nothing else, except
 
 
 `prosumers.json` says who takes part: each prosumer's name, whether an agent
-trades for it, its starting funds; and the slot length, real-time price, leg
-limit and agent validity.
+trades for it, its starting funds; the slot length, real-time price, leg limit
+and agent validity; and `agentPolicies`, the policies every agent trades under
+(`deploy/policies.js` encodes them).
 
 ### `contracts/interfaces/`
 
@@ -521,8 +590,8 @@ limit and agent validity.
 | File                | What it declares                                                                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `IERC7579.sol`      | The two pieces of the ERC-7579 standard the gate needs: the module hooks and `executeFromExecutor`. Declared locally so the gate imports no external library |
-| `IOrderDecoder.sol` | The adapter to one market: `decode` into legs, `placedOrderIds`, `fillState`, `gateTime`. One decoder per approved market contract                           |
-| `IPolicy.sol`       | A policy contract: its configuration (`classifyConfig`, `configure`, `deconfigure`) and its order phases (`check`, `commit`, `credit`), spec 4.2 |
+| `IOrderDecoder.sol` | The adapter to one market: `decode` into legs, `placedOrderIds`, `fillState`, `gateTime`, `slotStart`. One decoder per approved market contract              |
+| `IPolicy.sol`       | A policy contract: its configuration (`classifyConfig`, `configure`, `deconfigure`) and its order phases (`check`, `commit`, `credit`), spec 4.2             |
 
 
 
@@ -530,24 +599,28 @@ limit and agent validity.
 ### `test/`
 
 
-| Path                                | Tests                                           | Runs under          |
-| ----------------------------------- | ----------------------------------------------- | ------------------- |
-| `gate/KeyModel.t.sol`               | 38                                              | Hardhat and Foundry |
-| `gate/ConfigManager.t.sol`          | 33                                              | Hardhat and Foundry |
-| `gate/OrderLifecycle.t.sol`         | 26                                              | Hardhat and Foundry |
-| `gate/PositionLedger.t.sol`         | 8                                               | Hardhat and Foundry |
-| `gate/PolicyPhases.t.sol`           | 15                                              | Hardhat and Foundry |
-| `market/LockableERC1155.t.sol`      | 23                                              | Hardhat and Foundry |
-| `market/MarketFlow.t.sol`           | 41                                              | Hardhat and Foundry |
-| `market/GatedMarket.t.sol`          | 12                                              | Hardhat and Foundry |
-| `market/ClassicSettlement.t.sol`    | 6                                               | Hardhat and Foundry |
-| `policies/WindowLib.t.sol`          | 32                                              | Hardhat and Foundry |
-| `market/MarketFixture.sol`          | Shared setup for the market tests               |                     |
-| `accounts/PolicyGateAccounts.t.sol` | 4                                               | Foundry only        |
-| `accounts/SessionGate.t.sol`        | 4                                               | Foundry only        |
-| `gate/GateFixture.sol`              | Shared setup for `KeyModel` and `ConfigManager` |                     |
-| `gate/mocks/`                       | Test doubles, described in section 6            |                     |
-| `earlier-design/`                   | 144, earlier design                             | Hardhat and Foundry |
+| Path                                | Tests                                                 | Runs under          |
+| ----------------------------------- | ----------------------------------------------------- | ------------------- |
+| `gate/KeyModel.t.sol`               | 38                                                    | Hardhat and Foundry |
+| `gate/ConfigManager.t.sol`          | 33                                                    | Hardhat and Foundry |
+| `gate/OrderLifecycle.t.sol`         | 26                                                    | Hardhat and Foundry |
+| `gate/PositionLedger.t.sol`         | 8                                                     | Hardhat and Foundry |
+| `gate/PolicyPhases.t.sol`           | 15                                                    | Hardhat and Foundry |
+| `market/LockableERC1155.t.sol`      | 23                                                    | Hardhat and Foundry |
+| `market/MarketFlow.t.sol`           | 41                                                    | Hardhat and Foundry |
+| `market/GatedMarket.t.sol`          | 12                                                    | Hardhat and Foundry |
+| `market/ClassicSettlement.t.sol`    | 6                                                     | Hardhat and Foundry |
+| `policies/WindowLib.t.sol`          | 32                                                    | Hardhat and Foundry |
+| `policies/StaticOrderPolicy.t.sol`  | 15                                                    | Hardhat and Foundry |
+| `policies/WindowPolicy.t.sol`       | 10                                                    | Hardhat and Foundry |
+| `policies/CancelQuotaPolicy.t.sol`  | 9                                                     | Hardhat and Foundry |
+| `policies/Step4Acceptance.t.sol`    | 15: the attacks and gas                               | Hardhat and Foundry |
+| `policies/PolicyFixture.sol`        | Shared setup for the policy tests, on the mock market |                     |
+| `market/MarketFixture.sol`          | Shared setup for the market tests                     |                     |
+| `accounts/PolicyGateAccounts.t.sol` | 4                                                     | Foundry only        |
+| `accounts/SessionGate.t.sol`        | 4                                                     | Foundry only        |
+| `gate/GateFixture.sol`              | Shared setup for `KeyModel` and `ConfigManager`       |                     |
+| `gate/mocks/`                       | Test doubles, described in section 6                  |                     |
 
 
 
@@ -579,29 +652,22 @@ limit and agent validity.
 
 
 
-### The earlier design, still in the tree
+### The earlier design, removed
 
 The project that came before this one enforced a rolling cap on daily energy
-spend, computed after the fact from meter readings and oracle prices. Its code
-is unchanged apart from paths, and its tests still pass. Everything of it sits
-in folders named `earlier-design/`. It stays until step 4, when sequence policy
-S1 covers what it does, and is then removed.
+spend, computed after the fact from meter readings and oracle prices. S1 now
+covers what it did, before the fact and on each order, so its code was removed
+at step 4 (spec D13): its contracts, its 144 tests, its Python verifier, the
+differential and its key scripts. Git keeps them: the last commit that holds
+them is the one before step 4.7.
 
+| Kept | Where |
+| ---- | ----- |
+| Its documentation | `docs/earlier-design/` |
+| The HEMS simulation's daily records of the three controller arms, for step 6's calibration and false-positive rate | `data/hems/` |
 
-| What                                          | Where                          |
-| --------------------------------------------- | ------------------------------ |
-| Contracts and their two interfaces            | `contracts/earlier-design/`    |
-| Tests, 144                                    | `test/earlier-design/`         |
-| Python verifier, 53 tests                     | `earlier-design/verifier/`     |
-| Chain against verifier on real simulator days | `earlier-design/differential/` |
-| Daily records of the three simulator arms     | `earlier-design/records/`      |
-| Key generators for its Base Sepolia roles     | `earlier-design/keys/`         |
-
-
-Two pieces of it will be reused: the EIP-712 signature checking in
-`MeterReadings.sol`, as the base for oracle verification in step 5, and the
-verifier and differential structure, for step 3. Everything about it is
-documented in `docs/earlier-design/`.
+Step 5 may reuse the EIP-712 signature checking of its `MeterReadings.sol`, from
+git, as the base for oracle verification.
 
 ---
 
@@ -617,15 +683,15 @@ The permission table of section 2, one row at a time, then every escalation
 route.
 
 
-| Group                                    | Tests | What it establishes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| The path that must work                  | 2     | Through its session, the agent's approved call is made by the account: the market sees the account as caller, not the agent and not the gate. The two events carry the decoded order and the order hash. Two identical calls get different hashes |
-| Who may submit (A8)                      | 7     | Only an account with the gate installed may call `submit`: not the agent from its own key, not a stranger. The owner's own submission is the account's, like the agent's. A key without a session cannot make the account submit. The session is valid through its last second and refused one second later. Removing it acts at once. It reaches `submit` and nothing else: not the market, the account, another gate function or the ledger. A session on one account has no authority on another |
-| What may be submitted (A7)               | 7     | An unapproved function of an approved market is rejected. An unapproved market is rejected. Withdrawing an approval acts at once. Calldata shorter than a selector is rejected. A call its decoder reads as no order, or as more than `maxLegs` legs, is rejected; `maxLegs` is at least 2. A market call that reverts reverts the whole submission                                                                                                                                                          |
-| Escalation: module management            | 6     | The agent cannot call `installModule`, `uninstallModule`, `execute` or `executeFromExecutor` on the account, nor widen its own session. The account is never accepted as a target, whatever the call, a session change included. The owner cannot approve the account, the gate or the ledger as a target either, nor register a zero decoder |
+| Group                                    | Tests | What it establishes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The path that must work                  | 2     | Through its session, the agent's approved call is made by the account: the market sees the account as caller, not the agent and not the gate. The two events carry the decoded order and the order hash. Two identical calls get different hashes                                                                                                                                                                                                                                                                                                                                       |
+| Who may submit (A8)                      | 7     | Only an account with the gate installed may call `submit`: not the agent from its own key, not a stranger. The owner's own submission is the account's, like the agent's. A key without a session cannot make the account submit. The session is valid through its last second and refused one second later. Removing it acts at once. It reaches `submit` and nothing else: not the market, the account, another gate function or the ledger. A session on one account has no authority on another                                                                                     |
+| What may be submitted (A7)               | 7     | An unapproved function of an approved market is rejected. An unapproved market is rejected. Withdrawing an approval acts at once. Calldata shorter than a selector is rejected. A call its decoder reads as no order, or as more than `maxLegs` legs, is rejected; `maxLegs` is at least 2. A market call that reverts reverts the whole submission                                                                                                                                                                                                                                     |
+| Escalation: module management            | 6     | The agent cannot call `installModule`, `uninstallModule`, `execute` or `executeFromExecutor` on the account, nor widen its own session. The account is never accepted as a target, whatever the call, a session change included. The owner cannot approve the account, the gate or the ledger as a target either, nor register a zero decoder                                                                                                                                                                                                                                           |
 | Escalation: registries and configuration | 8     | Each of the gate's eight owner-path functions refuses the agent directly. The gate is never accepted as a target for any of them, nor is the ledger. The agent cannot write the ledger directly. The policy refuses `configure` from the agent, and from the account itself. Two fuzz tests, 256 runs each: arbitrary bytes submitted to the account, the gate, the market, the policy and the ledger; and arbitrary calls through the session, which reach `submit` or nothing. Afterwards modules, sessions, approvals, ledger writers, policies and parameters are exactly as before |
-| Hostile targets                          | 2     | A target that forwards calls, like a multicall contract, carries no authority: what it forwards arrives from the forwarder. A target that calls back into the gate's `reconcile` while the account is calling it is stopped by the lock |
-| Install and uninstall                    | 6     | The gate reports itself as an executor and nothing else. Installing it grants nobody anything. A stranger who calls `onInstall` gets a private namespace, where nothing is approved, and no hold on the account. Installing twice is refused. After an uninstall the session reaches nothing, and a reinstall starts empty. Uninstall succeeds even when a policy refuses to drop its state |
+| Hostile targets                          | 2     | A target that forwards calls, like a multicall contract, carries no authority: what it forwards arrives from the forwarder. A target that calls back into the gate's `reconcile` while the account is calling it is stopped by the lock                                                                                                                                                                                                                                                                                                                                                 |
+| Install and uninstall                    | 6     | The gate reports itself as an executor and nothing else. Installing it grants nobody anything. A stranger who calls `onInstall` gets a private namespace, where nothing is approved, and no hold on the account. Installing twice is refused. After an uninstall the session reaches nothing, and a reinstall starts empty. Uninstall succeeds even when a policy refuses to drop its state                                                                                                                                                                                             |
 
 
 
@@ -676,10 +742,14 @@ closes, so they reach ledger paths the ported market never does (decision
 The gate's check, commit and credit phases, on the mock market, with a test
 double, `QtyPolicy`, that counts the Wh placed against a soft and a hard bound.
 
-| Group | Tests | What it establishes |
-| ----- | ----- | ------------------- |
-| Check and commit | 9 | An accepted submission is committed, then executed, with the instance's result in the log. A soft bound crossed is flagged and executed; the hard bound is inclusive. A rejection returns normally and leaves nothing committed, booked or sent; one instance's rejection stops every instance, and every result is logged. The owner's own submission is checked too. A reverting check or commit reverts the submission. A policy cannot reconcile while the gate commits: the lock refuses it |
-| Credits | 6 | A cancellation passes even at the hard bound and is credited, with the order's placement time, side, slot, quantity and price. A partly filled cancellation credits only the unfilled part. An expiry is credited on reconcile; nothing is credited while the order is still open. A failing credit is recorded and cannot block reconciliation. A modification needs room for the new order before the old is credited |
+
+| Group            | Tests | What it establishes                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Check and commit | 9     | An accepted submission is committed, then executed, with the instance's result in the log. A soft bound crossed is flagged and executed; the hard bound is inclusive. A rejection returns normally and leaves nothing committed, booked or sent; one instance's rejection stops every instance, and every result is logged. The owner's own submission is checked too. A reverting check or commit reverts the submission. A policy cannot reconcile while the gate commits: the lock refuses it |
+| Credits          | 6     | A cancellation passes even at the hard bound and is credited, with the order's placement time, side, slot, quantity and price. A partly filled cancellation credits only the unfilled part. An expiry is credited on reconcile; nothing is credited while the order is still open. A failing credit is recorded and cannot block reconciliation. A modification needs room for the new order before the old is credited                                                                          |
+
+
+
 
 ### `test/gate/PositionLedger.t.sol`: 8 tests
 
@@ -753,11 +823,69 @@ second.
 | Refill                | 3     | The rate comes back each whole interval, and no more than the capacity after any idle time; a credit only within the interval of the consumption, so nothing is refunded twice                                                                                                                                                                                                                                                                     |
 | Stream                | 3     | The initial amount, then the rate per interval, up to the cap; only the initial amount before the anchor; credits give the allowance back                                                                                                                                                                                                                                                                                                          |
 | Lifetime and overflow | 2     | The count never resets; a count beyond 64 bits reverts rather than wraps                                                                                                                                                                                                                                                                                                                                                                           |
-| Configuration         | 4     | Malformed configurations are refused, and 2016 buckets is the most; a new cap keeps the count, a new shape starts afresh and leaves nothing of the old ring, even where every write lands in bucket 0; `clear` forgets everything |
+| Configuration         | 4     | Malformed configurations are refused, and 2016 buckets is the most; a new cap keeps the count, a new shape starts afresh and leaves nothing of the old ring, even where every write lands in bucket 0; `clear` forgets everything                                                                                                                                                                                                                  |
 | Fuzz, one per class   | 5     | 256 random sequences of waits, admissions, credits and observations each, against a reference model written from the definitions: every decision, count and limit agrees; for sliding windows the running total equals the buckets summed one by one (step 3's invariant)                                                                                                                                                                          |
 
 
 
+
+### `test/policies/StaticOrderPolicy.t.sol`: 15 tests
+
+Each per-action bound at its edge, by calling `check` directly, then through
+the gate.
+
+
+| Group            | Tests | What it establishes                                                                                                                                                                                                                          |
+| ---------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The bounds       | 8     | A1 and A2 inclusive; A3's ceiling for BUY and floor for SELL, each for its side only; A4 blocking an hour for one side, half-hours included; A6 bounded on both sides, a slot starting now excluded; several broken bounds reported together |
+| Legs             | 1     | One bad leg rejects the whole submission; a cancellation is never checked                                                                                                                                                                    |
+| Through the gate | 2     | A broken bound stops the order, with the bitmask in the logged result; a modification is checked as its new order, and cancelling stays possible when nothing may be placed                                                                  |
+| Configuration    | 4     | Every looser parameter is a widening, a mixed change included; every tighter one a tightening; a malformed configuration is invalid; only the gate writes the policy                                                                         |
+
+
+
+
+### `test/policies/WindowPolicy.t.sol`: 10 tests
+
+S1 and S2 through the gate, on sliding windows of 24 one-hour buckets.
+
+
+| Group         | Tests | What it establishes                                                                                                                     |
+| ------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| S1            | 2     | Execute, flag at the soft bound, reject above the hard one, with the logged values; gross: a sale neither counts nor refills the budget |
+| S2            | 1     | Export and import are separate instances and never netted                                                                               |
+| The window    | 4     | It slides to the second; a cancellation and an expiry are credited back; a release after its bucket left the window gives nothing back  |
+| Credits       | 1     | S1's credit for a partly filled order, at a rounding price, leaves the filled part's value charged and never less                       |
+| Configuration | 2     | The direction table, shape and quantity changes included; a tighter cap applies at once and keeps the count                             |
+
+
+
+
+### `test/policies/CancelQuotaPolicy.t.sol`: 9 tests
+
+S6 through the gate: the cancelled cap inclusive; the near-gate weight, and the
+second it starts; the ratio against what the policy saw placed; the free
+allowance; the message count, which a refused submission does not use; an
+expiry using none of the quota; the quota renewing after an hour; the direction
+table.
+
+### `test/policies/Step4Acceptance.t.sol`: 15 tests
+
+Step 4's acceptance criteria, on the ported market through the gate. Each
+attack runs under SLIDING and under the baseline the spec's attack matrix
+names for it (decision 4.6):
+
+
+| Attack                                                                        | Under SLIDING                                            | Under its baseline                                    |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------- |
+| Split-leg drain: 24 orders, each within A1                                    | S1 refuses the batch; spread over calls, the sixth order | Per-action bounds only: all 24 placed                 |
+| Boundary burst: the budget at 23:59:59 and at 00:00:01                        | The budget once                                          | TUMBLING: twice within two seconds                    |
+| Idle-then-burst: a week idle, then an hour of orders                          | One day's budget                                         | REFILL and STREAM at the same long-run rate: a week's |
+| Place-and-cancel near the gate: four reservations cancelled 20 minutes before | S6 lets one be withdrawn; three must stand               | Without the gate weight: all four withdrawn           |
+
+
+Six more tests measure gas per order, per policy and combined; the figures are
+in `docs/reports/gas-2026-10-16.md`.
 
 ### The independent verifier: `offchain/verifier/`
 
@@ -809,6 +937,8 @@ Kernel. One test per account, same scenario:
   the agent's session still cannot apply it, and the owner can.
 7. The owner uninstalls the gate, and the session reaches nothing.
 
+
+
 ### `test/accounts/SessionGate.t.sol`: 4 tests
 
 The prototype that decided D1. On the same four accounts, the agent holds a
@@ -818,21 +948,19 @@ in for the gate as step 4 will change it: the account calls `submit`. On each
 account:
 
 1. Through the session, `submit` runs, and the gate makes the account call the
-   market from inside the same execution. The market sees the account.
+  market from inside the same execution. The market sees the account.
 2. A refusal by the gate leaves its event in a successful user operation.
 3. The session reaches nothing else: not the market directly, not the gate's
-   owner function, not `installModule` or `uninstallModule`, not the account's
+  owner function, not `installModule` or `uninstallModule`, not the account's
    own `execute`.
 4. The session cannot sign for the account. On Nexus a session configured to
-   sign does sign, with the same signature: the positive control.
+  sign does sign, with the same signature: the positive control.
 
 Giving the session a second action, the market's `placeOrder`, makes all four
 tests fail at point 3, so the test can tell a session that is too wide. What it
 found about the accounts is in decision 3.9: Kernel needs Smart Sessions
 installed without a hook, and on Kernel, Safe7579 and the reference account no
 session can sign at all.
-
-
 
 ### The test doubles in `test/gate/mocks/`
 
@@ -857,13 +985,13 @@ A passing suite means nothing if it cannot fail. Each of the following was run
 by breaking one line of the gate, running the tests, and restoring the line.
 
 
-| Run                                                                                                                              | Defects | Result                                                                                                                                                                                                                                                |
-| -------------------------------------------------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Against `test/gate/`                                                                                                             | 51      | 49 caught at first. The 2 that survived were gaps in the tests; two tests were added and all 51 are caught                                                                                                                                            |
-| Against `test/accounts/`                                                                                                         | 9       | 9 caught                                                                                                                                                                                                                                              |
-| Step 2 code (ledger, gate booking, mock market, decoder) against `test/gate/`                                                    | 51      | 41 caught at first. Seven survivors were gaps in the ledger and gate tests; nine tests were added and all seven are caught. The other three are in the mock market, now a test double                                                                 |
-| The market port (token, session, prosumer contract, manager, settlement rule, decoder) against `test/market/` and the gate tests | 54      | 48 caught at first. The six survivors were tests that never reached an edge: a direct cancel on the session, a bid over-matched, exactly 10%, a 16% deviation, rounding of a penalty and of a leg's value. Six tests were added and all 54 are caught |
-| Step 3: all four Hardhat catalogues of the committed suite, `npm run mutate`, on 15 October | 192 | 187 caught at first. One gap in the window tests (a restart, visible only in bucket 0): a test was added, caught. One mutant no longer built after the market port and was corrected: caught. Three survive in the mock market, a test double, and are marked accepted. Final: 189 caught, 3 accepted. Report: `docs/reports/mutation-2026-10-15.md` |
+| Run                                                                                                                              | Defects | Result                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Against `test/gate/`                                                                                                             | 51      | 49 caught at first. The 2 that survived were gaps in the tests; two tests were added and all 51 are caught                                                                                                                                                                                                                                           |
+| Against `test/accounts/`                                                                                                         | 9       | 9 caught                                                                                                                                                                                                                                                                                                                                             |
+| Step 2 code (ledger, gate booking, mock market, decoder) against `test/gate/`                                                    | 51      | 41 caught at first. Seven survivors were gaps in the ledger and gate tests; nine tests were added and all seven are caught. The other three are in the mock market, now a test double                                                                                                                                                                |
+| The market port (token, session, prosumer contract, manager, settlement rule, decoder) against `test/market/` and the gate tests | 54      | 48 caught at first. The six survivors were tests that never reached an edge: a direct cancel on the session, a bid over-matched, exactly 10%, a 16% deviation, rounding of a penalty and of a leg's value. Six tests were added and all 54 are caught                                                                                                |
+| Step 3: all four Hardhat catalogues of the committed suite, `npm run mutate`, on 15 October                                      | 192     | 187 caught at first. One gap in the window tests (a restart, visible only in bucket 0): a test was added, caught. One mutant no longer built after the market port and was corrected: caught. Three survive in the mock market, a test double, and are marked accepted. Final: 189 caught, 3 accepted. Report: `docs/reports/mutation-2026-10-15.md` |
 
 
 One of the nine is worth knowing. When the gate declares itself a validator
@@ -883,8 +1011,11 @@ runbook says how to run it.
 validator accepts any signature, and `MiniAccount` simply trusts its `owner`
 address. "Root validator belongs to the owner alone" is a property of how the
 account is deployed, and no test here asserts it.
-- **Anything about policies limiting orders.** No order is checked against a
-policy until step 4. `WindowLib` is tested through a probe, not through the gate.
+- **Policies on real accounts.** The policies are tested on `MiniAccount`; the
+real-account tests of `test/accounts/` check the session and the gate, with a
+configuration-test policy.
+- **The policies against honest trading.** How often a sliding cap refuses an
+honest agent is step 6's false-positive rate, on the HEMS records.
 - **Matching and metering, for real.** The matcher in `offchain/matcher/` is a
 simple double auction, and the sensors report values the day-ahead scenario makes up.
 No real meter is connected.
@@ -892,7 +1023,7 @@ No real meter is connected.
 real-account tests of `test/accounts/` do not yet trade.
 - **Behaviour on a network.** There is no deployment script and nothing is
 deployed.
-- **Gas.** Not measured for the gate yet.
+- **Gas on a real account.** The step 4 figures are on `MiniAccount`; a Smart Session user operation adds the account's own validation cost.
 
 ---
 
@@ -912,10 +1043,13 @@ npm install
 
 ### The Hardhat suite
 
-Expect **378 passing** in about two minutes: 234 for the gate, the market and
-the windows (38 key model, 33 configuration, 26 order lifecycle on the mock
-market, 8 ledger, 15 policy phases, 23 token, 41 market flow, 12 gated market, 6 settlement rule,
-32 windows), 144 for the earlier design.
+Expect **284 passing** in about two minutes:
+
+- the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
+  market, 8 ledger, 15 policy phases;
+- the market: 23 token, 41 market flow, 12 gated market, 6 settlement rule;
+- the windows and the policies: 32 `WindowLib`, 15 `StaticOrderPolicy`, 11
+  `WindowPolicy`, 9 `CancelQuotaPolicy`, 15 acceptance (attacks and gas).
 
 ```bash
 npm test
@@ -926,7 +1060,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **386 passed**: the 378 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype).
+Expect **292 passed**: the 284 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype).
 
 With Foundry installed and allowed to run:
 
@@ -1077,19 +1211,36 @@ What it does and prints, stage by stage:
   - The day's profiles are in `offchain/scenarios/day-ahead.js` (`profiles`) and in decision log entry
   2.58.
 3. **Alice's agent modifies her 19:00 bid.** This is two legs: a cancel, then a
-  place.
-4. **Time jumps to the close.** An agent order is now refused, with the market's
+  place. It takes her budget, S1, from 5.58 to 6.08 EUR, past its soft bound of
+  6 EUR: the modification is **flagged** and goes ahead.
+4. **Alice's agent tries to go past her budget**: one more bid worth 2 EUR,
+  which would take her to 7.68 EUR, past the hard bound of 7. **S1 refuses it.**
+  The call does not revert; the script prints every policy's result on it
+  from the log.
+5. **Time jumps to the close.** An agent order is now refused, with the market's
   own error: `MarketSession_Closed`.
-5. **The matcher reads the session, matches it and finalises it.** The trades
+6. **The matcher reads the session, matches it and finalises it.** The trades
   are printed hour by hour: who bought from whom, how much, and at what price.
-6. **A keeper expires every unmatched remainder and reconciles the ledger.**
+7. **A keeper expires every unmatched remainder and reconciles the ledger.**
   Then, for every hour, the ledger is compared with the prosumer contracts'
    commitments.
-7. **Time jumps past delivery, and each prosumer's sensor settles its hours.**
+8. **Time jumps past delivery, and each prosumer's sensor settles its hours.**
   - Bob delivers 80% at 19:00 and pays a penalty.
   - The others deliver within 10% and pay none.
   - The script prints each prosumer's day: bought, sold, paid, penalties.
-8. **Final balances:** who paid whom, and what the manager collected.
+9. **Final balances:** who paid whom, and what the manager collected.
+
+Each agent trades under the policies of `prosumers.json`'s `agentPolicies`,
+added to its account at deployment:
+
+- per-action bounds: at most 5 kWh and 5 EUR an order, prices between 0.05 and
+  0.50, three days ahead;
+- the budget S1: 6 EUR soft and 7 EUR hard over a sliding day;
+- the caps S2: 30 kWh of export and 40 kWh of import a day;
+- the cancellation quota S6: 10 kWh an hour, threefold in the last 30 minutes
+  before the gate, and 20 messages an hour.
+
+Edit them there and deploy again.
 
 The node's clock starts at the real time. The flow moves it forward, so a
 second run on the same node trades a later day. Restart the node to come back
@@ -1112,19 +1263,6 @@ Finding things without a database: from an account,
 agent's session allows and until when; the events `ProsumerRegistered` and
 `SessionEnabled` are indexed by account and by agent.
 
-### The earlier design's checks
-
-Still runnable, and they still pass: 53 verifier tests, and the differential
-with 0 disagreements between chain and verifier.
-
-```bash
-python -m unittest discover -s earlier-design/verifier -p "test_*.py"
-```
-
-```bash
-python earlier-design/differential/run_diff.py
-```
-
 ---
 
 
@@ -1132,11 +1270,10 @@ python earlier-design/differential/run_diff.py
 ## 8. What comes next
 
 
-| Step | Adds                                                                                                                                                                        |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4    | Built: the agent's Smart Session replaces the gate's agent registry (D1); the check, commit and credit phases of `submit`. To come: per-action policies, the owner budget S1, export and import caps S2, the cancellation quota S6, the attacks and the gas report. The earlier design is removed here. Sub-step status in `docs/plan/roadmap.md` |
-| 5    | Signed oracle readings, the PV relay, deliverability S3, battery cycles S4, ramp S5                                                                                         |
-| 6    | The attack matrix against all baselines, the false-positive rate on honest arms, gas                                                                                        |
+| Step | Adds                                                                                 |
+| ---- | ------------------------------------------------------------------------------------ |
+| 5    | Signed oracle readings, the PV relay, deliverability S3, battery cycles S4, ramp S5  |
+| 6    | The attack matrix against all baselines, the false-positive rate on honest arms, gas |
 
 
 Decisions taken in steps 1 to 4 are proposed and not yet confirmed. The open

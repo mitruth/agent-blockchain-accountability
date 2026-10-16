@@ -1,37 +1,15 @@
 // Step 1: the gate, the key model and configuration. Run by hand during
 // step 1 (decision log 1.x); committed as a catalogue in step 3 (log 3.x).
+// Step 4.1 removed the agent registry: its eight mutants went with it, and
+// "agent check removed" became "submit open to any caller" (log 4.7).
 
 export default {
   name: "gate",
   tests: ["test/gate/KeyModel.t.sol","test/gate/ConfigManager.t.sol"],
   mutants: [
-    { name: "agent check removed", file: "contracts/gate/PolicyGate.sol",
-      find: "if (!isAgentActive(account, msg.sender)) revert PolicyGate_AgentNotAuthorized(account, msg.sender);",
-      replace: "" },
-    { name: "agent valid one second short", file: "contracts/gate/AgentRegistry.sol",
-      find: "block.timestamp <= validUntil",
-      replace: "block.timestamp < validUntil" },
-    { name: "agent expiry ignored", file: "contracts/gate/AgentRegistry.sol",
-      find: "return validUntil != 0 && block.timestamp <= validUntil;",
-      replace: "return validUntil != 0;" },
-    { name: "uninstalled gate still authorises", file: "contracts/gate/AgentRegistry.sol",
-      find: "if (!isInstalled(account)) return false;",
-      replace: "" },
-    { name: "revoke is a no-op", file: "contracts/gate/AgentRegistry.sol",
-      find: "delete _validUntil[msg.sender][generationOf(msg.sender)][agent];",
-      replace: "" },
-    { name: "account may be its own agent", file: "contracts/gate/AgentRegistry.sol",
-      find: "agent == address(0) || agent == msg.sender || agent == address(this)",
-      replace: "agent == address(0) || agent == address(this)" },
-    { name: "gate may be an agent", file: "contracts/gate/AgentRegistry.sol",
-      find: "agent == address(0) || agent == msg.sender || agent == address(this)",
-      replace: "agent == address(0) || agent == msg.sender" },
-    { name: "zero agent accepted", file: "contracts/gate/AgentRegistry.sol",
-      find: "agent == address(0) || agent == msg.sender || agent == address(this)",
-      replace: "agent == msg.sender || agent == address(this)" },
-    { name: "past expiry accepted", file: "contracts/gate/AgentRegistry.sol",
-      find: "if (validUntil < block.timestamp) revert AgentRegistry_AlreadyExpired(validUntil);",
-      replace: "" },
+    { name: "submit open to any caller", file: "contracts/gate/PolicyGate.sol",
+      find: "        external\n        onlyAccount\n        nonReentrant\n        returns (bytes32 orderHash)",
+      replace: "        external\n        nonReentrant\n        returns (bytes32 orderHash)" },
     { name: "submit: forbidden-target check removed", file: "contracts/gate/PolicyGate.sol",
       find: "if (_isForbiddenTarget(account, target)) revert PolicyGate_ForbiddenTarget(target);",
       replace: "" },

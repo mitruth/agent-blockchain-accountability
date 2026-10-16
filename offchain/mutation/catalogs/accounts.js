@@ -12,9 +12,9 @@ export default {
   runner: "forge-docker",
   tests: ["test/accounts/*"],
   mutants: [
-    { name: "agent check removed", file: "contracts/gate/PolicyGate.sol",
-      find: "if (!isAgentActive(account, msg.sender)) revert PolicyGate_AgentNotAuthorized(account, msg.sender);",
-      replace: "" },
+    { name: "submit open to any caller", file: "contracts/gate/PolicyGate.sol",
+      find: "        external\n        onlyAccount\n        nonReentrant\n        returns (bytes32 orderHash)",
+      replace: "        external\n        nonReentrant\n        returns (bytes32 orderHash)" },
     { name: "unknown-call check removed", file: "contracts/gate/PolicyGate.sol",
       find: "if (address(decoder) == address(0)) revert PolicyGate_UnknownCall(target, selector);",
       replace: "" },

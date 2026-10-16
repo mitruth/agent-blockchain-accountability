@@ -19,7 +19,7 @@ Where the build stands and what comes next. Update this file as steps close.
 | 1 | Skeleton and key model: `PolicyGate` executor, agent registry, decoder registry, config manager | **Done**, 2026-10-12. Acceptance criteria met |
 | 2 | Position ledger, reconcile, the P2P market port and its decoder | **Done**, 2026-10-14. Acceptance criteria met on the port |
 | 3 | `WindowLib`, independent verifier, mutation suite | **Done**, 2026-10-15. Acceptance criteria met |
-| 4 | The Smart Session entry point (D1), the policy phases, `StaticOrderPolicy`, S1, S2, S6 | **In progress**: 4.1 and 4.2 of 7 done, 4.3 begun. Paused 2026-10-15 |
+| 4 | The Smart Session entry point (D1), the policy phases, `StaticOrderPolicy`, S1, S2, S6 | **Done**, 2026-10-16. Acceptance criteria met |
 | 5 | `OracleVerifier`, PV relay, S3, S4, S5 | Not started |
 | 6 | Evaluation | Not started |
 
@@ -116,33 +116,43 @@ the gate. The checks of the analysis came out in its favour:
 Decision log 3.9, spec amendment A7, `docs/analysis/delegation-architecture.md`
 section 10.
 
-## Where step 4 stands
+## Done: step 4
 
-Step 4 is built in seven sub-steps, each tested, recorded in the decision log
-and committed before the next.
-
-| Sub-step | What | Status |
+| Sub-step | What | Commit |
 |---|---|---|
-| 4.1 | **The agent's entry point is a session on the account (D1).** `submit(target, callData)` is called by the account itself; the gate's agent registry is gone. `MiniAccount` has a session stand-in for the Hardhat tests; `test/accounts/` uses real Smart Sessions with the real gate on four accounts. Deploy and the day-ahead scenario use sessions | **Done**, commit `b66ddda`. Log 4.1 |
-| 4.2 | **The check, commit and credit phases.** Every policy checks every submission, all legs at once. A rejection is recorded without reverting and leaves nothing behind; a soft-bound crossing is flagged and goes ahead. Released volume is credited back on a cancellation and on reconcile; a failing credit cannot block reconcile | **Done**, commit `5bedd57`. Log 4.2 |
-| 4.3 | **`StaticOrderPolicy`:** A1 quantity, A2 value, A3 price floor and ceiling, A4 time of day, A6 horizon | **Begun, not committed.** The decoders gained `slotStart(market, slot)`, which A4 and A6 need; not yet compiled or tested. The policy itself is not written |
-| 4.4 | **`WindowPolicy`:** S1 owner budget (BUY value) and S2 export and import caps (Wh), on `WindowLib` | Not started |
-| 4.5 | **`CancelQuotaPolicy`:** S6, cancelled volume weighted near gate closure, cancel-to-place ratio, message count | Not started |
-| 4.6 | **Acceptance:** split-leg drain, boundary burst, idle-then-burst and place-and-cancel near the gate blocked under SLIDING and passing under the baseline classes; gas per policy and combined | Not started |
-| 4.7 | **Wrap-up:** mutation catalogue for the policies and the gate's phases, removal of the earlier design (D13), docs | Not started |
+| 4.1 | The agent's entry point is a Smart Session on the account (D1); the gate's agent registry is gone | `b66ddda` |
+| 4.2 | The check, commit and credit phases: every policy on every submission, refusals recorded without reverting | `5bedd57` |
+| 4.3 | `StaticOrderPolicy`: A1 quantity, A2 value, A3 price, A4 time of day, A6 horizon | `4de5f52` |
+| 4.4 | `WindowPolicy`: S1, the budget, and S2, the export and import caps, on `WindowLib` | `cbbf109` |
+| 4.5 | `CancelQuotaPolicy`: S6 | `42972af` |
+| 4.6 | The acceptance attacks, and gas | `16cf404` |
+| 4.7 | Mutation catalogue for the policies; the earlier design removed; the demo trades under policies; docs | this commit |
 
-| Check, at the pause | Result |
+| Check | Result |
 |---|---|
-| `npm test` | 378 passing |
+| Split-leg drain, boundary burst, idle-then-burst, place-and-cancel near the gate | Blocked under SLIDING; each passes under the baseline the attack matrix names for it |
+| Gas | All five policy instances add 100,072 to one bid and 465,979 to a 24-leg batch (`docs/reports/gas-2026-10-16.md`) |
+| Mutation, `policies` catalogue | 43 of 43 caught, after one test added (`docs/reports/mutation-policies-2026-10-16.md`) |
+| `npm test` | 284 passing (the earlier design's 144 removed) |
 | `npm run test:offchain` | 12 passing |
-| Foundry, `test/accounts/` | 8 passing |
-| `npm run demo:flow` after 4.1 | The same day, figure for figure, with agents trading through sessions |
+| Foundry, `test/accounts/` | **Not re-run at step 4.7**: Docker was not running. Last passing after 4.2 (8 of 8) |
+| `npm run demo:flow` | The same day, figure for figure; Alice's modification flagged by S1, her extra bid refused by it |
 
-**What is fair to say now.** The agent can act only through a session that
-reaches the gate's `submit`, on four real account implementations. The gate
-runs every policy on every submission and records refusals on chain. **Not yet
-fair:** that any real policy limits an order. The only policies so far are test
-doubles; the first real one is 4.3.
+**What is fair to say now.** On the ported market, an agent acting through a
+session that can reach only the gate's `submit` is held to per-action bounds,
+a budget and export and import caps over a sliding window, and a cancellation
+quota. Four attacks that pass under per-action bounds or under the windows of
+deployed systems are blocked. **Not yet fair:** anything about the battery or
+the physical system (step 5), or how often an honest agent is refused (step
+6).
+
+## Next: step 5
+
+`OracleVerifier` (signed readings: signer registry, staleness, monotonic
+timestamps), the PV relay, S3 deliverability, S4 battery cycles, S5 ramp. Accept
+when cross-slot over-commitment, excess cycling and a position spike are
+blocked, a stale or reordered reading is rejected, an exposure-reducing cancel
+always passes, and gas is reported as a function of the horizon k.
 
 ---
 
@@ -162,13 +172,11 @@ Things noticed in steps 0 and 1 that belong to a later step.
 | Item | Belongs to |
 |---|---|
 | Safe7579 and Kernel do not check a module's declared type at install | Security analysis, step 6 |
-| A policy whose `deconfigure` fails keeps stale state for the account | Step 4 |
+| A policy whose `deconfigure` fails keeps stale state for the account | Security analysis, step 6 |
 | The cross-parameter constraint `H_slots ≤ k` spans two policy contracts | Step 5 |
-| Structural configuration changes need carry-over of old totals; a change of a window's shape starts it afresh, so it must be a WIDEN (log 3.5) | Step 4 |
+| Carry-over of old totals on a structural change: not built; a change of shape waits 24 hours and starts afresh (log 4.4) | Step 6, or later |
 | `submit` gains the `readings[]` argument | Step 5 |
-| Remove the earlier design's contracts, tests, verifier and differential | Step 4 |
 | A deployment script, and a test with a real owner validator | Before any testnet run |
-| Gas per order, per policy and combined | Step 4 |
-| The agent's session: expiry by a time-frame user-op policy, revocation by removing it; events name the account, not the agent (log 3.9) | Step 4 |
+| The agent's session on a real account: expiry by a time-frame user-op policy, revocation by removing it; events name the account, not the agent (log 3.9, 4.1) | Before any testnet run |
 | Install Smart Sessions on Kernel without a hook; deploy Smart Sessions v1.0.0 or later (log 3.9) | Before any testnet run |
-| Run the `accounts` mutation catalogue (9, Foundry in Docker) against the step 4 gate | Step 4 |
+| Run `test/accounts/` and the `accounts` mutation catalogue (Foundry in Docker) against the step 4 gate | When Docker is running |

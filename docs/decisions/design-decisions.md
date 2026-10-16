@@ -2097,24 +2097,92 @@ A monolithic variant (spec D14) was not measured.
 **Tests.** 15: nine for the attacks, each blocked and passing under its
 baseline, and six for gas. `npm test`: 427 passing.
 
+
+### 4.7 — Wrap-up: mutation, the earlier design removed, the demo under policies
+
+**Status.** The removal settles open decision 3 by its default; the rest
+proposed.
+
+**Mutation.**
+
+- **The new `policies` catalogue**, 43 mutants:
+  - the gate's phases (10): a rejection that does not stop, a flag taken for a
+    rejection, the check stopping at the first rejection, skipped commits and
+    credits, a failing credit blocking reconcile, wrong release fields;
+  - `StaticOrderPolicy` (10);
+  - `WindowPolicy` (12);
+  - `CancelQuotaPolicy` (11).
+- **Two of spec 8's pending mutants are now in it:** "≤ becomes < on a
+  policy's cap comparison" and "expiry counted as cancel in S6". The three
+  left in `pending.js` belong to step 5.
+- **Each mutant runs the tests of the contract it breaks.** The first run, with
+  all five test files per mutant, took about 6.5 minutes a mutant; with the
+  contract's own tests, 1. A survivor is re-run with `--all-tests` before it is
+  called a gap. The runner takes an optional `tests` per mutant.
+- **Result:** 42 caught at first. The survivor, "another quantity keeps the old
+  count", was a gap: a 24-hour window had always expired by the time a 24-hour
+  widening applied. `test_countingAnotherQuantityStartsAfresh` uses a 48-hour
+  window; 43 of 43 caught (`docs/reports/mutation-policies-2026-10-16.md`).
+- **The older catalogues after 4.1 and 4.2:**
+  - the eight mutants of the removed agent registry are dropped;
+  - "agent check removed" is now "submit open to any caller";
+  - "cancel legs not booked" targets the new line.
+  Both changed mutants were re-run and caught.
+
+**The earlier design is removed** (spec D13; open decision 3, default "at
+step 4").
+
+- **Deleted:** its seven contracts, 144 tests, Python verifier, differential and
+  key scripts. S1 covers what it did, before the fact and on each order.
+- **Kept:**
+  - its documentation, in `docs/earlier-design/`;
+  - the HEMS records, moved to `data/hems/`, which step 6 needs to calibrate
+    the caps and measure false positives.
+- **Recoverable.** Git keeps everything; step 5 may take `MeterReadings.sol`'s
+  EIP-712 checking from history.
+- **Config.** Both configs lose the file permissions the differential needed.
+
+**The demo trades under policies.**
+
+- **Deploy.** `npm run demo:deploy` gives every agent's account the five step 4
+  instances, from `prosumers.json`'s `agentPolicies`; `offchain/deploy/policies.js`
+  encodes the configurations.
+- **The day.**
+  - Alice's modification takes S1 from 5.58 to 6.08 EUR, past the 6 EUR soft
+    bound, and is flagged.
+  - A further 2 EUR bid would take it to 7.68, past the 7 EUR hard bound, and is
+    refused without reverting. The script prints every policy's result on it.
+  - The rest of the day is unchanged, figure for figure.
+
+**Checked.**
+
+- `npm test`: 284 passing.
+- `npm run test:offchain`: 12 passing.
+- `demo:deploy` and `demo:flow` on a fresh node.
+- **Foundry, `test/accounts/`: not re-run.** Docker was not running, and it is
+  not started without Dan. The real-account tests last passed after 4.2. Their
+  shared mocks have changed since (the decoders' `slotStart`) and compile under
+  Hardhat.
+
 ---
 
 ## Open decisions
 
-Waiting for Dan. None blocks step 4: item 7, D1, was decided on 15 October (3.9).
+Waiting for Dan. None blocks step 5. Items 3 and 7 are settled.
 
 
 | #   | Question                                                                                                                                                                                                                    | Where                | Default if nothing is said                    |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------- |
 | 1   | Should registering an agent and approving a call be timelocked when they extend authority?                                                                                                                                  | 1.8, spec D16        | Stay immediate                                |
 | 2   | Confirm the six other step 1 choices: revert on unknown agent or call (1.7), owner applies a widening (1.13), one pending proposal (1.14), add now and remove later (1.12), generations (1.2), no library in the gate (1.1) | spec D15, D17 to D21 | As built                                      |
-| 3   | Remove the earlier design's code now, or at step 4?                                                                                                                                                                         | 0.3                  | Step 4                                        |
-| 4   | The honest-arm data is in USD and the settlement token is a mock EUR. A 1:1 relabel, or a conversion?                                                                                                                       | spec amendment A4    | Undecided; needed by step 4                   |
+| 3   | ~~Remove the earlier design's code now, or at step 4?~~ **Removed at step 4.7**                                                                                                                                             | 0.3, 4.7             | Settled                                       |
+| 4   | The honest-arm data is in USD and the settlement token is a mock EUR. A 1:1 relabel, or a conversion?                                                                                                                       | spec amendment A4    | Undecided; needed by step 6                   |
 | 5   | Is 16 the right bound on policies per account?                                                                                                                                                                              | 1.16                 | Revisit with gas in step 4                    |
 | 6   | Add a real owner validator to the tests, so "only the owner can make the account act" is asserted?                                                                                                                          | 1.18                 | Not planned before a deployment script exists |
 | 7   | ~~D1: keep the bespoke gate, move to MetaMask's ERC-7710 framework, or authenticate the agent with a Smart Session?~~ **Decided 15 October: option 3, the Smart Session** | 1.20, 3.9, spec D1 and A7, `docs/analysis/delegation-architecture.md` section 10 | Decided |
 | 8   | Market port: manager separate from the prosumers (2.22), a price per order in a batch (2.23), the sensor submitting from its own address (2.27), caller checks everywhere (2.29) | 2.22, 2.23, 2.27, 2.29, `docs/analysis/market-structure.md` | As proposed |
 | 9   | Settlement basis: measured net export against committed net export (as built), or flexibility against a baseline (thesis), with the baseline set by the operator or a signed forecast | 2.46 | Net export, as built |
 | 10  | Window edges the spec leaves open: REFILL credits only within the same interval (3.4); a change of a window's shape starts it afresh and must be a WIDEN (3.5) | 3.4, 3.5 | As built |
+| 11  | Step 4's choices: a modification needs room before the old order is credited (4.2); A4 in UTC hours, A6 in seconds (4.3); no carry-over on structural changes (4.4); S6's units, and only accepted submissions as messages (4.5); each attack against its own baseline (4.6) | 4.2 to 4.6 | As built |
 
 

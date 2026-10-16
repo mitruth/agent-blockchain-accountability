@@ -7,9 +7,10 @@
 //   index.js    applies one mutant at a time, runs the tests, restores
 //   cli.js      npm run mutate
 //
-// A mutant is { name, file, find, replace, nth? }: `find` must occur exactly
-// once in `file`, or `nth` says which occurrence. Line endings are matched
-// whatever the file uses.
+// A mutant is { name, file, find, replace, nth?, tests? }: `find` must occur
+// exactly once in `file`, or `nth` says which occurrence. Line endings are
+// matched whatever the file uses. `tests`, when given, replaces the
+// catalogue's list for that mutant: the tests of the code it breaks.
 //
 // The contract file is changed in place while its tests run. The original
 // bytes are kept beside it as <file>.mutation-backup and restored afterwards,
@@ -25,9 +26,10 @@ import ledger from "./catalogs/ledger.js";
 import market from "./catalogs/market.js";
 import window from "./catalogs/window.js";
 import accounts from "./catalogs/accounts.js";
+import policies from "./catalogs/policies.js";
 import pending from "./catalogs/pending.js";
 
-export const CATALOGS = { gate, ledger, market, window, accounts };
+export const CATALOGS = { gate, ledger, market, window, policies, accounts };
 export { pending };
 
 const BACKUP = ".mutation-backup";
@@ -149,7 +151,7 @@ export function runMutant(catalog, mutant, { verifierRuns = { seeds: 3, steps: 4
   fs.writeFileSync(file, text.slice(0, index) + replace + text.slice(index + find.length));
   try {
     if (catalog.runner === "forge-docker") return forgeInDocker(catalog);
-    const tests = run("npx", ["hardhat", "test", "solidity", ...catalog.tests]);
+    const tests = run("npx", ["hardhat", "test", "solidity", ...(mutant.tests ?? catalog.tests)]);
     const compiled = tests.out.includes("Running Solidity tests");
     if (!compiled) return { verdict: "did not build", detail: tests.out.split(/\r?\n/).find((l) => /Error/.test(l)) ?? "" };
 

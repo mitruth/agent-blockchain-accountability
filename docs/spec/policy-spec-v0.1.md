@@ -4,7 +4,7 @@ Owner-side sequence policies for delegated energy-trading agents. Draft, 9 Octob
 
 This brief supersedes `Policy_Spec_Energy_Agent_v0.md` for implementation purposes. It folds in the review of v0 and the decisions taken on 9 October 2026. Read it fully before touching code. Section 10 must be filled in from the repo before step 1 starts.
 
-> **Build status, 15 October 2026.** Steps 1, 2 and 3 of 6 are built and meet their acceptance criteria (Section 9). Step 4 is in progress: the Smart Session entry point (D1, amendment A7) and the policy check, commit and credit phases are built; the policies themselves are not yet. What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
+> **Build status, 16 October 2026.** Steps 1 to 4 of 6 are built and meet their acceptance criteria (Section 9). Step 5 is next. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
 >
 > The text below is the brief as written on 9 October. Where it has since been changed or implemented, a marked note says so: *Amended* points to Section 12, *As built* describes the implementation, *Status* reports a build step.
 
@@ -267,6 +267,15 @@ Used by S1, S2, S4 and S6.
 | A7 | Session scope | DecoderRegistry allowlist (in PolicyGate) |
 | A8 | Expiry and revocation | AgentRegistry (in PolicyGate) |
 
+> **As built, step 4.3.** `contracts/policies/StaticOrderPolicy.sol`, A1 to A4 and A6 on every PLACE leg; a CANCEL leg is never checked (D10).
+> - **A3** is absolute; tariff-relative bounds wait for the tariff oracle of step 5.
+> - **A4** blocks whole UTC hours, one bit per hour and side.
+> - **A6** is in seconds: the slot starts after now and at most `horizonSeconds` ahead, read from the decoder's new `slotStart`.
+> - **No soft bound.** The result's `valueAfter` is a bitmask of the bounds broken.
+> - **A7 and A8.** A7 is the gate's allowlist. A8 is now the agent's Smart Session (amendment A7).
+>
+> See log 4.3.
+
 ### 6.2 S1. Owner budget, sliding window (EUR), in WindowPolicy
 
 - **Quantity:** BUY value at limit price, gross. Never net, otherwise sell-and-rebuy refills the budget.
@@ -274,11 +283,20 @@ Used by S1, S2, S4 and S6.
 - **Defaults:** W = 7 days, b = 1 h.
 - **Attacks covered:** split-leg drain, boundary burst (vs `TUMBLING`), idle-then-burst (vs `REFILL`, `STREAM`).
 
+> **As built, step 4.4.** `contracts/policies/WindowPolicy.sol`, quantity `BUY_VALUE`, on any `WindowLib` class.
+> - **Bounds.** H is the window's cap; S the instance's `soft`.
+> - **Credit on a release.** The value charged less the value of the filled part, both rounded up, to the bucket of the placement time; never more than was charged.
+> - **Structural changes.** A change of shape or of quantity is a WIDEN and starts the window afresh. Carry-over (5.6) is not built.
+>
+> The three attacks are blocked under `SLIDING` and pass under their baselines (step 4 status below). See log 4.4 and 4.6.
+
 ### 6.3 S2. Export and import caps, sliding window (Wh), in WindowPolicy
 
 - **Two instances:** SELL qtyWh (export) and BUY qtyWh (import). Never netted.
 - **Defaults:** W = 24 h, b = one slot (15 min in the brief; *amended, A2*).
 - **Indexing (D9):** placement time. With horizon H_slots·Δ, a delivery interval of length L receives orders placed within an interval of length L + H_slots·Δ. It therefore admits at most ⌈(L + H_slots·Δ) / (W − b)⌉ · H. State this bound in the paper.
+
+> **As built, step 4.4.** The same `WindowPolicy`, quantities `SELL_WH` (export) and `BUY_WH` (import), as two instances, never netted. A release gives back the released Wh. See log 4.4.
 
 ### 6.4 S3. Cross-slot deliverability (physical anchor), DeliverabilityPolicy
 
@@ -322,6 +340,16 @@ Used by S1, S2, S4 and S6.
 - **On any message:** messages + 1 ≤ M_max.
 - Expiries do not count.
 
+> **As built, step 4.5.** `contracts/policies/CancelQuotaPolicy.sol`, three `WindowLib` windows of one shape.
+> - **Units.** w_g and ρ are integer percentages, and w_g is at least 100%.
+> - **The gate window** starts exactly δ_g before the gate time the decoder reports for the cancelled order's slot.
+> - **The ratio.** A submission's own placements count as placed for it.
+> - **Messages.** Only accepted submissions count.
+> - **No credit.** An expiry is never checked, and `credit` does nothing.
+> - **No soft bound.** The result reports the cancelled-Wh window; `reasons()` gives the rules broken.
+>
+> See log 4.5.
+
 ## 7. Decisions
 
 | ID | Decision | Status |
@@ -338,7 +366,7 @@ Used by S1, S2, S4 and S6.
 | D10 | Exposure-reducing actions are never rejected | Settled |
 | D11 | PV forecast pushed on-chain hourly by a relay | Settled for this build |
 | D12 | Cap quantities round up (BUY value, Wh conversions). Records outside caps keep half-away-from-zero. Same rule on both sides | Settled |
-| D13 | PolicyGuard retired or kept as reporting layer | Retired at step 4, by amendment A1 (log 0.3) |
+| D13 | PolicyGuard retired or kept as reporting layer | **Retired**: its code was removed at step 4.7 (log 4.7); its records are kept in `data/hems/` |
 | D14 | Policies as separate contracts behind one executor; gas also reported for a monolithic variant | Settled |
 | D15 | An unregistered agent and an unapproved (target, selector) revert. Only a policy rejection returns without reverting | Proposed, step 1 (log 1.7) |
 | D16 | Registering an agent and approving a market call are owner-path writes that apply at once. They are not timelocked, although both grant authority | **Open**, step 1 (log 1.8) |
@@ -459,7 +487,10 @@ Do not reorder. Each step has to pass before the next starts.
 
 > **Status: not started.**
 
-> **Status: in progress.** Built: the Smart Session entry point (4.1) and the check, commit and credit phases (4.2), tested with test-double policies in `test/gate/PolicyPhases.t.sol`. Not yet: `StaticOrderPolicy`, S1, S2, S6, the attacks and the gas report. See `docs/plan/roadmap.md`.
+> **Status: built; criteria met on 16 October 2026.** `test/policies/Step4Acceptance.t.sol`, on the ported market through the gate.
+> - **The attacks.** Under `SLIDING`, split-leg drain, boundary burst and idle-then-burst are blocked by S1, and place-and-cancel near the gate by S6.
+> - **The baselines.** Each attack passes under the baseline the attack matrix (9.1) names for it: per-action bounds only; `TUMBLING`; `REFILL` and `STREAM` at the same long-run rate; S6 without the gate weight. The sentence below is read that way (log 4.6).
+> - **Gas** per order, per policy and combined: `docs/reports/gas-2026-10-16.md`.
 
 **Step 4. StaticOrderPolicy, S1, S2, S6.**
 - Accept when, under `SLIDING`, these are blocked:

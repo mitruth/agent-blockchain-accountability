@@ -1,0 +1,140 @@
+// Step 4: the gate's check, commit and credit phases, and the policies of
+// step 4 -- StaticOrderPolicy (A1 to A4, A6), WindowPolicy (S1, S2) and
+// CancelQuotaPolicy (S6). Spec 8's mutants among them are marked (spec 8).
+
+const G = "contracts/gate/PolicyGate.sol";
+const A = "contracts/policies/StaticOrderPolicy.sol";
+const W = "contracts/policies/WindowPolicy.sol";
+const Q = "contracts/policies/CancelQuotaPolicy.sol";
+
+// Each mutant runs the tests of the contract it breaks; a survivor is then run
+// against the catalogue's whole list (npm run mutate -- policies --only ...
+// --all-tests) before it is called a hole.
+const T = {
+  [G]: ["test/gate/PolicyPhases.t.sol"],
+  [A]: ["test/policies/StaticOrderPolicy.t.sol"],
+  [W]: ["test/policies/WindowPolicy.t.sol", "test/policies/Step4Acceptance.t.sol"],
+  [Q]: ["test/policies/CancelQuotaPolicy.t.sol"],
+};
+
+export default {
+  name: "policies",
+  tests: [
+    "test/gate/PolicyPhases.t.sol",
+    "test/policies/StaticOrderPolicy.t.sol",
+    "test/policies/WindowPolicy.t.sol",
+    "test/policies/CancelQuotaPolicy.t.sol",
+    "test/policies/Step4Acceptance.t.sol",
+  ],
+  mutants: withTests([
+    // --- the gate's phases ---
+    { name: "a rejection does not stop the submission", file: G,
+      find: "            emit Rejected(account, orderHash);\n            return orderHash;",
+      replace: "            emit Rejected(account, orderHash);" },
+    { name: "a flag is taken for a rejection", file: G,
+      find: "if (r.verdict == Verdict.REJECT) {", replace: "if (r.verdict != Verdict.EXECUTE) {" },
+    { name: "the check stops at the first rejection", file: G,
+      find: "                accepted = false;\n            } else if",
+      replace: "                accepted = false;\n                break;\n            } else if" },
+    { name: "a flag is not emitted", file: G,
+      find: "                emit PolicyFlag(account, orderHash, address(policies[i]), policyIds[i], r.valueAfter, r.soft);\n",
+      replace: "" },
+    { name: "the commit phase is skipped", file: G,
+      find: "            policies[i].commit(account, policyIds[i], legs, ctx);\n", replace: "" },
+    { name: "a cancellation is not credited", file: G,
+      find: "if (releasedWh != 0) _creditAll(account, market, legs[i].orderId, releasedWh);", replace: "" },
+    { name: "a release on reconcile is not credited", file: G,
+      find: "if (releasedWh != 0) _creditAll(account, market, orderId, releasedWh);", replace: "" },
+    { name: "a failing credit blocks reconciliation", file: G,
+      find: "            try list[i].policy.credit(account, list[i].policyId, release) {}\n            catch {\n                emit CreditFailed(account, address(list[i].policy), list[i].policyId, market, orderId);\n            }",
+      replace: "            list[i].policy.credit(account, list[i].policyId, release);" },
+    { name: "the whole order is released, fills included", file: G,
+      find: "            releasedWh: releasedWh\n", replace: "            releasedWh: record.qtyWh\n" },
+    { name: "a credit goes to the current bucket, not the placement's", file: G,
+      find: "            placedAt: record.placedAt,", replace: "            placedAt: uint48(block.timestamp)," },
+
+    // --- StaticOrderPolicy ---
+    { name: "A1 exclusive: <= becomes < on a policy's cap comparison (spec 8)", file: A,
+      find: "if (leg.qtyWh > c.maxQtyWh) broken |= A1_QUANTITY;", replace: "if (leg.qtyWh >= c.maxQtyWh) broken |= A1_QUANTITY;" },
+    { name: "A2 exclusive", file: A,
+      find: "if (leg.value > c.maxValue) broken |= A2_VALUE;", replace: "if (leg.value >= c.maxValue) broken |= A2_VALUE;" },
+    { name: "A3 floor and ceiling swapped between sides", file: A,
+      find: "if (leg.side == Side.SELL ? leg.price < c.sellFloor : leg.price > c.buyCeiling) broken |= A3_PRICE;",
+      replace: "if (leg.side == Side.BUY ? leg.price < c.sellFloor : leg.price > c.buyCeiling) broken |= A3_PRICE;" },
+    { name: "A4 hour off by one", file: A,
+      find: "uint256 hour = (start / 3600) % 24;", replace: "uint256 hour = (start / 3600 + 1) % 24;" },
+    { name: "A4 blocked hours of the other side", file: A,
+      find: "uint24 blocked = leg.side == Side.SELL ? c.sellBlockedHours : c.buyBlockedHours;",
+      replace: "uint24 blocked = leg.side == Side.SELL ? c.buyBlockedHours : c.sellBlockedHours;" },
+    { name: "A6 a slot starting now is in horizon", file: A,
+      find: "if (start <= ctx.time ||", replace: "if (start < ctx.time ||" },
+    { name: "A6 horizon exclusive", file: A,
+      find: "start > uint256(ctx.time) + c.horizonSeconds", replace: "start >= uint256(ctx.time) + c.horizonSeconds" },
+    { name: "a cancel leg is checked as a placement", file: A,
+      find: "            if (legs[i].kind != OrderKind.PLACE) continue;\n", replace: "" },
+    { name: "a longer horizon is not a widening", file: A,
+      find: "\n            || next.horizonSeconds > current.horizonSeconds;", replace: ";" },
+    { name: "fewer blocked hours is not a widening", file: A,
+      find: "            || (current.buyBlockedHours & ~next.buyBlockedHours) != 0\n", replace: "" },
+
+    // --- WindowPolicy ---
+    { name: "S1 counts sales: net or gross confused", file: W,
+      find: "        return side == Side.BUY;\n    }", replace: "        return true;\n    }" },
+    { name: "S2 export counts purchases", file: W,
+      find: "if (q == Quantity.SELL_WH) return side == Side.SELL;", replace: "if (q == Quantity.SELL_WH) return true;" },
+    { name: "S1 counts Wh instead of value", file: W,
+      find: "amount += q == Quantity.BUY_VALUE ? leg.value : leg.qtyWh;", replace: "amount += leg.qtyWh;" },
+    { name: "a cancel leg adds to the window", file: W,
+      find: "if (leg.kind != OrderKind.PLACE || !_counts(q, leg.side)) continue;", replace: "if (!_counts(q, leg.side)) continue;" },
+    { name: "no flag above the soft bound", file: W,
+      find: "        else if (r.valueAfter > inst.soft) r.verdict = Verdict.FLAG;\n", replace: "" },
+    { name: "the commit adds nothing", file: W,
+      find: "if (amount != 0) _windows[account][policyId].add(ctx.time, uint64(amount));", replace: "" },
+    { name: "S1 credits the whole order, fills included", file: W,
+      find: "amount = valueUp(release.qtyWh, release.price) - valueUp(release.filledWh, release.price);",
+      replace: "amount = valueUp(release.qtyWh, release.price);" },
+    { name: "a credit goes to the current bucket (spec 8, through the policy)", file: W,
+      find: "_windows[account][policyId].credit(block.timestamp, release.placedAt, uint64(amount));",
+      replace: "_windows[account][policyId].credit(block.timestamp, block.timestamp, uint64(amount));" },
+    { name: "a higher cap is not a widening", file: W,
+      find: "next.soft > inst.soft || n.cap > w.cap ||", replace: "next.soft > inst.soft ||" },
+    { name: "a new bucket count is not a widening", file: W,
+      find: "\n            || n.buckets != w.buckets || n.anchor != w.anchor;", replace: " || n.anchor != w.anchor;" },
+    { name: "S above H accepted", file: W,
+      find: "if (!WindowLib.isValid(next.window) || next.soft > next.window.cap) return ConfigChange.INVALID;",
+      replace: "if (!WindowLib.isValid(next.window)) return ConfigChange.INVALID;" },
+    { name: "another quantity keeps the old count", file: W,
+      find: "        if (otherQuantity) w.clear();\n", replace: "" },
+
+    // --- CancelQuotaPolicy ---
+    { name: "S6 cap exclusive", file: Q,
+      find: "if (cancelled > inst.maxCancelledWh) broken |= CANCELLED_CAP;", replace: "if (cancelled >= inst.maxCancelledWh) broken |= CANCELLED_CAP;" },
+    { name: "the gate weight is ignored", file: Q,
+      find: "uint256 weight = nearGate ? inst.gateWeightPercent : 100;", replace: "uint256 weight = 100;" },
+    { name: "the gate window starts a second late", file: Q,
+      find: "uint256(ctx.time) + inst.gateWindowSeconds >= gateTime;", replace: "uint256(ctx.time) + inst.gateWindowSeconds > gateTime;" },
+    { name: "the ratio is not enforced", file: Q,
+      find: "                broken |= RATIO;\n", replace: "" },
+    { name: "the free allowance is ignored", file: Q,
+      find: " + uint256(inst.freeCancelWh) * 100) {", replace: ") {" },
+    { name: "messages are not counted", file: Q,
+      find: "        w.messages.add(ctx.time, 1);\n", replace: "" },
+    { name: "the message limit is off by one", file: Q,
+      find: "if (uint256(w.messages.used(t)) + 1 > inst.maxMessages) broken |= MESSAGES;",
+      replace: "if (uint256(w.messages.used(t)) > inst.maxMessages) broken |= MESSAGES;" },
+    { name: "placements are not counted", file: Q,
+      find: "if (placing != 0) w.placed.add(ctx.time, uint64(placing));", replace: "" },
+    { name: "cancellations are not counted", file: Q,
+      find: "if (cancelling != 0) w.cancelled.add(ctx.time, uint64(cancelling));", replace: "" },
+    { name: "expiry counted as cancel in S6 (spec 8)", file: Q,
+      find: "    function credit(address, bytes32, Release calldata) external override onlyGate {}",
+      replace: "    function credit(address account, bytes32 policyId, Release calldata release) external override onlyGate {\n        _windows[account][policyId].cancelled.add(block.timestamp, release.releasedWh);\n    }" },
+    { name: "a lower gate weight is not a widening", file: Q,
+      find: "\n            || n.gateWeightPercent < c.gateWeightPercent || n.gateWindowSeconds < c.gateWindowSeconds",
+      replace: "\n            || n.gateWindowSeconds < c.gateWindowSeconds" },
+  ]),
+};
+
+function withTests(mutants) {
+  return mutants.map((m) => ({ ...m, tests: T[m.file] }));
+}

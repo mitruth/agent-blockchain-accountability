@@ -11,6 +11,7 @@ import path from "node:path";
 import {
   ROOT, DEPLOYMENT_FILE, key, deploy, send, read, selector, calldata as encode, now, saveDeployment, price, EUR, eur,
 } from "../chain/index.js";
+import { agentPolicyInstances } from "./policies.js";
 
 export const DEFAULT_CONFIG = new URL("./prosumers.json", import.meta.url);
 
@@ -49,7 +50,13 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
   const ledger = await deploy(OPERATOR, "PositionLedger");
   const gate = await deploy(OPERATOR, "PolicyGate", [ledger, BigInt(config.maxLegs)]);
   const decoder = await deploy(OPERATOR, "ProsumerDecoder");
-  log(`gate        ${gate}  (ledger ${ledger}, decoder ${decoder})\n`);
+  const policyContracts = {
+    statics: await deploy(OPERATOR, "StaticOrderPolicy", [gate]),
+    windows: await deploy(OPERATOR, "WindowPolicy", [gate]),
+    quota: await deploy(OPERATOR, "CancelQuotaPolicy", [gate]),
+  };
+  log(`gate        ${gate}  (ledger ${ledger}, decoder ${decoder})`);
+  log(`policies    per-action ${policyContracts.statics}, windows ${policyContracts.windows}, quota ${policyContracts.quota}\n`);
 
   const orderFunctions = ["placeBids", "placeOffers", "cancelOrder", "modifyOrder"].map((f) =>
     selector("Prosumer", f),
@@ -98,13 +105,21 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
         await asAccount(gate, "PolicyGate", "setDecoder", [prosumer, sel, decoder]);
       }
       entry.agent = { address: agent, keyIndex: roles.agent, validUntil: Number(validUntil) };
+
+      // Owner path: the policies the agent trades under (step 4).
+      entry.policies = [];
+      for (const instance of agentPolicyInstances(config.agentPolicies)) {
+        const policy = policyContracts[instance.contract];
+        await asAccount(gate, "PolicyGate", "addPolicy", [policy, instance.id, instance.config]);
+        entry.policies.push({ name: instance.name, policy, id: instance.id });
+      }
     }
 
     prosumers[p.name] = entry;
     const linked = await read(manager, "MarketManager", "prosumerOf", [account]);
     log(
       `${p.name.padEnd(11)} account ${account}  prosumer ${prosumer}` +
-        (p.agent ? `  agent ${entry.agent.address}` : "  (no agent)"),
+        (p.agent ? `  agent ${entry.agent.address}, ${entry.policies.length} policies` : "  (no agent)"),
     );
     if (linked.toLowerCase() !== prosumer.toLowerCase()) throw new Error(`prosumerOf(${p.name}) does not point at its prosumer contract`);
   }
@@ -115,7 +130,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     deployedAt: new Date().toISOString(),
     slotSeconds: config.slotSeconds,
     realTimePrice: realTimePrice.toString(),
-    contracts: { token, rule, manager, ledger, gate, decoder },
+    contracts: { token, rule, manager, ledger, gate, decoder, ...policyContracts },
     roles: {
       operator: { address: key(OPERATOR).address, keyIndex: OPERATOR },
       matcher: { address: key(MATCHER).address, keyIndex: MATCHER },

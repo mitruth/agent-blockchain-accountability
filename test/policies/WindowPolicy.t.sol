@@ -191,6 +191,26 @@ contract WindowPolicyTest is PolicyFixture {
         assertTrue(_buy(100) != 0);
     }
 
+    /// Counting another quantity starts afresh: 500,000 units of value must not
+    /// be read as 500,000 Wh. The window is 48 hours, so the old count would
+    /// still be in it when the widening applies, 24 hours later.
+    function test_countingAnotherQuantityStartsAfresh() public {
+        WindowPolicy.Config memory value = _config(WindowPolicy.Quantity.BUY_VALUE, 1_000_000, 1_000_000);
+        value.window.buckets = 48;
+        _addPolicy(policy, S1, abi.encode(value));
+        assertTrue(_buy(2000) != 0);
+        _assertUsed(S1, 500_000);
+
+        WindowPolicy.Config memory wh = _config(WindowPolicy.Quantity.BUY_WH, 3000, 3000);
+        wh.window.buckets = 48;
+        _asAccount(abi.encodeCall(gate.setConfig, (policy, S1, abi.encode(wh))));
+        vm.warp(block.timestamp + gate.WIDEN_DELAY());
+        _asAccount(abi.encodeCall(gate.applyConfig, (policy, S1, abi.encode(wh))));
+
+        _assertUsed(S1, 0);
+        assertTrue(_buy(3000) != 0, "the new quantity's cap is all there");
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------

@@ -3,6 +3,27 @@
   "realTimePricePerKWh": "0.30",
   "maxLegs": 48,
   "agentValidityDays": 30,
+  "agentPolicies": {
+    "perAction": {
+      "maxQtyWh": 5000,
+      "maxValueEUR": "5",
+      "sellFloorEUR": "0.05",
+      "buyCeilingEUR": "0.50",
+      "horizonHours": 72
+    },
+    "budget": { "softEUR": "6", "capEUR": "7", "hours": 24 },
+    "exportImport": { "exportWh": 30000, "importWh": 40000, "hours": 24 },
+    "cancelQuota": {
+      "minutes": 60,
+      "bucketMinutes": 5,
+      "maxCancelledWh": 10000,
+      "maxMessages": 20,
+      "gateWeightPercent": 300,
+      "gateWindowMinutes": 30,
+      "ratioPercent": 100,
+      "freeCancelWh": 2000
+    }
+  },
   "prosumers": [
     { "name": "alice", "agent": true, "fundsEUR": 1000 },
     { "name": "bob", "agent": false, "fundsEUR": 1000 },

@@ -10,12 +10,18 @@
 //      the day before, as on the European day-ahead market
 //   2  every prosumer places an order for every hour: Alice's and Carol's
 //      agents through the gate, Bob on his own, without an agent
-//   3  Alice's agent modifies one of her bids
-//   4  trading closes; an agent order is now refused
-//   5  the matcher matches every hour and finalises the session
-//   6  a keeper expires what was not matched and reconciles the ledger
-//   7  the delivery day passes; each prosumer's sensor settles its hours
-//   8  final balances
+//   3  Alice's agent modifies one of her bids: past her soft budget, flagged
+//   4  Alice's agent tries to go past her hard budget: refused by S1, and the
+//      refusal is in the log
+//   5  trading closes; an agent order is now refused
+//   6  the matcher matches every hour and finalises the session
+//   7  a keeper expires what was not matched and reconciles the ledger
+//   8  the delivery day passes; each prosumer's sensor settles its hours
+//   9  final balances
+//
+// The agents trade under the policies of prosumers.json's "agentPolicies"
+// (step 4): per-action bounds, a budget S1, export and import caps S2, and a
+// cancellation quota S6.
 //
 // Run it again for another day: each run opens the next session.
 
@@ -62,8 +68,22 @@ async function viaAgent(name, fn, args) {
   const submit = calldata("PolicyGate", "submit", [p.prosumer, calldata("Prosumer", fn, args)]);
   const receipt = await send(p.agent.keyIndex, p.account, "MiniAccount", "executeAsSession", [gate, submit]);
   const legs = events(receipt, "PolicyGate", "OrderSubmitted")[0].args.legs.length;
-  return { receipt, legs, gas: receipt.gasUsed };
+  const rejected = events(receipt, "PolicyGate", "Rejected").length > 0;
+  return { receipt, legs, gas: receipt.gasUsed, rejected };
 }
+
+/** Every policy instance's result on one submission, by instance name. */
+function policyResults(name, receipt) {
+  const names = Object.fromEntries((P[name].policies ?? []).map((p) => [p.id.toLowerCase(), p.name]));
+  const flagged = new Set(events(receipt, "PolicyGate", "PolicyFlag").map((e) => e.args.policyId.toLowerCase()));
+  return events(receipt, "PolicyGate", "PolicyResult").map((e) => ({
+    name: names[e.args.policyId.toLowerCase()] ?? e.args.policyId,
+    ...e.args.result,
+    flagged: flagged.has(e.args.policyId.toLowerCase()),
+  }));
+}
+
+const VERDICT = ["execute", "FLAG", "REJECT"];
 
 /** The owner's own call, through its account, without an agent. */
 async function viaOwner(name, fn, args) {
@@ -134,9 +154,28 @@ async function main() {
   const evening = placed.alice.find((o) => wallClock(Number(o.slot) * SLOT).h === 19);
   const modify = await viaAgent("alice", "modifyOrder", [evening.id, req(Number(evening.slot) - firstSlot, 1800, "0.28")]);
   console.log(`  19:00: 1.5 kWh at 0.27 → 1.8 kWh at 0.28, ${modify.legs} legs (cancel, then place)`);
+  const budget = policyResults("alice", modify.receipt).find((r) => r.name === "S1 budget");
+  console.log(
+    `  S1 budget: ${eur(budget.valueBefore)} → ${eur(budget.valueAfter)}, soft ${eur(budget.soft)}, ` +
+      `hard ${eur(budget.hard)}: ${VERDICT[budget.verdict]}`,
+  );
 
   // ── 4 ───────────────────────────────────────────────────────────────────
-  step(4, "Trading closes at 12:00 the day before delivery");
+  step(4, "Alice's agent tries to go past her budget");
+  const greedy = await viaAgent("alice", "placeBids", [ELECTRICITY, [req(12, 5000, "0.40")]]);
+  console.log(`  one more bid: 5 kWh at 0.40, ${eur(price("0.40") * 5n)} — ${greedy.rejected ? "refused" : "!! executed"}`);
+  for (const r of policyResults("alice", greedy.receipt)) {
+    const amounts = r.name.startsWith("S1")
+      ? `${eur(r.valueBefore)} → ${eur(r.valueAfter)}, hard ${eur(r.hard)}`
+      : r.name.startsWith("A1")
+        ? `bounds broken: ${r.valueAfter}`
+        : `${r.valueBefore} → ${r.valueAfter} of ${r.hard}`;
+    console.log(`    ${r.name.padEnd(16)} ${VERDICT[r.verdict].padEnd(8)} ${amounts}`);
+  }
+  console.log("  The call did not revert: the refusal and every policy's view of it are on chain.");
+
+  // ── 5 ───────────────────────────────────────────────────────────────────
+  step(5, "Trading closes at 12:00 the day before delivery");
   await warpTo(closesAt);
   try {
     await viaAgent("alice", "placeBids", [ELECTRICITY, [req(0, 500, "0.25")]]);
@@ -145,8 +184,8 @@ async function main() {
     console.log(`  an agent order after closing is refused: ${error.message}`);
   }
 
-  // ── 5 ───────────────────────────────────────────────────────────────────
-  step(5, "The matcher matches every hour");
+  // ── 6 ───────────────────────────────────────────────────────────────────
+  step(6, "The matcher matches every hour");
   const trades = await runMatcher(d, session, {
     log: (line) => !line.startsWith("              ") && console.log("  " + line),
   });
@@ -164,8 +203,8 @@ async function main() {
     console.log(`  ${hhmm(slotStart(i))}  ${(bySlot.get(firstSlot + i) ?? ["no trade"]).join(";  ")}`);
   }
 
-  // ── 6 ───────────────────────────────────────────────────────────────────
-  step(6, "A keeper expires the rest and reconciles the ledger");
+  // ── 7 ───────────────────────────────────────────────────────────────────
+  step(7, "A keeper expires the rest and reconciles the ledger");
   console.log(`  expired ${await expireUnmatched(d, session)} orders with an unmatched remainder`);
 
   for (const name of Object.keys(P).filter((n) => P[n].agent)) {
@@ -186,8 +225,8 @@ async function main() {
     );
   }
 
-  // ── 7 ───────────────────────────────────────────────────────────────────
-  step(7, "The delivery day passes; sensors settle every hour");
+  // ── 8 ───────────────────────────────────────────────────────────────────
+  step(8, "The delivery day passes; sensors settle every hour");
   await warpTo(end);
   // Measured, as a share of the commitment: Bob's battery falls short at
   // 19:00, by more than 10%; otherwise he delivers 95% and everyone else 100%.
@@ -223,8 +262,8 @@ async function main() {
     );
   }
 
-  // ── 8 ───────────────────────────────────────────────────────────────────
-  step(8, "Final balances");
+  // ── 9 ───────────────────────────────────────────────────────────────────
+  step(9, "Final balances");
   await balances();
   console.log(`  manager (penalties collected) ${eur(await read(token, "LockableERC1155", "balanceOf", [manager, 0n]))}`);
 }

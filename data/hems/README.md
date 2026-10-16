@@ -1,9 +1,13 @@
-# Daily records from the HEMS simulation (earlier design)
+# Daily records from the HEMS simulation
 
 The records below come from the home energy simulation that supplies the
-honest-agent arms. They were produced for the earlier design
-(`docs/earlier-design/`) and are kept as its test data and as the source for cap
-calibration.
+honest-agent arms. Step 6 of the build uses them to calibrate the policies' caps
+and to measure how often a cap refuses an honest agent. They were produced for
+the earlier design (`docs/earlier-design/`), whose code was removed at step 4;
+the data is kept, unchanged.
+
+They are daily totals. The step 6 evaluation needs order-level traces as well,
+from the same simulation.
 
 These CSVs are a compressed, integer-only view of one simulated year of home energy
 control for `home_01` (2022). Each file is one way of running the same house.
