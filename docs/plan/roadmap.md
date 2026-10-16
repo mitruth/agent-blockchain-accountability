@@ -154,14 +154,17 @@ when cross-slot over-commitment, excess cycling and a position spike are
 blocked, a stale or reordered reading is rejected, an exposure-reducing cancel
 always passes, and gas is reported as a function of the horizon k.
 
+**The data is ready** (log 4.10): `data/homes/` has the six homes' battery and PV
+parameters, and 2022 in 30-minute slots, with representative days. Still
+needed, for step 6: the honest arms' step logs, from `Demo_PlanApplyEvaluate`.
+
 ---
 
 ## Open decisions
 
-The questions that wait for Dan are listed, with the default that applies if
-nothing is said, at the end of `docs/decisions/design-decisions.md`. None
-blocks step 4. One, the currency of the honest-arm data, is needed during step
-4.
+None left. Dan answered every open decision on 16 October; the answers are in
+the table at the end of `docs/decisions/design-decisions.md` and in log 4.9.
+The one change: the payment token is a mock USD, as the HEMS data is.
 
 ---
 

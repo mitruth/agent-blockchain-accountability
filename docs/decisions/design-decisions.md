@@ -2197,25 +2197,135 @@ those names were right when written.
   the four real accounts. This closes the check left open at 4.7.
 - After a clean rebuild: `npm test` 284 passing.
 
+
+### 4.9 — Dan's answers to the open decisions
+
+**Status.** Settled by Dan, 16 October, item by item.
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | Timelock on approving a market call (spec D16) | Keep it immediate |
+| 2 | The six step 1 choices (1.1, 1.2, 1.7, 1.12, 1.13, 1.14) | Confirmed, all six |
+| 4 | USD data, mock EUR token | **Use USD everywhere**: the token is a mock USD |
+| 5 | At most 16 policies per account (1.16) | Keep 16 |
+| 6 | A real owner validator in the tests (1.18) | Not now |
+| 8 | Market port (2.22, 2.23, 2.27, 2.29) | Manager separate from the prosumers: yes. A price per order, and the sensor's own address: either is fine, so they stay as built. Caller checks in every function: yes |
+| 9 | Settlement basis (2.46) | Net export, as built |
+| 10 | Window edges (3.4, 3.5) | As built |
+| 11 | Step 4's choices (4.2 to 4.6) | Keep all |
+
+Items 3 and 7 were already settled. Every entry above marked **Proposed** that
+one of these items names is settled with it. The other entries marked
+**Proposed** were not listed in the table and not reviewed one by one; they
+stand as built.
+
+**The currency (item 4).** Dan chose "convert and use only USD everywhere". The
+HEMS data is already in USD, so nothing needs converting: the token, the policy
+configurations and the scripts' output are relabelled to USD, and no exchange
+rate is assumed anywhere.
+
+- **The contracts do not change.** `LockableERC1155` has no symbol; token id 0
+  is the payment token, 6 decimals, now read as USD.
+- **The off-chain code:**
+  - `offchain/chain/units.js` exports `USD` and `usd()` in place of `EUR` and
+    `eur()`;
+  - `prosumers.json`'s fields are `fundsUSD`, `maxValueUSD`, `sellFloorUSD`,
+    `buyCeilingUSD`, `softUSD` and `capUSD`;
+  - the deploy script, the matcher and the day-ahead scenario print USD.
+- **The documents:** spec D7 and amendment A4 are amended, and the guide's demo
+  amounts are relabelled. Entries above that say EUR are history and keep it.
+- **The amounts stay the same,** read as USD: the demo's budget is still 6 soft
+  and 7 hard.
+
+
+### 4.10 — The HEMS dataset: the raw files outside git, an extract in `data/homes/`
+
+**Status.** Settled by Dan for the two rules ("put it in gitignore", "take some
+data out of there with a script and put it nicely in a different folder with
+csv files with representative names"). What is extracted, and how, is proposed.
+
+**The raw dataset.** Dan placed it at the root, in `A Four-Year 30-Minute
+Simulated Residential HEMS D/`: six simulated homes in Sacramento, 2020 to
+2023, 30-minute slots, 75 MB.
+
+- It is git-ignored by a pattern that matches the folder's name, which is cut
+  short on disk.
+- It is to be published on its own (Mendeley Data, reserved DOI
+  10.17632/5rrc4787hv.1), so the repository keeps only what the project uses.
+
+**The extract,** by `npm run data:extract` (`offchain/dataset/`, JavaScript),
+into `data/homes/`:
+
+- `homes.csv`: per home, PV capacity, battery capacity and power, initial,
+  minimum and maximum state of charge, and the two efficiencies;
+- for 2022: one 30-minute file per home, named for the household, with load in
+  three parts, PV and net load; the prices once, since all six homes share them
+  (checked); daily totals;
+- `days/`: seven representative days, each with why it was picked: summer
+  sunny, winter cloudy, spring and autumn typical, the heating peak, and one
+  day that is both the cooling peak and the year's price spike (6 September,
+  1.998 USD/kWh).
+
+**Why 2022.** It is the dataset's evaluation year, and the year of the arms'
+records in `data/hems/`. `--year` takes another.
+
+**Integers only, read exactly.**
+
+- The values are Wh, W, basis points and micro-USD per kWh, the units the
+  contracts use; a price goes to the market unchanged.
+- `decimal.js` reads the CSV text as an exact decimal, including the
+  exponent form the files sometimes use (`4.88e-06`), and rounds once, half
+  away from zero.
+- Floating point would turn 0.1945 kWh into 194 Wh instead of 195.
+
+**Rejected.**
+
+- **Committing the raw dataset:** 75 MB, and not ours to republish ahead of
+  its own release.
+- **All four years:** step 5 needs parameters and a few days, and step 6 one
+  year to compare with the arms. About 1.2 MB a year per home.
+- **Converting the timestamps to UTC.** The files' clock is a plain local grid
+  with no daylight-saving jumps, so a conversion would make up times the data
+  never had. A slot is its position in the day.
+
+**Two things noticed.**
+
+- **Rounding drift.** Rounding to whole Wh drifts a little: the HVAC's two
+  fixed draws both sit a fraction above a whole Wh. Home_01's 2022 load is
+  668 Wh low out of 9.76 MWh.
+- **A SoC mismatch for step 6.** The arms' records reach 10 % state of charge,
+  while the dataset gives 20 % as every home's minimum. The arms ran with their
+  own battery settings. Step 6 has to use the arms' settings, from their step
+  logs.
+
+**Checked.**
+
+- Two runs give byte-identical files.
+- Home_01's 2022 PV comes to 7,379,598 Wh, against 7,379,593 summed from the
+  raw decimals.
+- `npm run test:offchain`: 15 passing, the three new tests included.
+- After the USD relabel (4.9), the demo on a fresh node prints the same day
+  in USD.
+
 ---
 
 ## Open decisions
 
-Waiting for Dan. None blocks step 5. Items 3 and 7 are settled.
+None left. Dan answered every item on 16 October (log 4.9); the table keeps the questions and records the answers.
 
 
-| #   | Question                                                                                                                                                                                                                    | Where                | Default if nothing is said                    |
+| #   | Question                                                                                                                                                                                                                    | Where                | Answer                                        |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------- |
-| 1   | Should registering an agent and approving a call be timelocked when they extend authority?                                                                                                                                  | 1.8, spec D16        | Stay immediate                                |
-| 2   | Confirm the six other step 1 choices: revert on unknown agent or call (1.7), owner applies a widening (1.13), one pending proposal (1.14), add now and remove later (1.12), generations (1.2), no library in the gate (1.1) | spec D15, D17 to D21 | As built                                      |
+| 1   | Should registering an agent and approving a call be timelocked when they extend authority?                                                                                                                                  | 1.8, spec D16        | Keep it immediate (4.9) |
+| 2   | Confirm the six other step 1 choices: revert on unknown agent or call (1.7), owner applies a widening (1.13), one pending proposal (1.14), add now and remove later (1.12), generations (1.2), no library in the gate (1.1) | spec D15, D17 to D21 | Confirmed, all six (4.9) |
 | 3   | ~~Remove the earlier design's code now, or at step 4?~~ **Removed at step 4.7**                                                                                                                                             | 0.3, 4.7             | Settled                                       |
-| 4   | The honest-arm data is in USD and the settlement token is a mock EUR. A 1:1 relabel, or a conversion?                                                                                                                       | spec amendment A4    | Undecided; needed by step 6                   |
-| 5   | Is 16 the right bound on policies per account?                                                                                                                                                                              | 1.16                 | Revisit with gas in step 4                    |
-| 6   | Add a real owner validator to the tests, so "only the owner can make the account act" is asserted?                                                                                                                          | 1.18                 | Not planned before a deployment script exists |
+| 4   | The honest-arm data is in USD and the settlement token is a mock EUR. A 1:1 relabel, or a conversion?                                                                                                                       | spec amendment A4    | **Mock USD everywhere** (4.9, spec A4) |
+| 5   | Is 16 the right bound on policies per account?                                                                                                                                                                              | 1.16                 | Keep 16 (4.9) |
+| 6   | Add a real owner validator to the tests, so "only the owner can make the account act" is asserted?                                                                                                                          | 1.18                 | Not now (4.9) |
 | 7   | ~~D1: keep the bespoke gate, move to MetaMask's ERC-7710 framework, or authenticate the agent with a Smart Session?~~ **Decided 15 October: option 3, the Smart Session** | 1.20, 3.9, spec D1 and A7, `docs/analysis/delegation-architecture.md` section 10 | Decided |
-| 8   | Market port: manager separate from the prosumers (2.22), a price per order in a batch (2.23), the sensor submitting from its own address (2.27), caller checks everywhere (2.29) | 2.22, 2.23, 2.27, 2.29, `docs/analysis/market-structure.md` | As proposed |
-| 9   | Settlement basis: measured net export against committed net export (as built), or flexibility against a baseline (thesis), with the baseline set by the operator or a signed forecast | 2.46 | Net export, as built |
-| 10  | Window edges the spec leaves open: REFILL credits only within the same interval (3.4); a change of a window's shape starts it afresh and must be a WIDEN (3.5) | 3.4, 3.5 | As built |
-| 11  | Step 4's choices: a modification needs room before the old order is credited (4.2); A4 in UTC hours, A6 in seconds (4.3); no carry-over on structural changes (4.4); S6's units, and only accepted submissions as messages (4.5); each attack against its own baseline (4.6) | 4.2 to 4.6 | As built |
+| 8   | Market port: manager separate from the prosumers (2.22), a price per order in a batch (2.23), the sensor submitting from its own address (2.27), caller checks everywhere (2.29) | 2.22, 2.23, 2.27, 2.29, `docs/analysis/market-structure.md` | Confirmed; caller checks in every function (4.9) |
+| 9   | Settlement basis: measured net export against committed net export (as built), or flexibility against a baseline (thesis), with the baseline set by the operator or a signed forecast | 2.46 | Net export, as built (4.9) |
+| 10  | Window edges the spec leaves open: REFILL credits only within the same interval (3.4); a change of a window's shape starts it afresh and must be a WIDEN (3.5) | 3.4, 3.5 | As built (4.9) |
+| 11  | Step 4's choices: a modification needs room before the old order is credited (4.2); A4 in UTC hours, A6 in seconds (4.3); no carry-over on structural changes (4.4); S6's units, and only accepted submissions as messages (4.5); each attack against its own baseline (4.6) | 4.2 to 4.6 | Keep all (4.9) |
 
 

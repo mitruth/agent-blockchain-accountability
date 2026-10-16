@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  ROOT, DEPLOYMENT_FILE, key, deploy, send, read, selector, calldata as encode, now, saveDeployment, price, EUR, eur,
+  ROOT, DEPLOYMENT_FILE, key, deploy, send, read, selector, calldata as encode, now, saveDeployment, price, USD, usd,
 } from "../chain/index.js";
 import { agentPolicyInstances } from "./policies.js";
 
@@ -44,7 +44,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
   await send(OPERATOR, manager, "MarketManager", "setMatcher", [key(MATCHER).address]);
   log(`market      manager ${manager}`);
   log(`            token   ${token}`);
-  log(`            slots of ${config.slotSeconds} s, real-time price ${eur(realTimePrice)} per kWh`);
+  log(`            slots of ${config.slotSeconds} s, real-time price ${usd(realTimePrice)} per kWh`);
 
   // --- the enforcement layer -----------------------------------------------
   const ledger = await deploy(OPERATOR, "PositionLedger");
@@ -76,7 +76,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
 
     // The operator admits the prosumer with its sensor, and funds the account.
     await send(OPERATOR, manager, "MarketManager", "registerProsumer", [prosumer, sensor]);
-    await send(OPERATOR, token, "LockableERC1155", "mintPayment", [account, BigInt(p.fundsEUR) * EUR]);
+    await send(OPERATOR, token, "LockableERC1155", "mintPayment", [account, BigInt(p.fundsUSD) * USD]);
 
     // Owner path: the account lets its prosumer contract lock collateral and
     // move its energy tokens.

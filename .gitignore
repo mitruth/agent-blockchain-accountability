@@ -7,7 +7,11 @@ cache_forge/
 # Written by offchain/deploy for the local node; regenerated each deploy.
 deployments/
 
-# Secrets. PRIVATE_KEY, GROQ_API_KEY and deployed addresses live here.
+# Dan's raw HEMS dataset (six homes, 2020-2023, 75 MB), kept beside the code
+# but not in git. npm run data:extract writes what the project uses to data/homes/.
+/A Four-Year 30-Minute Simulated Residential HEMS D*/
+
+# Secrets: the owner's and the agent's keys.
 .env
 .env.*
 !.env.example

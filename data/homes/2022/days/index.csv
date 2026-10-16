@@ -1,0 +1,8 @@
+file,date,label,why,pvWhHome01,hvacWhSixHomes,maxPriceMicroUsdPerKwh
+2022-06-13_summer-sunny.csv,2022-06-13,summer-sunny,"most PV of June to August",33371,23663,197624
+2022-12-31_winter-cloudy.csv,2022-12-31,winter-cloudy,"least PV of December to February",1182,184757,125801
+2022-05-08_spring-typical.csv,2022-05-08,spring-typical,"median PV of March to May",24704,133217,86959
+2022-10-20_autumn-typical.csv,2022-10-20,autumn-typical,"median PV of September to November",16745,34279,97223
+2022-01-01_heating-peak.csv,2022-01-01,heating-peak,"most HVAC energy of November to March, six homes together",10767,356817,122495
+2022-09-06_cooling-peak-and-price-spike.csv,2022-09-06,cooling-peak,"most HVAC energy of May to September, six homes together",24362,239489,1997973
+2022-09-06_cooling-peak-and-price-spike.csv,2022-09-06,price-spike,"highest half-hour price of the year",24362,239489,1997973

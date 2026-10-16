@@ -16,7 +16,8 @@
     "demo:match": "node offchain/matcher/cli.js",
     "verify:window": "hardhat build --no-tests && node offchain/verifier/cli.js",
     "test:offchain": "node --test \"offchain/**/*.test.js\"",
-    "mutate": "node offchain/mutation/cli.js"
+    "mutate": "node offchain/mutation/cli.js",
+    "data:extract": "node offchain/dataset/cli.js"
   },
   "keywords": [],
   "author": "",

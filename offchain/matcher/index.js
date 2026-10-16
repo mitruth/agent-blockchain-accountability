@@ -7,7 +7,7 @@
 //   index.js  the service around it: reads the chain, sends the trades
 //   cli.js    npm run demo:match
 
-import { read, send, now, eur, kWh } from "../chain/index.js";
+import { read, send, now, usd, kWh } from "../chain/index.js";
 import { matchOrders } from "./rule.js";
 
 export { matchOrders };
@@ -46,7 +46,7 @@ export async function runMatcher(deployment, session, { log = console.log, rule 
   const total = trades.reduce((sum, t) => sum + t.quantity, 0n);
   log(`matcher     ${trades.length} trades, ${kWh(total)} in total; session finalised`);
   for (const t of trades) {
-    log(`              ${t.bidId.slice(0, 10)} ← ${t.offerId.slice(0, 10)}  ${kWh(t.quantity)} at ${eur(t.price)}/kWh`);
+    log(`              ${t.bidId.slice(0, 10)} ← ${t.offerId.slice(0, 10)}  ${kWh(t.quantity)} at ${usd(t.price)}/kWh`);
   }
   return trades;
 }

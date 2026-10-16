@@ -563,12 +563,12 @@ configuration.
 All JavaScript, with viem. Unit tests sit beside the code as `*.test.js` (`npm run test:offchain`). Each folder is one package with one job; its
 `index.js` is what the others import, and a `cli.js`, where there is one, is
 what `npm run` starts. Packages depend on `chain/` and on nothing else, except
-`scenarios/`, which uses them all.
+`scenarios/`, which uses them all. `dataset/` needs no chain at all.
 
 
 | Package      | What it does                                                                                                                                                                                                                                                                                               | Started by                          |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `chain/`     | The connection to the local node, the test keys by index, the compiled contracts (deploy, send, read), transactions that report the contract's own error when they revert, the node's clock, `deployments/local.json`, and the units Wh and EUR                                                            | imported by every other package     |
+| `chain/`     | The connection to the local node, the test keys by index, the compiled contracts (deploy, send, read), transactions that report the contract's own error when they revert, the node's clock, `deployments/local.json`, and the units Wh and USD                                                            | imported by every other package     |
 | `deploy/`    | Deploys the market and the gate, then one smart account and prosumer contract per prosumer in `prosumers.json`; registers them, funds them, sets every approval, installs the gate and gives the agent its session where there is one. Writes `deployments/local.json`                                     | `npm run demo:deploy`               |
 | `matcher/`   | The matching service. `rule.js` is the rule, a pure function you can replace; `index.js` reads a closed session, registers the trades and finalises it                                                                                                                                                     | `npm run demo:match`, or a scenario |
 | `keeper/`    | Expires the orders a finalised session left unmatched and reconciles the gate's ledger. Anyone may do both                                                                                                                                                                                                 | a scenario                          |
@@ -576,6 +576,7 @@ what `npm run` starts. Packages depend on `chain/` and on nothing else, except
 | `scenarios/` | `day-ahead.js`, one market day from opening the session to settlement; `calendar.js`, the Brussels clock and the day-ahead closing time                                                                                                                                                                    | `npm run demo:flow`                 |
 | `verifier/`  | The independent check of the windows: `windows.js` defines each class, `guarantees.js` measures spec 5.3's bounds over every interval, `verify.js` replays a history and compares, `fuzz.js` runs random and scripted histories through `WindowProbe`, `selftest.js` tampers with histories it must reject | `npm run verify:window`             |
 | `mutation/`  | The mutation suite: `catalogs/` holds the defects per part of the system, `index.js` applies one at a time and runs the tests                                                                                                                                                                              | `npm run mutate`                    |
+| `dataset/`   | Reads Dan's raw HEMS dataset and writes `data/homes/`: the six homes' PV and battery, a year of 30-minute slots per home, the prices, daily totals and representative days. Integers only; `decimal.js` reads the CSVs' decimals exactly, without floating point                                             | `npm run data:extract`              |
 
 
 `prosumers.json` says who takes part: each prosumer's name, whether an agent
@@ -630,9 +631,9 @@ and agent validity; and `agentPolicies`, the policies every agent trades under
 | File                | What it is                                                                                                                                                                                                                                                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `foundry.toml`      | Foundry build settings: Solidity 0.8.25, EVM `cancun`, optimizer 200 runs. Holds the import remappings ModuleKit needs                                                                                                                                                                                                           |
-| `hardhat.config.js` | Hardhat build settings, same compiler settings. Loads three separate keys for Base Sepolia, never one                                                                                                                                                                                                                            |
+| `hardhat.config.js` | Hardhat build settings, same compiler settings. For Base Sepolia, loads the owner's key and the agent's session key from `.env`, never one for both                                                                                                                                                                              |
 | `remappings.txt`    | One line, for `forge-std`. Both tools read it                                                                                                                                                                                                                                                                                    |
-| `package.json`      | `npm test` runs the Hardhat suite and `test:offchain` the JavaScript tests; `verify:window` runs the verifier, `mutate` the mutation suite; `npm run node`, `demo:deploy`, `demo:flow`, `demo:match` run the local system; `build` compiles. Dependencies: Hardhat 3, viem, OpenZeppelin 5.6.1, forge-std 1.9.6, ModuleKit 0.5.9 |
+| `package.json`      | `npm test` runs the Hardhat suite and `test:offchain` the JavaScript tests; `verify:window` runs the verifier, `mutate` the mutation suite; `npm run node`, `demo:deploy`, `demo:flow`, `demo:match` run the local system; `data:extract` writes `data/homes/`; `build` compiles. Dependencies: Hardhat 3, viem, OpenZeppelin 5.6.1, forge-std 1.9.6, ModuleKit 0.5.9 |
 
 
 
@@ -667,6 +668,17 @@ Git keeps all of it: `git show 3c4d84e:<path>` reads any file as it was.
 Only its data is kept: the HEMS simulation's daily records of the three
 controller arms, in `data/hems/`, for step 6's calibration and false-positive
 rate.
+
+### `data/`: the data the project uses
+
+| Folder | Holds | From |
+|---|---|---|
+| `data/homes/` | The six homes of the HEMS dataset: `homes.csv` (PV, battery capacity, power, state-of-charge limits, efficiencies), and for 2022 a 30-minute file per home (load in parts, PV, net load), the prices, daily totals, and seven representative days in `days/`. Integers: Wh, W, basis points, micro-USD per kWh. Its README gives every column | `npm run data:extract`, from the raw dataset |
+| `data/hems/` | The three honest controller arms' daily records for home_01 in 2022 | The arms' step logs, in `Demo_PlanApplyEvaluate` |
+
+**The raw dataset** is in `A Four-Year 30-Minute Simulated Residential HEMS D/` at
+the root: six homes, 2020 to 2023, 75 MB. It is git-ignored; only the extract
+is committed. Running the extraction twice gives the same files.
 
 Step 5 may reuse the EIP-712 signature checking of its `MeterReadings.sol`, from
 git, as the base for oracle verification.
@@ -1106,14 +1118,26 @@ and `test_gateIsNeverATargetWhateverTheCall`. Put the line back.
 
 ### The JavaScript tests
 
-Expect **12 passing** in a second: the verifier's definitions and the
-matcher's rule, no chain needed.
+Expect **15 passing** in a second: the verifier's definitions, the
+matcher's rule and the dataset's decimal reading, no chain needed.
 
 ```bash
 npm run test:offchain
 ```
 
 
+
+### Extracting the data
+
+With the raw dataset at the root (see `data/` in section 5):
+
+```bash
+npm run data:extract
+```
+
+It writes `data/homes/` in a second or two and lists every file. Another
+year: `node offchain/dataset/cli.js --year 2023`; another place:
+`--source <dir> --out <dir>`.
 
 ### The independent verifier
 
@@ -1213,10 +1237,10 @@ What it does and prints, stage by stage:
   - The day's profiles are in `offchain/scenarios/day-ahead.js` (`profiles`) and in decision log entry
   2.58.
 3. **Alice's agent modifies her 19:00 bid.** This is two legs: a cancel, then a
-  place. It takes her budget, S1, from 5.58 to 6.08 EUR, past its soft bound of
-  6 EUR: the modification is **flagged** and goes ahead.
-4. **Alice's agent tries to go past her budget**: one more bid worth 2 EUR,
-  which would take her to 7.68 EUR, past the hard bound of 7. **S1 refuses it.**
+  place. It takes her budget, S1, from 5.58 to 6.08 USD, past its soft bound of
+  6 USD: the modification is **flagged** and goes ahead.
+4. **Alice's agent tries to go past her budget**: one more bid worth 2 USD,
+  which would take her to 7.68 USD, past the hard bound of 7. **S1 refuses it.**
   The call does not revert; the script prints every policy's result on it
   from the log.
 5. **Time jumps to the close.** An agent order is now refused, with the market's
@@ -1235,9 +1259,9 @@ What it does and prints, stage by stage:
 Each agent trades under the policies of `prosumers.json`'s `agentPolicies`,
 added to its account at deployment:
 
-- per-action bounds: at most 5 kWh and 5 EUR an order, prices between 0.05 and
+- per-action bounds: at most 5 kWh and 5 USD an order, prices between 0.05 and
   0.50, three days ahead;
-- the budget S1: 6 EUR soft and 7 EUR hard over a sliding day;
+- the budget S1: 6 USD soft and 7 USD hard over a sliding day;
 - the caps S2: 30 kWh of export and 40 kWh of import a day;
 - the cancellation quota S6: 10 kWh an hour, threefold in the last 30 minutes
   before the gate, and 20 messages an hour.
@@ -1278,5 +1302,6 @@ agent's session allows and until when; the events `ProsumerRegistered` and
 | 6    | The attack matrix against all baselines, the false-positive rate on honest arms, gas |
 
 
-Decisions taken in steps 1 to 4 are proposed and not yet confirmed. The open
-ones are listed at the end of `docs/decisions/design-decisions.md`.
+Dan answered every open decision on 16 October (log 4.9): the decisions of
+steps 1 to 4 stand as built, and the payment token is a mock USD. The table at
+the end of `docs/decisions/design-decisions.md` records each answer.

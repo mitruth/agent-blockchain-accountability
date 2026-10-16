@@ -25,7 +25,7 @@
 //
 // Run it again for another day: each run opens the next session.
 
-import { loadDeployment, send, read, calldata, events, now, warpTo, price, eur, kWh } from "../chain/index.js";
+import { loadDeployment, send, read, calldata, events, now, warpTo, price, usd, kWh } from "../chain/index.js";
 import { runMatcher } from "../matcher/index.js";
 import { expireUnmatched, reconcile } from "../keeper/index.js";
 import { commitmentOf, report } from "../sensor/index.js";
@@ -43,7 +43,7 @@ const nameOf = Object.fromEntries(Object.entries(P).map(([name, p]) => [p.accoun
 // --- the prosumers' days ----------------------------------------------------
 //
 // Each returns, for an hour of the Brussels day, the order that prosumer
-// places: [side, Wh, EUR per kWh].
+// places: [side, Wh, USD per kWh].
 
 const profiles = {
   // A household: buys every hour, more at the morning and evening peaks, and
@@ -99,7 +99,7 @@ async function balances() {
     const a = P[name].account;
     const total = await read(token, "LockableERC1155", "balanceOf", [a, 0n]);
     const locked = await read(token, "LockableERC1155", "lockedBalanceOf", [a]);
-    console.log(`  ${name.padEnd(6)} ${eur(total).padStart(18)}   of which locked ${eur(locked)}`);
+    console.log(`  ${name.padEnd(6)} ${usd(total).padStart(18)}   of which locked ${usd(locked)}`);
   }
 }
 
@@ -156,17 +156,17 @@ async function main() {
   console.log(`  19:00: 1.5 kWh at 0.27 → 1.8 kWh at 0.28, ${modify.legs} legs (cancel, then place)`);
   const budget = policyResults("alice", modify.receipt).find((r) => r.name === "S1 budget");
   console.log(
-    `  S1 budget: ${eur(budget.valueBefore)} → ${eur(budget.valueAfter)}, soft ${eur(budget.soft)}, ` +
-      `hard ${eur(budget.hard)}: ${VERDICT[budget.verdict]}`,
+    `  S1 budget: ${usd(budget.valueBefore)} → ${usd(budget.valueAfter)}, soft ${usd(budget.soft)}, ` +
+      `hard ${usd(budget.hard)}: ${VERDICT[budget.verdict]}`,
   );
 
   // ── 4 ───────────────────────────────────────────────────────────────────
   step(4, "Alice's agent tries to go past her budget");
   const greedy = await viaAgent("alice", "placeBids", [ELECTRICITY, [req(12, 5000, "0.40")]]);
-  console.log(`  one more bid: 5 kWh at 0.40, ${eur(price("0.40") * 5n)} — ${greedy.rejected ? "refused" : "!! executed"}`);
+  console.log(`  one more bid: 5 kWh at 0.40, ${usd(price("0.40") * 5n)} — ${greedy.rejected ? "refused" : "!! executed"}`);
   for (const r of policyResults("alice", greedy.receipt)) {
     const amounts = r.name.startsWith("S1")
-      ? `${eur(r.valueBefore)} → ${eur(r.valueAfter)}, hard ${eur(r.hard)}`
+      ? `${usd(r.valueBefore)} → ${usd(r.valueAfter)}, hard ${usd(r.hard)}`
       : r.name.startsWith("A1")
         ? `bounds broken: ${r.valueAfter}`
         : `${r.valueBefore} → ${r.valueAfter} of ${r.hard}`;
@@ -196,7 +196,7 @@ async function main() {
     const slot = Number(bid.slot);
     if (!bySlot.has(slot)) bySlot.set(slot, []);
     bySlot.get(slot).push(
-      `${nameOf[bid.account.toLowerCase()]}←${nameOf[offer.account.toLowerCase()]} ${kWh(tr.quantity)} @${eur(tr.price).replace(" EUR", "")}`,
+      `${nameOf[bid.account.toLowerCase()]}←${nameOf[offer.account.toLowerCase()]} ${kWh(tr.quantity)} @${usd(tr.price).replace(" USD", "")}`,
     );
   }
   for (let i = 0; i < slotCount; i++) {
@@ -251,21 +251,21 @@ async function main() {
       x.penalty += s.penalty;
       x.settled++;
       if (s.penalty > 0n) {
-        console.log(`  ${hhmm(slotStart(i))} ${name}: committed ${kWh(net)}, measured ${kWh(exported - imported)} → penalty ${eur(s.penalty)}`);
+        console.log(`  ${hhmm(slotStart(i))} ${name}: committed ${kWh(net)}, measured ${kWh(exported - imported)} → penalty ${usd(s.penalty)}`);
       }
     }
   }
   for (const [name, x] of Object.entries(tally)) {
     console.log(
-      `  ${name.padEnd(6)} ${String(x.settled).padStart(2)} hours settled: bought ${kWh(x.bought)} for ${eur(x.paid)},` +
-        ` sold ${kWh(x.sold)} for ${eur(x.received)}, penalties ${eur(x.penalty)}`,
+      `  ${name.padEnd(6)} ${String(x.settled).padStart(2)} hours settled: bought ${kWh(x.bought)} for ${usd(x.paid)},` +
+        ` sold ${kWh(x.sold)} for ${usd(x.received)}, penalties ${usd(x.penalty)}`,
     );
   }
 
   // ── 9 ───────────────────────────────────────────────────────────────────
   step(9, "Final balances");
   await balances();
-  console.log(`  manager (penalties collected) ${eur(await read(token, "LockableERC1155", "balanceOf", [manager, 0n]))}`);
+  console.log(`  manager (penalties collected) ${usd(await read(token, "LockableERC1155", "balanceOf", [manager, 0n]))}`);
 }
 
 main().catch((error) => {

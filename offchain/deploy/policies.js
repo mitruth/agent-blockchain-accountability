@@ -76,9 +76,9 @@ export function agentPolicyInstances(p) {
     name: "A1-A6 per action",
     config: encodeAbiParameters([STATIC_CONFIG], [{
       maxQtyWh: BigInt(a.maxQtyWh),
-      maxValue: price(a.maxValueEUR),
-      sellFloor: price(a.sellFloorEUR),
-      buyCeiling: price(a.buyCeilingEUR),
+      maxValue: price(a.maxValueUSD),
+      sellFloor: price(a.sellFloorUSD),
+      buyCeiling: price(a.buyCeilingUSD),
       buyBlockedHours: 0,
       sellBlockedHours: 0,
       horizonSeconds: a.horizonHours * 3600,
@@ -90,7 +90,7 @@ export function agentPolicyInstances(p) {
     contract: "windows",
     name: "S1 budget",
     config: encodeAbiParameters([WINDOW_CONFIG], [{
-      quantity: QUANTITY.BUY_VALUE, soft: price(b.softEUR), window: sliding(b.hours, price(b.capEUR)),
+      quantity: QUANTITY.BUY_VALUE, soft: price(b.softUSD), window: sliding(b.hours, price(b.capUSD)),
     }]),
   });
 

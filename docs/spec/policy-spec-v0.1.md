@@ -199,7 +199,7 @@ Used by S1, S2, S4 and S6.
 
 - **Lazy reset.** Each window carries a generation counter. If c − lastBucket ≥ n, bump the generation and zero the total in O(1). A storage word with a stale generation reads as zero. Otherwise advance bucket by bucket, bounded by n.
 - **Credits** go to the order's original bucket, only if that bucket is still in the window, and never below zero.
-- **Types.** Settlement token is a mock EUR with 6 decimals (D7), so `uint64` holds values up to about 1.8e13 EUR and buckets pack four per slot. Wh as `uint64`.
+- **Types.** Settlement token is a mock USD with 6 decimals (D7, as amended by A4), so `uint64` holds values up to about 1.8e13 USD and buckets pack four per slot. Wh as `uint64`.
 - **Allowed aggregates:** sums only (sum, count, mean as two buffers, ratio of sums as two buffers).
 - **Guarantees, to state in the paper:**
   - any interval of length ≤ W − b admits at most H;
@@ -276,7 +276,7 @@ Used by S1, S2, S4 and S6.
 >
 > See log 4.3.
 
-### 6.2 S1. Owner budget, sliding window (EUR), in WindowPolicy
+### 6.2 S1. Owner budget, sliding window (USD), in WindowPolicy
 
 - **Quantity:** BUY value at limit price, gross. Never net, otherwise sell-and-rebuy refills the budget.
 - **Credits:** on cancel and on expiry of unfilled volume, to the original bucket (D2).
@@ -360,7 +360,7 @@ Used by S1, S2, S4 and S6.
 | D4 | reserveLoad as owner constant; signed load forecast later | Settled for this build |
 | D5 | S4 from attested BMS odometer | Settled |
 | D6 | Wh as `uint64`; token value as `uint64` at 6 decimals | Settled |
-| D7 | Settlement token: mock EUR, 6 decimals | Settled |
+| D7 | Settlement token: mock USD, 6 decimals (amended by A4; was mock EUR) | Settled |
 | D8 | S5 on committed positions, with exposure-reducing exemption | Settled |
 | D9 | Placement-time indexing; delivery bound stated explicitly (6.3) | Settled |
 | D10 | Exposure-reducing actions are never rejected | Settled |
@@ -581,7 +581,7 @@ Decided with Dan on 9 October 2026, after Section 10 was filled in. Where these 
 - **A1. Build in place.** This repo is already the fork, and the untouched original stays in `agent-energy-blockchain-proiect2`. The v0.1 contracts are added to this project directly, not as a separate package (overrides Section 2). The earlier enforcement contracts stay and keep compiling until S1 covers their function in step 4, and are then retired, which settles D13 in practice.
 - **A2. Slot length is a parameter.** The HEMS dataset is 30 min. Every default this brief states as "15 min" (S2 and S4 bucket, SoC staleness of one slot) reads as one slot, with the slot length set at deployment.
 - **A3. Toolchain.** Foundry 1.8.5 with ModuleKit 0.5.9 is added, on Solidity 0.8.25 and EVM `cancun`. The custom `SmartAccount` cannot host an executor; PolicyGate is installed as an executor module on real ERC-7579 accounts. Hardhat stays as a second runner for every test except the real-account ones (log 0.5 to 0.7).
-- **A4. Open.** The honest-arm data is in USD and the settlement token is a mock EUR (D7). Whether that is a 1:1 relabel or a conversion is not decided.
+- **A4. The settlement token is a mock USD.** Decided by Dan on 16 October 2026. The HEMS data is in USD, so the token, the policies' configurations and every printed amount are in USD as well, and no exchange rate enters. This amends D7, which said mock EUR. See log 4.9.
 - **A5. The market is a port of Dan's P2P energy flexibility market.** Decided on 14 October 2026. Section 1's "market rules belong to the market contract and are assumed" still holds, but the market is now concrete: BRIGHT's and DEDALUS's structure (manager, session, prosumer contract, lockable ERC-1155, settlement), with batches over a configurable number of slots, cancel and modify until the session closes, off-chain matching by a registered matcher, settlement by registered sensors, and caller checks added throughout. See `docs/analysis/market-structure.md` and log 2.20 to 2.52.
 - **A6. The independent verifier is JavaScript, not Python.** Decided on 14 October 2026, with the rule that every off-chain program is JavaScript. Independence comes from the algorithm: the verifier computes each window from its definition, never from the contract's data structure. See Section 8 and log 3.7.
 - **A7. D1 decided: the agent holds a Smart Session, the policies stay in the gate.** Decided on 15 October 2026, by Dan, on condition that three checks passed. They did:

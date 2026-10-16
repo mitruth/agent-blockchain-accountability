@@ -1,0 +1,7 @@
+homeId,name,householdType,people,houseAreaM2,pvCapacityW,batteryCapacityWh,batteryPowerW,socInitialBps,socMinBps,socMaxBps,etaChargeBps,etaDischargeBps
+1,home_01,single-worker,1,62.97,4645,5000,3000,7146,2000,9000,9500,9500
+2,home_02,retired,2,82.2,6782,7500,5000,7109,2000,9000,9500,9500
+3,home_03,working-couple,2,87.41,6016,7500,5000,4225,2000,9000,9500,9500
+4,home_04,remote-worker,3,132.34,6542,10000,5000,6793,2000,9000,9500,9500
+5,home_05,family-children,4,122.28,7544,10000,5000,4240,2000,9000,9500,9500
+6,home_06,large-family,5,196.17,8625,15000,7000,6277,2000,9000,9500,9500
