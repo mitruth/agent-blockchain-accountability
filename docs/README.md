@@ -28,7 +28,6 @@ Read these in order.
 | `plan/` | Where the work stands and what comes next | `roadmap.md` |
 | `analysis/` | Comparisons and studies that inform a decision, with sources | `delegation-architecture.md`: the gate against Smart Sessions, MetaMask's Delegation Framework and Coinbase Spend Permissions, the checks run, and the decision on D1 (section 10); `market-structure.md`: how Dan's P2P market is ported behind the gate |
 | `reports/` | Results of runs worth keeping, dated, written by the tools themselves and annotated after | `mutation-2026-10-15.md` and `mutation-policies-2026-10-16.md`: the mutation runs of steps 3 and 4, every mutant and its verdict; `gas-2026-10-16.md`: gas per order, per policy and combined |
-| `earlier-design/` | The project that came before this one: a rolling cap on daily energy spend, settled after the fact. Its code was removed at step 4; its documentation is kept for reference, no longer maintained | Its guide, hands-on tour, decision log, spec, verifier notes and roadmap |
 
 Expected next, once the work reaches them: `security/` for the threat model and
 security analysis, `evaluation/` for results, gas measurements and the

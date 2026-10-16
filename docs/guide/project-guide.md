@@ -12,7 +12,6 @@ the per-action bounds and the sequence policies S1, S2 and S6.
 | What must be built, all six steps       | `docs/spec/policy-spec-v0.1.md`      |
 | Why each thing was built the way it was | `docs/decisions/design-decisions.md` |
 | Status and what comes next              | `docs/plan/roadmap.md`               |
-| The project that came before this one   | `docs/earlier-design/`               |
 
 
 ---
@@ -647,24 +646,27 @@ and agent validity; and `agentPolicies`, the policies every agent trades under
 | `spec/policy-spec-v0.1.md`      | The specification: all six steps, the policies, the decisions table, the build order     |
 | `decisions/design-decisions.md` | Every decision taken while building, step by step, with the reason and what was rejected |
 | `plan/roadmap.md`               | Status per step and the open decisions                                                   |
-| `earlier-design/`               | The previous project's guide, tour, decision log, spec, verifier notes and roadmap       |
+| `reports/`                      | Dated results: the mutation runs and the gas measurements                               |
 
 
 
 
-### The earlier design, removed
+### The project this one started from
 
-The project that came before this one enforced a rolling cap on daily energy
-spend, computed after the fact from meter readings and oracle prices. S1 now
-covers what it did, before the fact and on each order, so its code was removed
-at step 4 (spec D13): its contracts, its 144 tests, its Python verifier, the
-differential and its key scripts. Git keeps them: the last commit that holds
-them is the one before step 4.7.
+This repository began as a copy of the earlier project, which enforced a
+rolling cap on daily energy spend after the fact. S1 now does that before the
+fact, on each order. Nothing of the earlier project is left in the tree:
 
-| Kept | Where |
-| ---- | ----- |
-| Its documentation | `docs/earlier-design/` |
-| The HEMS simulation's daily records of the three controller arms, for step 6's calibration and false-positive rate | `data/hems/` |
+- **Its code:** contracts, 144 tests, Python verifier, differential and key
+  scripts. Removed at step 4.7 (spec D13).
+- **Its documentation, environment template and Base Sepolia keys:** removed
+  afterwards (decision 4.8).
+
+Git keeps all of it: `git show 3c4d84e:<path>` reads any file as it was.
+
+Only its data is kept: the HEMS simulation's daily records of the three
+controller arms, in `data/hems/`, for step 6's calibration and false-positive
+rate.
 
 Step 5 may reuse the EIP-712 signature checking of its `MeterReadings.sol`, from
 git, as the base for oracle verification.

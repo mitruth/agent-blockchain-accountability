@@ -3,8 +3,8 @@
 The records below come from the home energy simulation that supplies the
 honest-agent arms. Step 6 of the build uses them to calibrate the policies' caps
 and to measure how often a cap refuses an honest agent. They were produced for
-the earlier design (`docs/earlier-design/`), whose code was removed at step 4;
-the data is kept, unchanged.
+the project this repository started from, whose code and documentation were
+removed at step 4; the data is kept, unchanged.
 
 They are daily totals. The step 6 evaluation needs order-level traces as well,
 from the same simulation.

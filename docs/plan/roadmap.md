@@ -135,7 +135,7 @@ section 10.
 | Mutation, `policies` catalogue | 43 of 43 caught, after one test added (`docs/reports/mutation-policies-2026-10-16.md`) |
 | `npm test` | 284 passing (the earlier design's 144 removed) |
 | `npm run test:offchain` | 12 passing |
-| Foundry, `test/accounts/` | **Not re-run at step 4.7**: Docker was not running. Last passing after 4.2 (8 of 8) |
+| Foundry, the whole suite | 292 passed (the 284 above and the 8 real-account tests), 16 October |
 | `npm run demo:flow` | The same day, figure for figure; Alice's modification flagged by S1, her extra bid refused by it |
 
 **What is fair to say now.** On the ported market, an agent acting through a
@@ -179,4 +179,4 @@ Things noticed in steps 0 and 1 that belong to a later step.
 | A deployment script, and a test with a real owner validator | Before any testnet run |
 | The agent's session on a real account: expiry by a time-frame user-op policy, revocation by removing it; events name the account, not the agent (log 3.9, 4.1) | Before any testnet run |
 | Install Smart Sessions on Kernel without a hook; deploy Smart Sessions v1.0.0 or later (log 3.9) | Before any testnet run |
-| Run `test/accounts/` and the `accounts` mutation catalogue (Foundry in Docker) against the step 4 gate | When Docker is running |
+| Run the `accounts` mutation catalogue (Foundry in Docker) against the step 4 gate | Step 5, with Docker |

@@ -2164,6 +2164,39 @@ step 4").
   shared mocks have changed since (the decoders' `slotStart`) and compile under
   Hardhat.
 
+
+### 4.8 — The rest of the earlier project removed
+
+**Status.** Settled by Dan ("remove old project files, the project we started on
+and modified for these custom policies"; scope chosen 16 October: the leftovers
+in this repository, keeping the HEMS data).
+
+**Decision.**
+
+- **Removed:**
+  - `docs/earlier-design/`, the earlier project's six documents;
+  - the earlier `.env.example`, with the old contract addresses, the GUARDIAN
+    role and scripts that no longer exist;
+  - the GUARDIAN key from `hardhat.config.js`.
+- **Rewritten.** A new `.env.example` names the two keys of the current key
+  model: the owner's, and the agent's session key. The tests and the demo need
+  neither.
+- **Kept:**
+  - `data/hems/`, the HEMS records, which step 6 needs;
+  - Dan's Cursor rule;
+  - the sibling folder `agent-energy-blockchain-proiect2`, the original copy,
+    which lies outside this repository.
+- **Recoverable.** Git keeps everything removed: `git show 3c4d84e:<path>`.
+
+**Entries above still name these files.** The decision log is a history, and
+those names were right when written.
+
+**Checked.**
+
+- Foundry, the whole suite in Docker: 292 passed, the step 4 gate included on
+  the four real accounts. This closes the check left open at 4.7.
+- After a clean rebuild: `npm test` 284 passing.
+
 ---
 
 ## Open decisions

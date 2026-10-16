@@ -1,13 +1,9 @@
 import "dotenv/config";
 
-// Three keys, never one. The audited config loaded a single PRIVATE_KEY that
-// held both owner and agent authority, which is finding F1. Scripts pick the
-// account for the role they act as; nothing defaults to "the" key.
-const accounts = [
-  process.env.OWNER_PRIVATE_KEY,
-  process.env.AGENT_PRIVATE_KEY,
-  process.env.GUARDIAN_PRIVATE_KEY,
-].filter(Boolean);
+// Two keys, never one (audit finding F1): the owner's, and the agent's
+// session key. Only for Base Sepolia; the tests and the local demo use
+// Hardhat's public test keys.
+const accounts = [process.env.OWNER_PRIVATE_KEY, process.env.AGENT_PRIVATE_KEY].filter(Boolean);
 
 export default {
   solidity: {
