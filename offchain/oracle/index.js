@@ -1,0 +1,16 @@
+// oracle: the trusted devices around the gate, played from the project's data.
+//
+//   typed.js     what they sign: EIP-712 BMS readings and PV forecasts
+//   battery.js   a battery as its BMS sees it: a simple model, or an arm replayed
+//   forecast.js  the PV forecast: actual, or yesterday's
+//   data.js      data/homes/ and data/arms/, and data slots to market slots
+//   relay.js     on the chain: post a forecast, sign a reading, read them back
+//   cli.js       npm run oracle:post
+
+export { KIND, TYPES, domain, signBms, signForecast } from "./typed.js";
+export { Battery, replayArm } from "./battery.js";
+export { MODES, pvForecast } from "./forecast.js";
+export {
+  DATA_SLOT_SECONDS, SLOTS_PER_DAY, homeParams, homeSlots, armSettings, armSlots, indexOfDate, resample,
+} from "./data.js";
+export { postForecast, bmsReading, handIn, batteryOf, pvOf } from "./relay.js";

@@ -29,7 +29,7 @@ project contains today, what the tests prove and how to run everything.
 | `contracts/interfaces/` | ERC-7579 pieces, the decoder and policy interfaces |
 | `contracts/harness/` | Stand-ins for tests and the local system, not part of the system |
 | `test/` | Solidity tests, one folder per contract folder; `test/accounts/` runs under Foundry only |
-| `offchain/` | The JavaScript around the contracts, one package per job: `chain`, `deploy`, `matcher`, `keeper`, `sensor`, `scenarios`, `verifier`, `mutation`, `dataset` |
+| `offchain/` | The JavaScript around the contracts, one package per job: `chain`, `deploy`, `matcher`, `keeper`, `sensor`, `scenarios`, `verifier`, `mutation`, `dataset`, `oracle` |
 | `docs/` | Guide, specification, decision log, roadmap, analyses |
 | `data/homes/` | Six homes from the HEMS dataset: PV, battery, and 2022 in 30-minute slots, as integers (`npm run data:extract`) |
 | `data/arms/` | The honest controllers' runs for home_01, 2022, every 30 minutes, for step 6's false-positive rate (`npm run data:extract`) |

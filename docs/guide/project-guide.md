@@ -42,7 +42,7 @@ The build follows six steps, fixed by Section 9 of the spec.
 | 2    | Position ledger, reconcile, the P2P market port and its decoder             | **Built and passing** |
 | 3    | `WindowLib`, independent verifier, mutation suite                           | **Built and passing** |
 | 4    | The session entry point, the policy phases; per-action policies, S1, S2, S6 | **Built and passing** |
-| 5    | Oracle verification, PV relay, S3, S4, S5                                   | In progress: 5.1 built |
+| 5    | Oracle verification, PV relay, S3, S4, S5                                   | In progress: 5.1 and 5.2 built |
 | 6    | Evaluation                                                                  | Not started           |
 
 
@@ -78,6 +78,12 @@ will rely on, the battery's state from its BMS and the PV forecast. It checks
 each reading's signature against the signer the account registered, refuses a
 stale, future or reordered reading, and keeps the latest. The agent hands in
 readings with its order; it cannot register a signer.
+- **The oracles, played from the data** (step 5.2, `offchain/oracle/`): a PV
+forecast relay and a BMS for each agent's house. The forecast is the home's
+PV from `data/homes/`, actual or yesterday's; the battery replays an honest
+arm from `data/arms/` (Alice) or follows a simple battery model. Both sign
+EIP-712 readings the verifier accepts. `npm run oracle:post` tries them on
+the local node.
 - **The P2P energy market, ported from Dan's BRIGHT and DEDALUS projects:** a
 market manager, market sessions, one prosumer contract per prosumer, a lockable
 ERC-1155 token for payment and energy, and the 10% settlement rule. Section 3
@@ -101,9 +107,10 @@ under Hardhat; the other 3 are faults in test doubles.
 
 ### What does not exist yet
 
-**No policy that uses the readings yet.** The verifier is built (5.1); the
-relays that sign and post readings (5.2) and the physical policies, S3
-deliverability, S4 battery cycles and S5 ramp (5.3 to 5.5), come next. There
+**No policy that uses the readings yet.** The verifier (5.1) and the oracles
+that sign and post readings (5.2) are built; the physical policies, S3
+deliverability, S4 battery cycles and S5 ramp (5.3 to 5.5), come next. The
+demo's agents do not bring readings with their orders yet (5.7). There
 is no tariff oracle, so A3's price bounds stay absolute (spec A8). Nothing is
 deployed to a network.
 
@@ -585,7 +592,8 @@ configuration.
 All JavaScript, with viem. Unit tests sit beside the code as `*.test.js` (`npm run test:offchain`). Each folder is one package with one job; its
 `index.js` is what the others import, and a `cli.js`, where there is one, is
 what `npm run` starts. Packages depend on `chain/` and on nothing else, except
-`scenarios/`, which uses them all. `dataset/` needs no chain at all.
+`scenarios/`, which uses them all. `dataset/` needs no chain at all; `oracle/`
+reads the data that `dataset/` writes.
 
 
 | Package      | What it does                                                                                                                                                                                                                                                                                               | Started by                          |
@@ -598,6 +606,7 @@ what `npm run` starts. Packages depend on `chain/` and on nothing else, except
 | `scenarios/` | `day-ahead.js`, one market day from opening the session to settlement; `calendar.js`, the Brussels clock and the day-ahead closing time                                                                                                                                                                    | `npm run demo:flow`                 |
 | `verifier/`  | The independent check of the windows: `windows.js` defines each class, `guarantees.js` measures spec 5.3's bounds over every interval, `verify.js` replays a history and compares, `fuzz.js` runs random and scripted histories through `WindowProbe`, `selftest.js` tampers with histories it must reject | `npm run verify:window`             |
 | `mutation/`  | The mutation suite: `catalogs/` holds the defects per part of the system, `index.js` applies one at a time and runs the tests                                                                                                                                                                              | `npm run mutate`                    |
+| `oracle/`    | The trusted devices, played from the data: `typed.js` signs EIP-712 BMS readings and PV forecasts as the verifier expects; `battery.js` is a battery as its BMS sees it, a simple model or an honest arm replayed; `forecast.js` gives the PV forecast, actual or yesterday's; `relay.js` posts and reads them on the chain | `npm run oracle:post`, a scenario |
 | `dataset/`   | Writes `data/homes/` from Dan's raw HEMS dataset (`index.js`: the six homes' PV and battery, a year of 30-minute slots per home, prices, daily totals, representative days) and `data/arms/` from `Demo_PlanApplyEvaluate` (`arms.js`: the honest controllers' step logs, settings, tasks and results), checking one against the other. Integers only; `decimal.js` reads every digit of the CSVs' decimals exactly, without floating point | `npm run data:extract`              |
 
 
@@ -658,7 +667,7 @@ and agent validity; and `agentPolicies`, the policies every agent trades under
 | `foundry.toml`      | Foundry build settings: Solidity 0.8.25, EVM `cancun`, optimizer 200 runs. Holds the import remappings ModuleKit needs                                                                                                                                                                                                           |
 | `hardhat.config.js` | Hardhat build settings, same compiler settings. For Base Sepolia, loads the owner's key and the agent's session key from `.env`, never one for both                                                                                                                                                                              |
 | `remappings.txt`    | One line, for `forge-std`. Both tools read it                                                                                                                                                                                                                                                                                    |
-| `package.json`      | `npm test` runs the Hardhat suite and `test:offchain` the JavaScript tests; `verify:window` runs the verifier, `mutate` the mutation suite; `npm run node`, `demo:deploy`, `demo:flow`, `demo:match` run the local system; `data:extract` writes `data/homes/`; `build` compiles. Dependencies: Hardhat 3, viem, OpenZeppelin 5.6.1, forge-std 1.9.6, ModuleKit 0.5.9 |
+| `package.json`      | `npm test` runs the Hardhat suite and `test:offchain` the JavaScript tests; `verify:window` runs the verifier, `mutate` the mutation suite; `npm run node`, `demo:deploy`, `demo:flow`, `demo:match` run the local system; `data:extract` writes `data/homes/` and `data/arms/`; `oracle:post` posts readings on the local node; `build` compiles. Dependencies: Hardhat 3, viem, OpenZeppelin 5.6.1, forge-std 1.9.6, ModuleKit 0.5.9 |
 
 
 
@@ -1136,7 +1145,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **341 passed**: the 333 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 16 October, before step 5.1, with 292; not re-run since, as it needs Docker.
+Expect **341 passed**: the 333 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 16 October, after step 5.1.
 
 With Foundry installed and allowed to run:
 
@@ -1180,8 +1189,14 @@ and `test_gateIsNeverATargetWhateverTheCall`. Put the line back.
 
 ### The JavaScript tests
 
-Expect **15 passing** in a second: the verifier's definitions, the
-matcher's rule and the dataset's decimal reading, no chain needed.
+Expect **29 passing** in a few seconds, after a build:
+
+- the verifier's definitions, the matcher's rule and the dataset's decimal
+  reading, with no chain;
+- the oracles' battery model, arm replay, forecasts and data (10), with no
+  chain;
+- the oracles' signatures against the contract (4), on a chain inside the
+  process.
 
 ```bash
 npm run test:offchain
@@ -1343,6 +1358,29 @@ Each run opens a new session, so the flow can be run again on the same
 deployment. A run that stops half-way leaves its session's orders locked;
 deploy again for a clean slate.
 
+**The oracles** (step 5.2). The deployment registers, for each agent's account,
+its BMS key and the PV forecast provider in the oracle verifier. To have them
+sign and post:
+
+```bash
+npm run oracle:post -- --attacks
+```
+
+For Alice and Carol it posts a PV forecast for the next 24 slots and hands in
+a battery reading for the current slot, then prints what the verifier holds.
+With `--attacks` it also tries an older reading, 1 kWh fuller, and a reading
+signed by another key: both are refused, with the reason. Other options:
+
+- `--date 2022-06-13`: the day of the data the slots are taken from;
+- `--mode yesterday`: the previous day's PV as the forecast, instead of the
+  actual;
+- `--slots 24`: how many slots ahead.
+
+Alice's battery replays arm B2 of home_01 (`prosumers.json`: `"battery":
+"B2"`); Carol's is home_05's battery at its initial charge. Run it again
+within the slot and the battery reading is the one already held. The flow does
+not use the readings yet.
+
 The matcher can also be run on its own, for the current session once it has
 closed:
 
@@ -1365,7 +1403,7 @@ agent's session allows and until when; the events `ProsumerRegistered` and
 
 | Step | Adds                                                                                 |
 | ---- | ------------------------------------------------------------------------------------ |
-| 5    | 5.1 built: signed readings. Next, the relays (5.2), deliverability S3, battery cycles S4, ramp S5 |
+| 5    | 5.1 and 5.2 built: signed readings, and the oracles that sign them. Next, deliverability S3, battery cycles S4, ramp S5 |
 | 6    | The attack matrix against all baselines, the false-positive rate on honest arms, gas |
 
 

@@ -2498,6 +2498,99 @@ so the account's clock still only moves forward.
 Re-posting over a stored forecast costs far less, since the storage is no
 longer empty. Per-transaction figures come with the gas report of 5.6.
 
+
+### 5.2 — The oracles off-chain, played from the data
+
+**Status.** Proposed. Uses Dan's choices made before step 5: Alice's battery
+from the arms, Bob home_03, Carol home_05; the demo forecast is the actual PV,
+the tests also use one with errors.
+
+**Decision.** A package, `offchain/oracle/`:
+
+- **`typed.js`:** EIP-712 signing with viem, with the types and domain of the
+  verifier. A reading travels as `{ kind, data, signature }`, `data` being
+  the ABI-encoded struct, ready for `accept` or for `submit`'s readings.
+- **`battery.js`:** a battery as its BMS sees it, in whole Wh. Two ways to
+  drive it:
+  - a simple model, `step(netWh)`: a surplus charges, a shortfall
+    discharges, within the slot's power, the charge limits and the
+    efficiencies;
+  - an honest arm replayed, `replayArm`: the arm's state of charge and
+    discharge, from its step log.
+- **`forecast.js`:** the PV forecast, in two modes:
+  - **actual:** the PV that then came;
+  - **yesterday:** the same slots a day earlier, a naive forecast whose errors
+    are those of real weather.
+- **`data.js`:** reads `data/homes/` and `data/arms/`, and sums half-hours to
+  the market's slot length.
+- **`relay.js`:** posts a forecast and hands in a reading, from a funded relay
+  key; signs a BMS reading for the agent; reads back what the verifier holds.
+- **`cli.js`:** `npm run oracle:post`, for trying it on the local node.
+
+**The deploy script** registers, for each account with an agent, its BMS key
+and the forecast provider. The maximum ages are one slot for the BMS (τ_soc)
+and one hour for the forecast (τ_pv). The deployment file records:
+
+- the oracle keys;
+- each prosumer's home;
+- whether its battery replays an arm (Alice: `"battery": "B2"` in
+  `prosumers.json`) or follows the model.
+
+**Choices inside it.**
+
+- **The odometer counts energy drawn from the cells,** the house's discharge
+  over the discharge efficiency. The arms count cycles the same way: their
+  wear cost is that figure over the capacity. So S4 can be set from the arms'
+  cycle counts.
+  - Replaying B0, B1 and B2 gives 343.56, 446.79 and 452.42 cycles a year,
+    against the arms' 343.31, 446.38 and 452.07.
+  - The replay is a little higher because each slot's draw rounds up.
+- **Rounding errs towards a battery holding less.** What is stored rounds
+  down, what is drawn rounds up: a reading never shows energy the battery does
+  not have.
+- **The forecast with errors is yesterday's PV,** not random noise. Its errors
+  are real ones, and it needs no seed.
+- **Keys.**
+  - The provider signs with one key (index 19) and the relay sends from
+    another (18), so the signer needs no gas.
+  - Each prosumer's BMS key is index 40 plus its position: unfunded, since it
+    only signs.
+  - These are all keys of the public test mnemonic, as everywhere in the
+    project.
+- **The data's day on the market's.** The relay takes data slots in sequence:
+  slot k of a market day is slot k of the chosen date, running into the next
+  date when a day has more than 48 slots. The command lines up the current
+  slot by its UTC time of day. The scenario will use the market day (5.7).
+- **`deploy/` keeps depending on `chain/` only.** It chooses the oracle keys
+  and records them; `oracle/` reads them from the deployment.
+
+**Rejected.**
+
+- **A seeded random forecast error:** artificial, and it must be justified.
+  Yesterday's PV is the usual naive baseline.
+- **The odometer on the house side:** it would not match the arms' cycles.
+- **A long-running relay process posting every hour:** the scenarios move the
+  node's clock by hand, so they call the relay when they need it.
+
+**Changed with it.** `npm run test:offchain` now builds first: the signing
+test deploys the verifier on a chain inside the process.
+
+**Checked.**
+
+- **Foundry, the whole suite in Docker: 341 passed.** This closes the check
+  left open at 5.1: `test/accounts/` compiles and passes with the new
+  `submit`.
+- **`npm run test:offchain`: 29 passing.** The 14 new ones include viem's
+  EIP-712 hash equal to the contract's digest, off-chain signatures accepted,
+  and a reading changed after signing refused.
+- **On a fresh node,** `demo:deploy` then `oracle:post -- --attacks`:
+  - Alice's battery reading (B2 replayed) and Carol's (home_05 at 42 %) are
+    accepted, with 24 hours of forecast;
+  - an older reading is refused (`Oracle_Reordered`), and so is one signed by
+    another key (`Oracle_WrongSigner`);
+  - `--mode yesterday` posts a different forecast;
+  - `demo:flow` then runs the same day as before.
+
 ---
 
 ## Open decisions

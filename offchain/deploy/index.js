@@ -19,6 +19,17 @@ export const DEFAULT_CONFIG = new URL("./prosumers.json", import.meta.url);
 const OPERATOR = 0;
 const MATCHER = 1;
 const KEEPER = 2;
+// The oracles (step 5): the relay posts, funded; the forecast provider and
+// each prosumer's BMS only sign, so their keys are past the funded twenty.
+const RELAY = 18;
+const PV_PROVIDER = 19;
+const bmsKeyOf = (i) => 40 + i;
+// `ReadingKind` in OracleVerifier.
+const BMS = 0;
+const PV_FORECAST = 1;
+// How old a reading may be when accepted: the BMS one slot (spec 5.4,
+// tau_soc), the forecast one hour (tau_pv).
+const PV_MAX_AGE = 3600;
 const EXECUTOR_MODULE = 2n;
 const MAX_UINT = 2n ** 256n - 1n;
 
@@ -89,6 +100,10 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     const entry = {
       account,
       prosumer,
+      // Whose data plays this house (data/homes/), and whether its battery
+      // replays an honest arm (data/arms/) or follows the simple model.
+      home: p.home,
+      battery: p.battery ?? "model",
       owner: { address: owner, keyIndex: roles.owner },
       sensor: { address: sensor, keyIndex: roles.sensor },
     };
@@ -106,6 +121,13 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
         await asAccount(gate, "PolicyGate", "setDecoder", [prosumer, sel, decoder]);
       }
       entry.agent = { address: agent, keyIndex: roles.agent, validUntil: Number(validUntil) };
+
+      // Owner path: the devices whose signed readings the policies trust
+      // (step 5): the house's BMS, and the PV forecast provider.
+      const bms = key(bmsKeyOf(i)).address;
+      await asAccount(oracle, "OracleVerifier", "setDevice", [BMS, bms, config.slotSeconds]);
+      await asAccount(oracle, "OracleVerifier", "setDevice", [PV_FORECAST, key(PV_PROVIDER).address, PV_MAX_AGE]);
+      entry.bms = { address: bms, keyIndex: bmsKeyOf(i) };
 
       // Owner path: the policies the agent trades under (step 4).
       entry.policies = [];
@@ -136,6 +158,12 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
       operator: { address: key(OPERATOR).address, keyIndex: OPERATOR },
       matcher: { address: key(MATCHER).address, keyIndex: MATCHER },
       keeper: { address: key(KEEPER).address, keyIndex: KEEPER },
+    },
+    oracles: {
+      relay: { address: key(RELAY).address, keyIndex: RELAY },
+      pvProvider: { address: key(PV_PROVIDER).address, keyIndex: PV_PROVIDER },
+      bmsMaxAge: config.slotSeconds,
+      pvMaxAge: PV_MAX_AGE,
     },
     prosumers,
   };

@@ -25,8 +25,8 @@
     }
   },
   "prosumers": [
-    { "name": "alice", "agent": true, "fundsUSD": 1000 },
-    { "name": "bob", "agent": false, "fundsUSD": 1000 },
-    { "name": "carol", "agent": true, "fundsUSD": 1000 }
+    { "name": "alice", "agent": true, "fundsUSD": 1000, "home": "home_01", "battery": "B2" },
+    { "name": "bob", "agent": false, "fundsUSD": 1000, "home": "home_03" },
+    { "name": "carol", "agent": true, "fundsUSD": 1000, "home": "home_05" }
   ]
 }
