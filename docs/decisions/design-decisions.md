@@ -2307,6 +2307,73 @@ records in `data/hems/`. `--year` takes another.
 - After the USD relabel (4.9), the demo on a fresh node prints the same day
   in USD.
 
+
+### 4.11 — The honest arms' step logs in `data/arms/`
+
+**Status.** Settled by Dan for the rule ("I want the data for step 6 here, in
+the data folder"; scripts may read `Demo_PlanApplyEvaluate/data/`). What is
+extracted is proposed.
+
+**Source.** `Demo_PlanApplyEvaluate/data/`, the HEMS simulation's outputs for
+home_01 in 2022. Only that folder is read; the simulation's scripts are not.
+
+**The extract,** by `npm run data:extract` (`offchain/dataset/arms.js`), into
+`data/arms/home_01/2022/`:
+
+- **`settings.csv`:** the battery, grid and price settings the arms ran with.
+- **`appliance-tasks.csv`:** the 128 appliance jobs.
+- **One 30-minute file per arm:** state of charge, charge, discharge,
+  appliances, import, export, prices, cost.
+- **`daily-results.csv` and `annual-results.csv`:** the simulation's own
+  figures.
+
+**Which arms.** The seven that ran for real: B_null, B0, B0star, B1, B2, B2r,
+B2nn. The spec names B0 and B2 and scores against B2; B1 is the best case; the
+others are cheap to keep, about 1.2 MB each.
+
+- **Left out: A0 to A2.** Their runs are mock echoes, with results equal to
+  B0's and B2's; `--arms A0,A1` adds them once they have really run.
+- **Left out: the smoke-test runs** of a few days.
+
+**Rounding.** The logs print floats in full (`1.4999999952631584`,
+`2.42e-09`, `-0.0`). `decimal.js` now reads every digit and rounds once, at
+any precision, where it used to refuse more than nine decimals.
+
+- The homes' output is unchanged by this: byte for byte, checked.
+
+**Slots count from 0,** as in `data/homes/`; the source's steps count from 1.
+A task's deadline is the last slot it may run in: no arm ran a task past it,
+and many ended exactly on it.
+
+**Checked before writing:**
+
+- every arm has the same dates and prices;
+- the export price is 30 % of the import price, within a micro-USD;
+- the state of charge stays within the settings;
+- each day's import and export, summed from the slots, matches the
+  simulation's daily figures within rounding;
+- slot by slot against `data/homes/`: PV, prices, and the fixed load, which is
+  base load and HVAC, or all the load for B_null, within 1 Wh.
+
+Also:
+
+- B0, B1 and B2's annual import and export agree with the sum of their daily
+  records in `data/hems/` within 14 Wh in a year: one rounds the year, the other each
+  day;
+- two runs give byte-identical files;
+- `npm run test:offchain`: 15 passing.
+
+**Noticed, for step 6:**
+
+- **Imports and exports, not market orders.** How an honest plan becomes bids
+  and offers is a step 6 choice.
+- **The battery settings differ from the dataset's.** The arms ran with 10 % to
+  100 % state of charge, starting at 50 %; the dataset gives 20 % to 90 %. A
+  replay uses the arms' settings.
+- **Only home_01 was simulated.**
+- **The simulation's sanity report fails one check:** B1 improves on B0 by
+  9.07 %, outside its expected 10 % to 30 %. Its other nine checks pass.
+
 ---
 
 ## Open decisions

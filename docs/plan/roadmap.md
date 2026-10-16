@@ -155,8 +155,10 @@ blocked, a stale or reordered reading is rejected, an exposure-reducing cancel
 always passes, and gas is reported as a function of the horizon k.
 
 **The data is ready** (log 4.10): `data/homes/` has the six homes' battery and PV
-parameters, and 2022 in 30-minute slots, with representative days. Still
-needed, for step 6: the honest arms' step logs, from `Demo_PlanApplyEvaluate`.
+parameters, and 2022 in 30-minute slots, with representative days. For step 6,
+`data/arms/` has the honest controllers' step logs for home_01 (log 4.11). Still
+open for step 6: how an honest plan becomes market orders; A0 and A1 once they
+have really run.
 
 ---
 

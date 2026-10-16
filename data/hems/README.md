@@ -6,8 +6,8 @@ and to measure how often a cap refuses an honest agent. They were produced for
 the project this repository started from, whose code and documentation were
 removed at step 4; the data is kept, unchanged.
 
-They are daily totals. The step 6 evaluation needs order-level traces as well,
-from the same simulation.
+They are daily totals. The step logs they were built from, slot by slot, are in
+[`data/arms/`](../arms/README.md).
 
 These CSVs are a compressed, integer-only view of one simulated year of home energy
 control for `home_01` (2022). Each file is one way of running the same house.

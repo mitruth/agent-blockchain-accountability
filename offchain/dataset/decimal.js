@@ -1,27 +1,16 @@
-// Decimal strings from the dataset's CSVs to integers, without floating point.
+// Decimal strings from the datasets' CSVs to integers, without floating point.
 // 0.1945 kWh is 194.4999... Wh as a float; read as a string it is exactly
-// 194.5 Wh and rounds once, to 195.
+// 194.5 Wh and rounds once, to 195. The controllers' logs print floats in
+// full (1.4999999952631584, 2.42e-09, -0.0): every digit is read, then the
+// value is rounded once.
 
-const DIGITS = 9;
-const NANO = 10n ** BigInt(DIGITS);
-
-/**
- * "0.194018" → 194018000n, "4.88e-06" → 4880n: the value × 10^9, exact.
- * Throws on anything else, and on a value with more than 9 decimals.
- */
-export function parseNano(text) {
-  const m = /^(-)?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(String(text).trim());
+/** "4.88e-06" → { digits: 488n, exp: -8 }: the value is digits × 10^exp, exactly. */
+export function parseDecimal(text) {
+  const m = /^([+-])?(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(String(text).trim());
   if (!m) throw new Error(`not a decimal: "${text}"`);
   const frac = m[3] ?? "";
-  const shift = DIGITS + Number(m[4] ?? 0) - frac.length;
-  let n = BigInt(m[2] + frac);
-  if (shift >= 0) n *= 10n ** BigInt(shift);
-  else {
-    const d = 10n ** BigInt(-shift);
-    if (n % d) throw new Error(`more than ${DIGITS} decimals: "${text}"`);
-    n /= d;
-  }
-  return m[1] ? -n : n;
+  const digits = BigInt(m[2] + frac);
+  return { digits: m[1] === "-" ? -digits : digits, exp: Number(m[4] ?? 0) - frac.length };
 }
 
 /** n / d, rounded half away from zero. */
@@ -35,5 +24,7 @@ export function roundDiv(n, d) {
 
 /** A decimal in some unit, times `factor`, as a rounded integer: ("0.194018", 1000) → 194n. */
 export function scaled(text, factor) {
-  return roundDiv(parseNano(text) * BigInt(factor), NANO);
+  const { digits, exp } = parseDecimal(text);
+  const n = digits * BigInt(factor);
+  return exp >= 0 ? n * 10n ** BigInt(exp) : roundDiv(n, 10n ** BigInt(-exp));
 }

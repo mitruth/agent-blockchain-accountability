@@ -5,25 +5,15 @@
 //   readYear(dir, home, y)  one home's 48 slots a day for calendar year y
 //   pickDays(years)         the representative days, with the reason for each
 
-import fs from "node:fs";
 import path from "node:path";
 import { ROOT } from "../chain/paths.js";
+import { readCsv } from "./csv.js";
 import { scaled } from "./decimal.js";
 
 /** Where Dan keeps the raw dataset. Git-ignored. */
 export const SOURCE_DIR = path.join(ROOT, "A Four-Year 30-Minute Simulated Residential HEMS D");
 
 export const SLOTS_PER_DAY = 48;
-
-function readCsv(file) {
-  const lines = fs.readFileSync(file, "utf8").replace(/^﻿/, "").trim().split(/\r?\n/);
-  const header = lines[0].split(",");
-  return lines.slice(1).map((line) => {
-    const cells = line.split(",");
-    if (cells.length !== header.length) throw new Error(`${file}: a row with ${cells.length} cells`);
-    return Object.fromEntries(header.map((h, i) => [h, cells[i]]));
-  });
-}
 
 /** "A_single_worker" → "single-worker". */
 const label = (householdType) => householdType.replace(/^[A-Z]_/, "").replaceAll("_", "-");

@@ -576,7 +576,7 @@ what `npm run` starts. Packages depend on `chain/` and on nothing else, except
 | `scenarios/` | `day-ahead.js`, one market day from opening the session to settlement; `calendar.js`, the Brussels clock and the day-ahead closing time                                                                                                                                                                    | `npm run demo:flow`                 |
 | `verifier/`  | The independent check of the windows: `windows.js` defines each class, `guarantees.js` measures spec 5.3's bounds over every interval, `verify.js` replays a history and compares, `fuzz.js` runs random and scripted histories through `WindowProbe`, `selftest.js` tampers with histories it must reject | `npm run verify:window`             |
 | `mutation/`  | The mutation suite: `catalogs/` holds the defects per part of the system, `index.js` applies one at a time and runs the tests                                                                                                                                                                              | `npm run mutate`                    |
-| `dataset/`   | Reads Dan's raw HEMS dataset and writes `data/homes/`: the six homes' PV and battery, a year of 30-minute slots per home, the prices, daily totals and representative days. Integers only; `decimal.js` reads the CSVs' decimals exactly, without floating point                                             | `npm run data:extract`              |
+| `dataset/`   | Writes `data/homes/` from Dan's raw HEMS dataset (`index.js`: the six homes' PV and battery, a year of 30-minute slots per home, prices, daily totals, representative days) and `data/arms/` from `Demo_PlanApplyEvaluate` (`arms.js`: the honest controllers' step logs, settings, tasks and results), checking one against the other. Integers only; `decimal.js` reads every digit of the CSVs' decimals exactly, without floating point | `npm run data:extract`              |
 
 
 `prosumers.json` says who takes part: each prosumer's name, whether an agent
@@ -674,6 +674,7 @@ rate.
 | Folder | Holds | From |
 |---|---|---|
 | `data/homes/` | The six homes of the HEMS dataset: `homes.csv` (PV, battery capacity, power, state-of-charge limits, efficiencies), and for 2022 a 30-minute file per home (load in parts, PV, net load), the prices, daily totals, and seven representative days in `days/`. Integers: Wh, W, basis points, micro-USD per kWh. Its README gives every column | `npm run data:extract`, from the raw dataset |
+| `data/arms/` | What each honest controller did for home_01 in 2022, every 30 minutes: state of charge, charge, discharge, appliances, import, export, prices, cost. Seven arms (B_null, B0, B0star, B1, B2, B2r, B2nn), the settings they ran with, the appliance tasks, daily and annual results. What step 6 replays | `npm run data:extract`, from `Demo_PlanApplyEvaluate/data/` |
 | `data/hems/` | The three honest controller arms' daily records for home_01 in 2022 | The arms' step logs, in `Demo_PlanApplyEvaluate` |
 
 **The raw dataset** is in `A Four-Year 30-Minute Simulated Residential HEMS D/` at
@@ -1135,9 +1136,14 @@ With the raw dataset at the root (see `data/` in section 5):
 npm run data:extract
 ```
 
-It writes `data/homes/` in a second or two and lists every file. Another
-year: `node offchain/dataset/cli.js --year 2023`; another place:
-`--source <dir> --out <dir>`.
+It writes `data/homes/` and `data/arms/` in a few seconds, lists every file,
+and checks the arms against the homes. The arms are read from
+`../Demo_PlanApplyEvaluate/data/`, beside this repository.
+
+- One part only: `--only homes` or `--only arms`.
+- Another year of the homes: `--year 2023`.
+- Other arms: `--arms A0,A1`, once they have really run.
+- Other places: `--source <dir>`, `--arms-source <dir>`, `--out <dir>`.
 
 ### The independent verifier
 

@@ -1,0 +1,2 @@
+batteryCapacityWh,batteryPowerW,etaChargeBps,etaDischargeBps,socMinBps,socMaxBps,socInitialBps,gridLimitW,exportPriceShareBps,wearMicroUsdPerCycle,forecastWeightBps,slotMinutes
+5000,3000,9500,9500,1000,10000,5000,9000,3000,40000,3000,30

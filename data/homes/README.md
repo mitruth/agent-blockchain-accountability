@@ -80,10 +80,8 @@ factor, so home_01's PV ranks the days for all six.
 ## What this extract is not
 
 - **Not the controllers' decisions.** It is what the house needs and what the
-  sun gives. What a controller then charged, discharged, bought and sold is in
-  the honest arms' step logs, in the sibling repository
-  `Demo_PlanApplyEvaluate`; `data/hems/` keeps only their daily totals.
-  Step 6 needs those step logs.
-- **One difference to keep in mind:** the arms' records go down to 10 % state of
-  charge (`minSocBps` 1000), while `homes.csv` gives 20 % as the minimum for
-  every home. The arms ran with their own battery settings.
+  sun gives. What each honest controller then charged, discharged, bought and
+  sold, slot by slot, is in [`data/arms/`](../arms/README.md), for home_01.
+- **Not the battery settings the controllers used.** They ran with 10 % to
+  100 % state of charge, starting at 50 % (`data/arms/home_01/2022/settings.csv`);
+  `homes.csv` gives the dataset's 20 % to 90 %.

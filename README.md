@@ -31,6 +31,7 @@ project contains today, what the tests prove and how to run everything.
 | `offchain/` | The JavaScript around the contracts, one package per job: `chain`, `deploy`, `matcher`, `keeper`, `sensor`, `scenarios`, `verifier`, `mutation`, `dataset` |
 | `docs/` | Guide, specification, decision log, roadmap, analyses |
 | `data/homes/` | Six homes from the HEMS dataset: PV, battery, and 2022 in 30-minute slots, as integers (`npm run data:extract`) |
+| `data/arms/` | The honest controllers' runs for home_01, 2022, every 30 minutes, for step 6's false-positive rate (`npm run data:extract`) |
 | `data/hems/` | The honest controller arms' daily records, for calibrating the caps in step 6 |
 
 ## Running it
