@@ -1995,6 +1995,56 @@ same gate, only the class changes. Step 4.6 runs them.
 - the direction table;
 - a tighter cap applying at once and keeping the count.
 
+
+### 4.5 — CancelQuotaPolicy: S6
+
+**Status.** Proposed.
+
+**Decision.** `contracts/policies/CancelQuotaPolicy.sol` keeps three
+`WindowLib` windows of one shape per instance. The spec default is an hour of
+five-minute buckets.
+
+| Window | Grows on | Rule |
+| ------ | -------- | ---- |
+| Cancelled Wh, weighted | Every CANCEL leg: w_g × its quantity within δ_g of the slot's gate closure, once otherwise, rounded up | cancelled ≤ C_max |
+| Placed Wh | Every PLACE leg | cancelled × 100 ≤ ρ × placed + c0 × 100 |
+| Messages | Every accepted submission | messages ≤ M_max |
+
+**Choices the spec leaves open.**
+
+- **Units.** w_g and ρ are integer percentages: w_g = 300 weighs a cancellation
+  near the gate three times. w_g below 100% is INVALID, since it would make a
+  late cancellation cheaper than an early one.
+- **The gate window.** It starts exactly δ_g before the gate time the decoder
+  reports for the cancelled order's slot.
+- **This submission's placements count as placed.** A modification's new order
+  counts towards the ratio it is checked against. Churning by modification
+  still costs cancelled volume one for one, so a ρ below 100% bounds it.
+- **A refused submission is not a message.** Only commits count. A refused
+  submission changes nothing, and its sender pays its gas.
+- **Expiries never count.** An order the market expires is never checked, and
+  `credit` does nothing (spec 6.7).
+- **D10 does not exempt a cancellation from S6.** A cancellation adds to S6's
+  own quantity, which is what S6 bounds.
+- **Reporting.** The `CheckResult` reports the cancelled-Wh window, with S
+  equal to H since S6 has no soft bound. `reasons(legs, ctx)` is a view giving
+  the rules a submission breaks as a bitmask (cancelled cap 1, ratio 2,
+  messages 4), for the tests and the evaluation.
+- **Direction table.**
+  - **Looser:** a higher C_max, M_max, ρ or c0; a lower w_g; a shorter δ_g.
+  - **Restarts, so WIDEN:** a change of window shape.
+
+**Tests.** `test/policies/CancelQuotaPolicy.t.sol`, 9 tests:
+
+- the cancelled cap, inclusive;
+- the near-gate weight, and the exact second it starts;
+- the ratio against what the policy saw placed;
+- the free allowance for a first cancellation;
+- the message count, which a refused submission does not use;
+- an expiry using none of the quota;
+- the quota renewing after an hour;
+- the direction table.
+
 ---
 
 ## Open decisions
