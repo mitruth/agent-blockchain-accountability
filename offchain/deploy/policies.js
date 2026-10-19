@@ -1,6 +1,8 @@
-// The owner's policies for an agent (step 4), from prosumers.json's
-// "agentPolicies": the per-action bounds, the budget S1, the export and import
-// caps S2 and the cancellation quota S6, each on a sliding window.
+// The owner's policies for an agent, from prosumers.json's "agentPolicies":
+// the per-action bounds, the budget S1, the export and import caps S2 and the
+// cancellation quota S6, each on a sliding window (step 4); and, where the
+// prosumer has a battery, deliverability S3, cycles S4 and the ramp S5 (step
+// 5), set from that battery.
 //
 // A policy's configuration is the ABI encoding of its Config struct.
 
@@ -53,6 +55,38 @@ const QUOTA_CONFIG = {
   ],
 };
 
+const S3_CONFIG = {
+  type: "tuple",
+  components: [
+    { name: "horizonSlots", type: "uint16" },
+    { name: "capacityWh", type: "uint64" },
+    { name: "socMinBps", type: "uint16" },
+    { name: "socMaxBps", type: "uint16" },
+    { name: "chargePowerW", type: "uint32" },
+    { name: "dischargePowerW", type: "uint32" },
+    { name: "etaChargeBps", type: "uint16" },
+    { name: "etaDischargeBps", type: "uint16" },
+    { name: "pvCreditBps", type: "uint16" },
+    { name: "reserveLoadWh", type: "uint64" },
+  ],
+};
+
+const S4_CONFIG = {
+  type: "tuple",
+  components: [
+    { name: "softWh", type: "uint64" },
+    { ...WINDOW, name: "window" },
+    { name: "horizonSlots", type: "uint16" },
+    { name: "pvCreditBps", type: "uint16" },
+    { name: "etaDischargeBps", type: "uint16" },
+  ],
+};
+
+const S5_CONFIG = {
+  type: "tuple",
+  components: [{ name: "softStepWh", type: "uint64" }, { name: "maxStepWh", type: "uint64" }],
+};
+
 /** WindowPolicy's quantities, as its enum numbers them. */
 export const QUANTITY = { BUY_VALUE: 0, SELL_WH: 1, BUY_WH: 2 };
 
@@ -66,9 +100,11 @@ function sliding(hours, cap, bucketSeconds = 3600) {
 
 /**
  * The instances to add for one agent: [{ contract, id, name, config }], where
- * `contract` is "statics", "windows" or "quota" and `config` the encoded bytes.
+ * `contract` is "statics", "windows", "quota", "deliverability", "cycles" or
+ * "ramp", and `config` the encoded bytes. `battery` is the prosumer's, from
+ * prosumers.json; without one, the physical policies are left out.
  */
-export function agentPolicyInstances(p) {
+export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
   const out = [];
   const a = p.perAction;
   out.push({
@@ -124,6 +160,46 @@ export function agentPolicyInstances(p) {
       freeCancelWh: BigInt(q.freeCancelWh),
     }]),
   });
+
+  const ph = p.physical;
+  if (ph && battery) {
+    const pvCreditBps = Math.round(ph.pvCreditPercent * 100);
+    out.push({
+      contract: "deliverability",
+      name: "S3 deliverability",
+      config: encodeAbiParameters([S3_CONFIG], [{
+        horizonSlots: ph.horizonSlots,
+        capacityWh: BigInt(battery.capacityWh),
+        socMinBps: battery.socMinBps,
+        socMaxBps: battery.socMaxBps,
+        chargePowerW: battery.powerW,
+        dischargePowerW: battery.powerW,
+        etaChargeBps: battery.etaChargeBps,
+        etaDischargeBps: battery.etaDischargeBps,
+        pvCreditBps,
+        reserveLoadWh: BigInt(battery.reserveLoadWh),
+      }]),
+    });
+    // N_max cycles a day: N_max x C_bat drawn from the cells over a sliding
+    // day, in buckets of one slot.
+    const cap = BigInt(Math.round(ph.cyclesPerDay * battery.capacityWh));
+    out.push({
+      contract: "cycles",
+      name: "S4 cycles",
+      config: encodeAbiParameters([S4_CONFIG], [{
+        softWh: BigInt(Math.round(ph.softCyclesPerDay * battery.capacityWh)),
+        window: sliding(24, cap, slotSeconds),
+        horizonSlots: ph.horizonSlots,
+        pvCreditBps,
+        etaDischargeBps: battery.etaDischargeBps,
+      }]),
+    });
+    out.push({
+      contract: "ramp",
+      name: "S5 ramp",
+      config: encodeAbiParameters([S5_CONFIG], [{ softStepWh: BigInt(ph.softStepWh), maxStepWh: BigInt(ph.maxStepWh) }]),
+    });
+  }
 
   return out.map((x) => ({ ...x, id: policyId(x.name) }));
 }

@@ -1,9 +1,5 @@
 // Spec 8's mutants whose code does not exist yet. Each moves into a catalogue
 // in the step that builds its code; the runner lists them so none is
-// forgotten.
+// forgotten. Since step 5.7, none is left: the last three are in physical.js.
 
-export default [
-  { name: "reading accepted with a decreasing timestamp", step: 5, note: "OracleVerifier" },
-  { name: "H_slots <= k check removed", step: 5, note: "S3, DeliverabilityPolicy configuration" },
-  { name: "placed buys credited in the S3 floor", step: 5, note: "S3, DeliverabilityPolicy" },
-];
+export default [];

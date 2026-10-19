@@ -20,7 +20,7 @@ Where the build stands and what comes next. Update this file as steps close.
 | 2 | Position ledger, reconcile, the P2P market port and its decoder | **Done**, 2026-10-14. Acceptance criteria met on the port |
 | 3 | `WindowLib`, independent verifier, mutation suite | **Done**, 2026-10-15. Acceptance criteria met |
 | 4 | The Smart Session entry point (D1), the policy phases, `StaticOrderPolicy`, S1, S2, S6 | **Done**, 2026-10-16. Acceptance criteria met |
-| 5 | `OracleVerifier`, PV relay, S3, S4, S5 | **In progress**: 5.1 to 5.6 done; acceptance criteria met |
+| 5 | `OracleVerifier`, PV relay, S3, S4, S5 | **Done**, 2026-10-19. Acceptance criteria met |
 | 6 | Evaluation | Not started |
 
 ### What was verified for step 1
@@ -146,7 +146,7 @@ deployed systems are blocked. **Not yet fair:** anything about the battery or
 the physical system (step 5), or how often an honest agent is refused (step
 6).
 
-## In progress: step 5
+## Done: step 5
 
 | Sub-step | What | Status |
 |---|---|---|
@@ -155,12 +155,16 @@ the physical system (step 5), or how often an honest agent is refused (step
 | 5.3 | S3, deliverability: `DeliverabilityPolicy` | Done, `31b591d` |
 | 5.4 | S4, battery cycles: `CyclePolicy`; the horizon shared in `HorizonLib`; S3's check 42 % cheaper | Done, `2fa70bd` |
 | 5.5 | S5, ramp: `RampPolicy` | Done, `2fa70bd` |
-| 5.6 | The acceptance tests on the ported market; gas as a function of k | Done, this commit |
-| 5.7 | Mutation, the demo with oracles, docs | Next |
+| 5.6 | The acceptance tests on the ported market; gas as a function of k | Done, `5c408ad` |
+| 5.7 | The `physical` mutation catalogue; the demo in half-hour slots with the oracles, S3, S4 and S5; docs | Done, this commit |
 
-| Check, after 5.6 | Result |
+| Check, at the end of step 5 | Result |
 |---|---|
-| `npm test` | 405 passing (35 verifier, 14 readings through the gate, 26 S3, 14 S4, 11 S5, 21 step 5 acceptance) |
+| `npm test` | 411 passing (35 verifier, 14 readings through the gate, 29 S3, 16 S4, 12 S5, 21 step 5 acceptance) |
+| `npm run test:offchain` | 29 passing |
+| Mutation, `physical` catalogue | 42 of 42 caught (`docs/reports/mutation-physical-2026-10-19.md`) |
+| `npm run demo:flow` | The day in half-hour slots under all eight policies; S3 refuses Carol's overnight oversell, the verifier her older reading |
+| Foundry | **Not re-run** at the end of step 5: Docker was not running. Last: 341 passed, after 5.1 |
 | Step 5's acceptance criteria | All met on the ported market, `test/policies/Step5Acceptance.t.sol` |
 | Gas as a function of k | `docs/reports/gas-step5-2026-10-19.md`: the three physical policies add 146k to an offer at k = 8, 405k at k = 48, 723k at k = 96 |
 | Excess cycling (spec step 5) | Blocked by S4: `test_excessCyclingIsBlocked` |
@@ -176,6 +180,34 @@ Chosen by Dan before step 5 (log 5.1): no tariff oracle; the demo moves to
 30-minute slots; Alice gets home_01 with the arms' battery settings, Bob
 home_03 and Carol home_05; the demo's PV forecast is the actual PV, the tests'
 has errors.
+
+**What is fair to say now.** On the ported market, the agent's orders are also
+held to the battery behind them, as its own BMS signs it:
+
+- a sale must be deliverable over the next 96 half-hours, counting only the PV
+  forecast and filled bids;
+- the battery may not be cycled past N_max a day;
+- the net position may not jump past R_max between slots.
+
+Over-commitment across slots, phantom bids, excess cycling, a position spike
+and a stale or favourable reading are blocked; each passes under per-action
+bounds. **Not yet fair:** how often an honest agent is refused (step 6), and
+any claim about cost on a real chain (gas at k = 96 is about twice the
+market's own).
+
+## Next: step 6
+
+The evaluation, as spec Section 9 fixes it:
+
+- the full attack matrix (9.1) against every baseline;
+- the false-positive rate on the honest arms, B0 and B2 from `data/arms/`,
+  scored against B2;
+- gas as a function of n and k, the policies as separate contracts against a
+  monolithic one;
+- the block-time assumption, cited.
+
+Open for it: how an honest arm's plan becomes market orders (log 4.11), and
+A0 and A1 once they have really run.
 
 ### Step 5 as specified
 
@@ -209,10 +241,12 @@ Things noticed in steps 0 and 1 that belong to a later step.
 |---|---|
 | Safe7579 and Kernel do not check a module's declared type at install | Security analysis, step 6 |
 | A policy whose `deconfigure` fails keeps stale state for the account | Security analysis, step 6 |
-| The cross-parameter constraint `H_slots ≤ k` spans two policy contracts | Step 5 |
+| ~~The cross-parameter constraint `H_slots ≤ k` spans two policy contracts~~ Holds by construction: S3 refuses a placement outside its horizon (log 5.3) | Done, step 5 |
 | Carry-over of old totals on a structural change: not built; a change of shape waits 24 hours and starts afresh (log 4.4) | Step 6, or later |
-| `submit` gains the `readings[]` argument | Step 5 |
+| ~~`submit` gains the `readings[]` argument~~ (log 5.1) | Done, step 5 |
 | A deployment script, and a test with a real owner validator | Before any testnet run |
 | The agent's session on a real account: expiry by a time-frame user-op policy, revocation by removing it; events name the account, not the agent (log 3.9, 4.1) | Before any testnet run |
 | Install Smart Sessions on Kernel without a hook; deploy Smart Sessions v1.0.0 or later (log 3.9) | Before any testnet run |
-| Run the `accounts` mutation catalogue (Foundry in Docker) against the step 4 gate | Step 5, with Docker |
+| Run Foundry and the `accounts` mutation catalogue (Docker) against the step 5 gate: Docker was not running at the end of step 5 | Next time Docker runs |
+| S3 and S4 read the same positions and forecast, each for itself; a combined policy would read them once (gas report, step 5) | Step 6, with the monolithic variant (D14) |
+| A consumer's S3 value is never zero with a constant reserve load; a signed load forecast (D4) would fix it (log 5.7) | After step 6 |

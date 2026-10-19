@@ -1,8 +1,9 @@
 {
-  "slotSeconds": 3600,
+  "slotSeconds": 1800,
   "realTimePricePerKWh": "0.30",
-  "maxLegs": 48,
+  "maxLegs": 52,
   "agentValidityDays": 30,
+  "dataDate": "2022-06-13",
   "agentPolicies": {
     "perAction": {
       "maxQtyWh": 5000,
@@ -11,7 +12,7 @@
       "buyCeilingUSD": "0.50",
       "horizonHours": 72
     },
-    "budget": { "softUSD": "6", "capUSD": "7", "hours": 24 },
+    "budget": { "softUSD": "5.6", "capUSD": "7", "hours": 24 },
     "exportImport": { "exportWh": 30000, "importWh": 40000, "hours": 24 },
     "cancelQuota": {
       "minutes": 60,
@@ -22,11 +23,31 @@
       "gateWindowMinutes": 30,
       "ratioPercent": 100,
       "freeCancelWh": 2000
+    },
+    "physical": {
+      "horizonSlots": 96,
+      "pvCreditPercent": 100,
+      "cyclesPerDay": 2,
+      "softCyclesPerDay": 1.5,
+      "softStepWh": 2000,
+      "maxStepWh": 3000
     }
   },
   "prosumers": [
-    { "name": "alice", "agent": true, "fundsUSD": 1000, "home": "home_01", "battery": "B2" },
+    {
+      "name": "alice", "agent": true, "fundsUSD": 1000, "home": "home_01", "replay": "B2",
+      "battery": {
+        "capacityWh": 5000, "powerW": 3000, "socMinBps": 1000, "socMaxBps": 10000,
+        "etaChargeBps": 9500, "etaDischargeBps": 9500, "reserveLoadWh": 500
+      }
+    },
     { "name": "bob", "agent": false, "fundsUSD": 1000, "home": "home_03" },
-    { "name": "carol", "agent": true, "fundsUSD": 1000, "home": "home_05" }
+    {
+      "name": "carol", "agent": true, "fundsUSD": 1000, "home": "home_05",
+      "battery": {
+        "capacityWh": 10000, "powerW": 5000, "socMinBps": 2000, "socMaxBps": 9000,
+        "etaChargeBps": 9500, "etaDischargeBps": 9500, "reserveLoadWh": 300
+      }
+    }
   ]
 }

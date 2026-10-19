@@ -66,9 +66,13 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     statics: await deploy(OPERATOR, "StaticOrderPolicy", [gate]),
     windows: await deploy(OPERATOR, "WindowPolicy", [gate]),
     quota: await deploy(OPERATOR, "CancelQuotaPolicy", [gate]),
+    deliverability: await deploy(OPERATOR, "DeliverabilityPolicy", [gate]),
+    cycles: await deploy(OPERATOR, "CyclePolicy", [gate]),
+    ramp: await deploy(OPERATOR, "RampPolicy", [gate]),
   };
   log(`gate        ${gate}  (ledger ${ledger}, oracle ${oracle}, decoder ${decoder})`);
-  log(`policies    per-action ${policyContracts.statics}, windows ${policyContracts.windows}, quota ${policyContracts.quota}\n`);
+  log(`policies    per-action ${policyContracts.statics}, windows ${policyContracts.windows}, quota ${policyContracts.quota}`);
+  log(`            deliverability ${policyContracts.deliverability}, cycles ${policyContracts.cycles}, ramp ${policyContracts.ramp}\n`);
 
   const orderFunctions = ["placeBids", "placeOffers", "cancelOrder", "modifyOrder"].map((f) =>
     selector("Prosumer", f),
@@ -100,10 +104,12 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     const entry = {
       account,
       prosumer,
-      // Whose data plays this house (data/homes/), and whether its battery
-      // replays an honest arm (data/arms/) or follows the simple model.
+      // Whose data plays this house (data/homes/), its battery, and whether
+      // that battery replays an honest arm (data/arms/) or follows the simple
+      // model from the home's initial charge.
       home: p.home,
-      battery: p.battery ?? "model",
+      battery: p.battery ?? null,
+      replay: p.replay ?? null,
       owner: { address: owner, keyIndex: roles.owner },
       sensor: { address: sensor, keyIndex: roles.sensor },
     };
@@ -131,7 +137,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
 
       // Owner path: the policies the agent trades under (step 4).
       entry.policies = [];
-      for (const instance of agentPolicyInstances(config.agentPolicies)) {
+      for (const instance of agentPolicyInstances(config.agentPolicies, { battery: p.battery, slotSeconds: config.slotSeconds })) {
         const policy = policyContracts[instance.contract];
         await asAccount(gate, "PolicyGate", "addPolicy", [policy, instance.id, instance.config]);
         entry.policies.push({ name: instance.name, policy, id: instance.id });
@@ -152,6 +158,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     chainId: 31337,
     deployedAt: new Date().toISOString(),
     slotSeconds: config.slotSeconds,
+    dataDate: config.dataDate,
     realTimePrice: realTimePrice.toString(),
     contracts: { token, rule, manager, ledger, oracle, gate, decoder, ...policyContracts },
     roles: {
@@ -164,6 +171,8 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
       pvProvider: { address: key(PV_PROVIDER).address, keyIndex: PV_PROVIDER },
       bmsMaxAge: config.slotSeconds,
       pvMaxAge: PV_MAX_AGE,
+      // The forecast covers the physical policies' horizon.
+      horizonSlots: config.agentPolicies.physical?.horizonSlots ?? 0,
     },
     prosumers,
   };

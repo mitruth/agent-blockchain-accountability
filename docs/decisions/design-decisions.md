@@ -2859,6 +2859,115 @@ The battery is now half full, and every measured order is asserted placed.
 
 `npm test`: 405 passing.
 
+
+### 5.7 — Mutation; the demo with the oracles and the physical policies
+
+**Status.** Proposed, except where Dan chose before step 5: half-hour slots,
+Alice on home_01 with the arms' battery, Bob home_03, Carol home_05, the
+actual PV as the demo's forecast.
+
+**The `physical` mutation catalogue,** `offchain/mutation/catalogs/physical.js`,
+42 mutants:
+
+- the oracle verifier (14);
+- readings through the gate (3);
+- the ledger's batch view (1);
+- the horizon (1);
+- S3 (11), S4 (8), S5 (4).
+
+**Spec 8's last three mutants are in it.** `pending.js` is empty.
+
+- "reading accepted with a decreasing timestamp";
+- "placed buys credited in the S3 floor";
+- "H_slots ≤ k check removed". There is no such check: S3 refuses a
+  placement outside its horizon (log 5.3), so the mutant takes that refusal
+  out.
+
+**The first run:** 38 caught, 3 not caught, 1 did not build.
+
+- **The one that did not build** emptied an `if` and left an `else`
+  dangling. Corrected: it now empties the branch.
+- **The three not caught were gaps,** each closed with a test:
+  - a stale forecast given to S3: `test_aStaleForecastGivesNoCredit`; the
+    oracle mutants now also run S3's tests;
+  - the ledger's batch view off by one slot: the floor sums energy over the
+    horizon, so a sale counted a slot early hardly changed it.
+    `test_aSecondSaleInTheSameSlotCountsTheFirst` makes the slot matter, and
+    S5's tests now run too;
+  - S4 judging a sale on a reading gone stale: the only test had no reading
+    at all, which fails either way.
+    `test_aSaleAfterTheReadingWentStaleIsRefused`.
+
+Before the run, four tests were added for mutants a reading of the tests showed
+would survive:
+
+- PV above a full battery spilled;
+- S4's cap inclusive;
+- a smaller sale over the cap;
+- the step to the right in S5.
+
+**The clean run: 42 of 42 caught** (`docs/reports/mutation-physical-2026-10-19.md`).
+
+**The demo** (`npm run demo:deploy`, `npm run demo:flow`):
+
+- **Half-hour slots,** a day of 48. The leg limit is 52, for the 50-slot day
+  when the clocks go back.
+- **`prosumers.json`** gives each agent's battery, from the data, and
+  `agentPolicies.physical`:
+  - k = 96;
+  - the whole PV forecast credited;
+  - two cycles a day, flagged above 1.5;
+  - steps of at most 3 kWh, flagged above 2.
+
+  S1's soft bound moves to 5.6 USD, so the modification of stage 4 still
+  crosses it with half-hour quantities.
+- **The deploy script** deploys S3, S4 and S5 and adds them for each agent: 8
+  policy instances an account.
+- **`offchain/oracle/play.js`** lays the data's day (`dataDate`, 13 June
+  2022) on the market's day, and gives each house's battery and forecast at a
+  point in market time.
+- **The flow:**
+  - it first moves the clock to 09:00 the day before delivery, if it is
+    earlier, so that 96 slots reach the end of the delivery day;
+  - the relay posts the forecasts, and each agent brings its BMS reading with
+    its first order;
+  - two new stages: Carol's overnight oversell, refused by S3; and her older,
+    fuller reading, refused by the verifier.
+
+**Two things the demo showed.**
+
+- **A transaction may use at most 16,777,216 gas (EIP-7825),** below the
+  node's 60M block limit; checked on the node, one unit more is refused. A
+  day of 48 orders under every policy needs about 20M, so the flow sends at
+  most 24 orders a call (about 10M). The gate's leg limit stays 52: the cap is
+  the chain's, not the policy's.
+- **For a household that only buys, S3's value is never zero.** Alice's
+  reserve, 0.5 kWh a half hour, is more than her battery and PV cover over two
+  nights, so S3 reports a shortfall before and after every order. Her bids
+  pass, as they do not add to it; any sale would. This is the reserve load
+  doing what D4 says, an owner constant. A signed load forecast (D4, later)
+  would make the figure meaningful for a consumer.
+
+**After closing,** an agent's order is now refused by the gate before the
+market sees it: its reading is stale, so S3 cannot judge it. The flow shows
+Bob's own order for the market's `MarketSession_Closed`.
+
+**Not done, and why.**
+
+- **Foundry, and the `accounts` mutation catalogue against the step 4 and 5
+  gate.** Both need Docker, which was not running, and it is not started
+  without Dan. Since Foundry last passed, 341 after 5.1, the gate has not
+  changed; the ledger and the verifier gained views.
+
+**Checked.**
+
+- `npm test`: 411 passing.
+- `npm run test:offchain`: 29 passing.
+- `npm run mutate -- --check`: every pattern found.
+- On a fresh node, `demo:deploy`, `demo:flow` and `oracle:post -- --attacks`.
+  The ledger and the market agree in 48 of 48 slots for both agents, and
+  settlement and balances are as before.
+
 ---
 
 ## Open decisions

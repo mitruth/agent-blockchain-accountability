@@ -4,7 +4,7 @@ Owner-side sequence policies for delegated energy-trading agents. Draft, 9 Octob
 
 This brief supersedes `Policy_Spec_Energy_Agent_v0.md` for implementation purposes. It folds in the review of v0 and the decisions taken on 9 October 2026. Read it fully before touching code. Section 10 must be filled in from the repo before step 1 starts.
 
-> **Build status, 16 October 2026.** Steps 1 to 4 of 6 are built and meet their acceptance criteria (Section 9). Step 5 is in progress: 5.1, the oracle verifier, 5.2, the oracles that sign for it, 5.3, S3, 5.4, S4, and 5.5, S5, are built. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
+> **Build status, 16 October 2026.** Steps 1 to 5 of 6 are built and meet their acceptance criteria (Section 9). Step 6, the evaluation, is next. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
 >
 > The text below is the brief as written on 9 October. Where it has since been changed or implemented, a marked note says so: *Amended* points to Section 12, *As built* describes the implementation, *Status* reports a build step.
 
@@ -514,7 +514,7 @@ Do not reorder. Each step has to pass before the next starts.
   - an exposure-reducing cancel always passes;
   - gas is reported as a function of k.
 
-> **Status: in progress.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). 5.2 adds the oracles off-chain: the PV relay and a BMS per house, whose EIP-712 signatures the verifier accepts (`offchain/oracle/signing.test.js`). 5.3 adds S3, `DeliverabilityPolicy`: **cross-slot over-commitment is blocked** (`test/policies/DeliverabilityPolicy.t.sol`: `test_crossSlotOverCommitmentIsBlocked`), and an exposure-reducing cancel passes (`test_aCancellationAlwaysPasses`, `test_aCancellationPassesWithNoReadingAtAll`). 5.4 adds S4, `CyclePolicy`: **excess cycling is blocked** (`test/policies/CyclePolicy.t.sol`: `test_excessCyclingIsBlocked`). 5.5 adds S5, `RampPolicy`: **a position spike is blocked** (`test/policies/RampPolicy.t.sol`: `test_aPositionSpikeIsBlocked`). 5.6 runs the criteria on the ported market, through the gate (`test/policies/Step5Acceptance.t.sol`); each attack also passes under per-action bounds only:
+> **Status: built; criteria met on 19 October 2026.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). 5.2 adds the oracles off-chain: the PV relay and a BMS per house, whose EIP-712 signatures the verifier accepts (`offchain/oracle/signing.test.js`). 5.3 adds S3, `DeliverabilityPolicy`: **cross-slot over-commitment is blocked** (`test/policies/DeliverabilityPolicy.t.sol`: `test_crossSlotOverCommitmentIsBlocked`), and an exposure-reducing cancel passes (`test_aCancellationAlwaysPasses`, `test_aCancellationPassesWithNoReadingAtAll`). 5.4 adds S4, `CyclePolicy`: **excess cycling is blocked** (`test/policies/CyclePolicy.t.sol`: `test_excessCyclingIsBlocked`). 5.5 adds S5, `RampPolicy`: **a position spike is blocked** (`test/policies/RampPolicy.t.sol`: `test_aPositionSpikeIsBlocked`). 5.6 runs the criteria on the ported market, through the gate (`test/policies/Step5Acceptance.t.sol`); each attack also passes under per-action bounds only:
 
 > | Criterion | Shown by |
 > |---|---|
@@ -525,7 +525,7 @@ Do not reorder. Each step has to pass before the next starts.
 > | An exposure-reducing cancel always passes | `testFuzz_anExposureReducingCancelAlwaysPasses`, under A1–A6, S1, S2, S3, S4: every open order cancelled, however bad the battery turns out. S6 counts cancellations (log 4.5); S5 may refuse a cancel that opens a steep step, which is not exposure-reducing for it (log 5.6) |
 > | Gas as a function of k | `docs/reports/gas-step5-2026-10-19.md` |
 >
-> Mutation, the demo with the oracles and the docs follow (5.7).
+> 5.7 adds the `physical` mutation catalogue, spec 8's three step 5 mutants among them (42 of 42 caught), and the demo under all eight policies (log 5.7).
 
 **Step 6. Evaluation.**
 - Full attack matrix (Section 9.1), against all baselines.

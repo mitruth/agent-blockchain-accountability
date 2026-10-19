@@ -9,7 +9,7 @@
 //   the forecast   the home's PV from `--date` on, `--mode` actual (default)
 //                  or yesterday, summed to the market's slot length
 //   the battery    an honest arm replayed (data/arms/) where the prosumer's
-//                  `battery` names one, as Alice's does; otherwise the home's
+//                  `replay` names one, as Alice's does; otherwise the home's
 //                  battery at its initial charge (data/homes/homes.csv)
 //
 // The data's day is laid on the market's: the current slot takes the data
@@ -54,15 +54,15 @@ async function main() {
     const posted = await postForecast(d, name, { firstSlotStart: slotStart, pvWh, issuedAt: t });
 
     // The battery at the start of the current slot.
-    const state = p.battery !== "model"
-      ? replayArm(armSettings(p.home), armSlots(p.battery, p.home))[start]
+    const state = p.replay
+      ? replayArm(armSettings(p.home), armSlots(p.replay, p.home))[start]
       : new Battery(homeParams(p.home), slotSeconds).state();
     const reading = await bmsReading(d, name, slotStart, state);
     const receipt = await handIn(d, reading);
     const fresh = receipt.logs.length > 0;
 
     const held = await batteryOf(d, name);
-    const source = p.battery !== "model" ? `arm ${p.battery} of ${p.home}` : `${p.home}, initial charge`;
+    const source = p.replay ? `arm ${p.replay} of ${p.home}` : `${p.home}, initial charge`;
     console.log(`${name} (${source})`);
     console.log(`  battery   ${kWh(held.socWh)} stored, odometer ${kWh(held.dischargeOdometerWh)}, fresh: ${held.fresh}${fresh ? "" : " (already held)"}`);
     const next = [];

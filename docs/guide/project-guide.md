@@ -42,7 +42,7 @@ The build follows six steps, fixed by Section 9 of the spec.
 | 2    | Position ledger, reconcile, the P2P market port and its decoder             | **Built and passing** |
 | 3    | `WindowLib`, independent verifier, mutation suite                           | **Built and passing** |
 | 4    | The session entry point, the policy phases; per-action policies, S1, S2, S6 | **Built and passing** |
-| 5    | Oracle verification, PV relay, S3, S4, S5                                   | In progress: 5.1 to 5.3 built |
+| 5    | Oracle verification, PV relay, S3, S4, S5                                   | **Built and passing** |
 | 6    | Evaluation                                                                  | Not started           |
 
 
@@ -73,6 +73,11 @@ crossing is flagged and goes ahead; released volume is credited back.
   - `DeliverabilityPolicy`, S3 (step 5.3): the battery, from its signed
   reading, must be able to deliver every sale over the next k slots, counting
   only certain energy: the PV forecast and filled bids.
+  - `CyclePolicy`, S4 (step 5.4): the battery's discharge over a sliding day,
+  from its signed odometer, plus what the sales placed will draw, against
+  N_max cycles.
+  - `RampPolicy`, S5 (step 5.5): the net position may not jump by more than
+  R_max from one slot to the next.
   Section 3 explains what each checks; section 6 shows four attacks blocked.
 - **A position ledger:** every order the agent placed, and per delivery slot
 the account's committed and cleared volume, buy and sell.
@@ -110,12 +115,9 @@ under Hardhat; the other 3 are faults in test doubles.
 
 ### What does not exist yet
 
-**Two physical policies to go.** The verifier (5.1), the oracles (5.2) and S3
-deliverability (5.3) are built; S4 battery cycles and S5 ramp (5.4, 5.5) come
-next. The demo's agents do not bring readings with their orders, and do not
-trade under S3, yet (5.7). There
-is no tariff oracle, so A3's price bounds stay absolute (spec A8). Nothing is
-deployed to a network.
+**No tariff oracle,** so A3's price bounds stay absolute (spec A8). Nothing is
+deployed to a network. The false-positive rate on honest agents, the full attack
+matrix and the monolithic gas variant are step 6.
 
 Two roles of the market are outside the repository by design: the off-chain
 matching service, linked to the chain by an oracle, which registers trades; and
@@ -400,6 +402,27 @@ bids beyond the reserve load may not exceed the charge power.
   reading and forecast, one call each (`positionsOf`, `pvSeries`).
 - **`assess()`** gives the projection's four parts before and after.
 
+`CyclePolicy`**: S4, how hard the battery cycles** (spec 6.5). Its value, in Wh
+drawn from the cells, has three parts:
+
+- **the window:** at every submission the gate accepts, the discharge since
+  the last one, from the BMS odometer, goes into a sliding day;
+- **what the odometer shows beyond it;**
+- **pending:** what the sales placed over the horizon will draw, beyond the PV
+  credit, over the discharge efficiency.
+
+The cap is N_max × C_bat. Only a sale is judged: a bid or a cancellation never
+is. A sale that takes the value past the soft bound is flagged, past the cap
+refused, when the value grew. Discharge enters the window no earlier than it
+happened, so the window can only overstate it.
+
+`RampPolicy`**: S5, no spike in the net position** (spec 6.6). netPos(t) is
+committed buy minus committed sell. For every slot a submission changes, the
+steps to both neighbours are compared, with and without the submission. A step
+above R_max is a refusal, above S a flag, but only if the submission made it
+larger. An order that smooths a profile already too steep passes, and so does
+a cancellation that does not open a steep step.
+
 **Windows other than sliding.** `WindowPolicy` and `CancelQuotaPolicy` accept
 any of `WindowLib`'s five classes. Sliding is what the owner should use; the
 other four are the evaluation's baselines, and section 6 shows what each lets
@@ -603,6 +626,9 @@ configuration.
 | `WindowPolicy.sol`      | S1, the budget (BUY value), and S2, the export and import caps (Wh), on a `WindowLib` window per instance                                                                                                                                              |
 | `CancelQuotaPolicy.sol` | S6: cancelled Wh weighted near the gate, the cancel-to-place ratio, the message count                                                                                                                                                                  |
 | `DeliverabilityPolicy.sol` | S3: the battery projected over the horizon from its signed reading, against the floor, the ceiling and the power limits                                                                                                                             |
+| `CyclePolicy.sol`       | S4: discharge from the odometer in a sliding window, plus the pending sales' draw, against N_max × C_bat                                                                                                                                              |
+| `RampPolicy.sol`        | S5: the steps of the net position next to every slot a submission changes                                                                                                                                                                             |
+| `HorizonLib.sol`        | What S3 and S4 share: the horizon of k slots from the battery reading's slot, and the ledger they read                                                                                                                                                |
 
 
 
@@ -637,7 +663,7 @@ reads the data that `dataset/` writes.
 | `scenarios/` | `day-ahead.js`, one market day from opening the session to settlement; `calendar.js`, the Brussels clock and the day-ahead closing time                                                                                                                                                                    | `npm run demo:flow`                 |
 | `verifier/`  | The independent check of the windows: `windows.js` defines each class, `guarantees.js` measures spec 5.3's bounds over every interval, `verify.js` replays a history and compares, `fuzz.js` runs random and scripted histories through `WindowProbe`, `selftest.js` tampers with histories it must reject | `npm run verify:window`             |
 | `mutation/`  | The mutation suite: `catalogs/` holds the defects per part of the system, `index.js` applies one at a time and runs the tests                                                                                                                                                                              | `npm run mutate`                    |
-| `oracle/`    | The trusted devices, played from the data: `typed.js` signs EIP-712 BMS readings and PV forecasts as the verifier expects; `battery.js` is a battery as its BMS sees it, a simple model or an honest arm replayed; `forecast.js` gives the PV forecast, actual or yesterday's; `relay.js` posts and reads them on the chain | `npm run oracle:post`, a scenario |
+| `oracle/`    | The trusted devices, played from the data: `typed.js` signs EIP-712 BMS readings and PV forecasts as the verifier expects; `battery.js` is a battery as its BMS sees it, a simple model or an honest arm replayed; `forecast.js` gives the PV forecast, actual or yesterday's; `relay.js` posts and reads them on the chain; `play.js` gives one house's battery and forecast at a point in market time, for the scenario | `npm run oracle:post`, a scenario |
 | `dataset/`   | Writes `data/homes/` from Dan's raw HEMS dataset (`index.js`: the six homes' PV and battery, a year of 30-minute slots per home, prices, daily totals, representative days) and `data/arms/` from `Demo_PlanApplyEvaluate` (`arms.js`: the honest controllers' step logs, settings, tasks and results), checking one against the other. Integers only; `decimal.js` reads every digit of the CSVs' decimals exactly, without floating point | `npm run data:extract`              |
 
 
@@ -679,7 +705,10 @@ and agent validity; and `agentPolicies`, the policies every agent trades under
 | `policies/StaticOrderPolicy.t.sol`  | 15                                                    | Hardhat and Foundry |
 | `policies/WindowPolicy.t.sol`       | 10                                                    | Hardhat and Foundry |
 | `policies/CancelQuotaPolicy.t.sol`  | 9                                                     | Hardhat and Foundry |
-| `policies/DeliverabilityPolicy.t.sol` | 26                                                  | Hardhat and Foundry |
+| `policies/DeliverabilityPolicy.t.sol` | 29                                                  | Hardhat and Foundry |
+| `policies/CyclePolicy.t.sol`        | 16                                                   | Hardhat and Foundry |
+| `policies/RampPolicy.t.sol`         | 12                                                    | Hardhat and Foundry |
+| `policies/Step5Acceptance.t.sol`    | 21: the attacks and gas as a function of k            | Hardhat and Foundry |
 | `policies/Step4Acceptance.t.sol`    | 15: the attacks and gas                               | Hardhat and Foundry |
 | `policies/PolicyFixture.sol`        | Shared setup for the policy tests, on the mock market |                     |
 | `market/MarketFixture.sol`          | Shared setup for the market tests                     |                     |
@@ -985,7 +1014,7 @@ allowance; the message count, which a refused submission does not use; an
 expiry using none of the quota; the quota renewing after an hour; the direction
 table.
 
-### `test/policies/DeliverabilityPolicy.t.sol`: 26 tests
+### `test/policies/DeliverabilityPolicy.t.sol`: 29 tests
 
 S3 through the gate on the mock market, with home_01's battery as the arms
 ran it: 5 kWh, 3 kW, 95 % each way, 10 % to 100 %; a horizon of 16
@@ -995,13 +1024,63 @@ half-hour slots.
 | Group                   | Tests | What it establishes                                                                                                                                                                                                                                                                                                   |
 | ----------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The floor               | 6     | A deliverable sale passes. **Cross-slot over-commitment is blocked** (spec step 5): two sales that each fit, together 448 Wh short, wherever the second falls; the boundary is to the Wh. The PV forecast makes room, but only its credited share. **An unfilled bid cannot justify a sale** (spec 9.1, D3); once filled, it can |
-| Power and ceiling       | 5     | A sale beyond the discharge power is blocked, and PV raises its slot's limit. A bid beyond the charge power, or one that would overfill the battery, is blocked. PV alone never causes a rejection                                                                                                                          |
+| Power and ceiling       | 7     | A sale beyond the discharge power is blocked, and PV raises its slot's limit. A second sale in a slot shares its power with the first. A bid beyond the charge power, or one that would overfill the battery, is blocked. PV alone never causes a rejection, and PV above a full battery is spilled, not stored                                                                                                                          |
 | Reserve load            | 1     | The owner's reserve stays covered, to the Wh                                                                                                                                                                                                                                                                             |
 | Only reducing passes    | 4     | A cancellation passes with an empty battery, and with no reading at all. A smaller modification passes while the plan is short. A bid passes while the floor is short; a sale does not                                                                                                                                |
-| What cannot be judged   | 4     | With no fresh reading, or once it goes stale, a placement is refused. A slot beyond the horizon is refused, and the horizon moves with the reading                                                                                                                                                                       |
+| What cannot be judged   | 5     | With no fresh reading, or once it goes stale, a placement is refused; a stale forecast gives no PV credit. A slot beyond the horizon is refused, and the horizon moves with the reading                                                                                                                                                                       |
 | An independent bound    | 1     | Fuzz: whatever sales the agent tries, those executed never draw more from the cells than the energy above the floor                                                                                                                                                                                                    |
 | Gas                     | 1     | The check at k = 8, 16, 48, 96, printed                                                                                                                                                                                                                                                                                 |
 | Configuration           | 4     | Malformed configurations are invalid; each looser parameter, and any other horizon, widens; tighter ones tighten; only the gate configures                                                                                                                                                                             |
+
+
+
+
+### `test/policies/CyclePolicy.t.sol`: 16 tests
+
+S4 through the gate on the mock market: a 5 kWh battery allowed one cycle a day,
+5,000 Wh from the cells over a sliding 24 hours, flagged above 4,000.
+
+
+| Group                 | Tests | What it establishes                                                                                                                                                                                                                                   |
+| --------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The budget of cycles  | 5     | A sale within it passes, with its draw reported. **Excess cycling is blocked** (spec step 5): flagged at 4,948, the cap itself allowed to the Wh, one Wh more refused. Discharge enters the window at the next accepted submission and leaves it a day later. The PV credit nets the pending draw |
+| What adds no cycling  | 8     | A bid needs no reading and is never judged. A cancellation passes over the cap; a smaller sale does too. Over the cap any further sale is refused. A sale with no reading, on a reading gone stale, or beyond the horizon, is refused. A new BMS starts again without counting |
+| Configuration         | 3     | Malformed configurations are invalid; what loosens widens; only the gate configures                                                                                                                                                                   |
+
+
+
+
+### `test/policies/RampPolicy.t.sol`: 12 tests
+
+S5 through the gate on the mock market: steps of at most 1,500 Wh between
+slots, flagged above 1,000.
+
+
+| Group                       | Tests | What it establishes                                                                                                                                                                                                       |
+| --------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Steps                       | 7     | Within the soft bound, passes; above it, flagged. **A position spike is blocked** (spec step 5), built in two orders. A buy spike too; a swing from +800 to −800; the step to the right as much as to the left. A ramp built slot by slot passes |
+| What smooths passes (D10)   | 3     | Over a profile already too steep, a smoothing bid and a sale beside the spike pass, a steepening sale does not. Cancelling the spike passes, and so does spreading it                                                    |
+| Configuration               | 2     | The bounds, and only the gate configuring                                                                                                                                                                                 |
+
+
+
+
+### `test/policies/Step5Acceptance.t.sol`: 21 tests
+
+Step 5's criteria on the ported P2P market through the gate, with home_01's
+battery as the arms ran it and hourly slots. Each attack is shown blocked, and
+passing under per-action bounds only.
+
+
+| Group                              | Tests | What it establishes                                                                                                                                                                                                                                                                        |
+| ---------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cross-slot over-commitment         | 2     | Three offers of 1.5 kWh, 4.7 from the cells against 3.5 above the floor: S3 refuses the batch, and the third when spread                                                                                                                                                                   |
+| Phantom-buy justification          | 2     | A bid that will never fill cannot justify an offer; what the battery holds itself can                                                                                                                                                                                                      |
+| Excess cycling                     | 3     | Four offers would draw 6.3 kWh in a day against one cycle, 5 kWh: S4 refuses the fourth, and with 3.5 kWh already discharged, the second                                                                                                                                                  |
+| Position spike                     | 2     | 3 kWh in one hour is refused by S5; more energy, spread as a ramp, passes                                                                                                                                                                                                                 |
+| Stale or favourable reading        | 4     | An older, fuller reading handed in after the current one is refused (`Oracle_Reordered`), so is a stale one (`Oracle_Stale`), and a stored reading gone stale serves no more. Under per-action bounds the reading plays no part                                                     |
+| A cancellation always passes       | 1     | Fuzz, 256 runs: under A1–A6, S1, S2, S3, S4, after random orders and a battery found nearly empty and heavily cycled, every open order is cancelled, with a reading or without                                                                                                            |
+| Gas as a function of k             | 7     | One offer and one bid at k = 8, 16, 24, 48, 96, policy by policy; a 24-offer day-ahead batch with and without every policy. Report: `docs/reports/gas-step5-2026-10-19.md`                                                                                                              |
 
 
 
@@ -1128,6 +1207,8 @@ by breaking one line of the gate, running the tests, and restoring the line.
 | Against `test/accounts/`                                                                                                         | 9       | 9 caught                                                                                                                                                                                                                                                                                                                                             |
 | Step 2 code (ledger, gate booking, mock market, decoder) against `test/gate/`                                                    | 51      | 41 caught at first. Seven survivors were gaps in the ledger and gate tests; nine tests were added and all seven are caught. The other three are in the mock market, now a test double                                                                                                                                                                |
 | The market port (token, session, prosumer contract, manager, settlement rule, decoder) against `test/market/` and the gate tests | 54      | 48 caught at first. The six survivors were tests that never reached an edge: a direct cancel on the session, a bid over-matched, exactly 10%, a 16% deviation, rounding of a penalty and of a leg's value. Six tests were added and all 54 are caught                                                                                                |
+| Step 4: the `policies` catalogue (the gate's phases, `StaticOrderPolicy`, `WindowPolicy`, `CancelQuotaPolicy`), on 16 October | 43 | 42 caught at first; one gap (a 24-hour window always expired by the time a 24-hour widening applied): a test was added, caught. Report: `docs/reports/mutation-policies-2026-10-16.md` |
+| Step 5: the `physical` catalogue (the oracle verifier, readings through the gate, `HorizonLib`, S3, S4, S5), on 19 October | 42 | 38 caught at first. Three gaps (a stale forecast given to S3, the ledger's batch view off by one slot, S4 on a reading gone stale): three tests added, caught. One mutant did not build and was corrected: caught. The clean run: 42 of 42 caught. Report: `docs/reports/mutation-physical-2026-10-19.md` |
 | Step 3: all four Hardhat catalogues of the committed suite, `npm run mutate`, on 15 October                                      | 192     | 187 caught at first. One gap in the window tests (a restart, visible only in bucket 0): a test was added, caught. One mutant no longer built after the market port and was corrected: caught. Three survive in the mock market, a test double, and are marked accepted. Final: 189 caught, 3 accepted. Report: `docs/reports/mutation-2026-10-15.md` |
 
 
@@ -1139,7 +1220,9 @@ security analysis.
 
 Since step 3 the runs are committed as the mutation suite, `offchain/mutation/`.
 The step 1, step 2 and market lists are its `gate`, `ledger` and `market`
-catalogues, and the nine real-account defects its `accounts` catalogue. The
+catalogues, and the nine real-account defects its `accounts` catalogue; steps
+3, 4 and 5 added `window`, `policies` and `physical`. Spec 8's mutants are all
+in a catalogue now: none is pending. The
 runbook says how to run it.
 
 ### What the tests do not show
@@ -1180,14 +1263,16 @@ npm install
 
 ### The Hardhat suite
 
-Expect **359 passing** in about two minutes:
+Expect **411 passing** in about three minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
   market, 8 ledger, 15 policy phases, 14 readings;
 - the oracle verifier: 35;
 - the market: 23 token, 41 market flow, 12 gated market, 6 settlement rule;
 - the windows and the policies: 32 `WindowLib`, 15 `StaticOrderPolicy`, 11
-  `WindowPolicy`, 9 `CancelQuotaPolicy`, 26 `DeliverabilityPolicy`, 15 acceptance (attacks and gas).
+  `WindowPolicy`, 9 `CancelQuotaPolicy`, 29 `DeliverabilityPolicy`, 16
+  `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 21 step 5 acceptance
+  (attacks and gas).
 
 ```bash
 npm test
@@ -1198,7 +1283,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **367 passed**: the 359 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 16 October, after step 5.1, with 341.
+Expect **419 passed**: the 411 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 16 October, after step 5.1, with 341. Not re-run at the end of step 5: Docker was not running (log 5.7).
 
 With Foundry installed and allowed to run:
 
@@ -1360,52 +1445,79 @@ npm run demo:flow
 What it does and prints, stage by stage:
 
 1. **The operator opens a day-ahead session.**
-  - Delivery is a whole day, 00:00 to 24:00 Brussels time.
+  - Delivery is a whole day, 00:00 to 24:00 Brussels time, in 48 half-hour
+  slots (46 or 50 when the clocks change).
   - Trading closes at 12:00 the day before.
-  - The script takes the first day whose trading is still open, so a run after
-  12:00 trades the day after tomorrow.
-  - The day is 24 hourly slots, or 23 or 25 when the clocks change.
-2. **Every prosumer places an order for every hour**, one call per side.
-  - **Alice's agent** sends 24 bids through the gate in one call (24 legs).
+  - The script takes the first day whose trading is still open, and first
+  moves the clock to 09:00 the day before, if it is earlier: from there the
+  physical policies' horizon, 96 slots, reaches the end of the delivery day.
+2. **The oracles report.** For Alice and Carol:
+  - the PV relay posts a forecast of 96 slots, the PV of `prosumers.json`'s
+  `dataDate` (13 June 2022) laid on the delivery day;
+  - each BMS signs its battery's state: Alice's replays the honest arm B2 of
+  home_01, Carol's is home_05's battery at its initial charge.
+3. **Every prosumer places an order for every half hour**, at most 24 orders a
+  call: a whole day in one call would pass the 16.8M gas a transaction may
+  use (EIP-7825).
+  - **Alice's agent** sends 48 bids in two calls; its first call brings the
+  battery reading.
   - **Carol's agent** sends her midday offers and the rest of her day's bids.
-  - **Bob** offers every hour himself, through his account, with no agent.
-  - The day's profiles are in `offchain/scenarios/day-ahead.js` (`profiles`) and in decision log entry
-  2.58.
-3. **Alice's agent modifies her 19:00 bid.** This is two legs: a cancel, then a
-  place. It takes her budget, S1, from 5.58 to 6.08 USD, past its soft bound of
-  6 USD: the modification is **flagged** and goes ahead.
-4. **Alice's agent tries to go past her budget**: one more bid worth 2 USD,
-  which would take her to 7.68 USD, past the hard bound of 7. **S1 refuses it.**
-  The call does not revert; the script prints every policy's result on it
-  from the log.
-5. **Time jumps to the close.** An agent order is now refused, with the market's
-  own error: `MarketSession_Closed`.
-6. **The matcher reads the session, matches it and finalises it.** The trades
-  are printed hour by hour: who bought from whom, how much, and at what price.
-7. **A keeper expires every unmatched remainder and reconciles the ledger.**
-  Then, for every hour, the ledger is compared with the prosumer contracts'
-   commitments.
-8. **Time jumps past delivery, and each prosumer's sensor settles its hours.**
-  - Bob delivers 80% at 19:00 and pays a penalty.
+  - **Bob** offers every half hour himself, through his account, with no agent.
+  - The day's profiles are in `offchain/scenarios/day-ahead.js` (`profiles`):
+  an hour's energy, halved for each half hour.
+4. **Alice's agent modifies her 19:00 bid,** 0.75 kWh at 0.27 to 0.9 kWh at
+  0.28. This is two legs: a cancel, then a place. It takes her budget, S1,
+  past its soft bound of 5.6 USD: the modification is **flagged** and goes
+  ahead.
+5. **Alice's agent tries to go past her budget**: one more bid of 5 kWh, worth
+  2 USD. **S1 refuses it**, and so do S3 (no 5 kWh into her battery in half an
+  hour) and S5 (a 5 kWh step). The call does not revert; the script prints
+  every policy's result from the log.
+6. **Carol's agent offers 10 kWh between 21:00 and 23:00**, after sunset.
+  **S3 refuses it:** nearly 10 kWh could not be delivered. 0.4 kWh at the same
+  hours passes: the horizon reaches into the night after, when the battery
+  must also cover Carol's reserve.
+7. **Carol's agent hands in an older, fuller battery reading**: genuine, a
+  minute older than the one held. The verifier refuses it,
+  `Oracle_Reordered`, and the call reverts.
+8. **Time jumps to the close.** An agent order is now refused by the gate: its
+  battery reading is no longer fresh, so S3 cannot judge it. Bob's own order is
+  refused by the market itself: `MarketSession_Closed`.
+9. **The matcher reads the session, matches it and finalises it.** The trades
+  are printed slot by slot: who bought from whom, how much, at what price.
+10. **A keeper expires every unmatched remainder and reconciles the ledger.**
+  Then, for every slot, the ledger is compared with the prosumer contracts'
+  commitments.
+11. **Time jumps past delivery, and each prosumer's sensor settles its slots.**
+  - Bob delivers 80% at 19:00 and 19:30 and pays a penalty.
   - The others deliver within 10% and pay none.
-  - The script prints each prosumer's day: bought, sold, paid, penalties.
-9. **Final balances:** who paid whom, and what the manager collected.
+12. **Final balances:** who paid whom, and what the manager collected.
 
 Each agent trades under the policies of `prosumers.json`'s `agentPolicies`,
 added to its account at deployment:
 
 - per-action bounds: at most 5 kWh and 5 USD an order, prices between 0.05 and
   0.50, three days ahead;
-- the budget S1: 6 USD soft and 7 USD hard over a sliding day;
+- the budget S1: 5.6 USD soft and 7 USD hard over a sliding day;
 - the caps S2: 30 kWh of export and 40 kWh of import a day;
 - the cancellation quota S6: 10 kWh an hour, threefold in the last 30 minutes
-  before the gate, and 20 messages an hour.
+  before the gate, and 20 messages an hour;
+- set from each prosumer's `battery`: deliverability S3 over 96 slots with the
+  whole PV forecast credited; cycles S4, two a day, flagged above 1.5; the ramp
+  S5, steps of at most 3 kWh, flagged above 2.
+
+**Alice's S3 value is never zero.** Her reserve load, 0.5 kWh a half hour, is
+more than her 5 kWh battery and her PV can cover over two nights. S3 reports
+that shortfall before and after every order. Her bids pass, as they do not add
+to it, but she could sell nothing: Alice is a consumer. Carol's reserve is
+0.3 kWh, and her battery 10 kWh.
 
 Edit them there and deploy again.
 
 The node's clock starts at the real time. The flow moves it forward, so a
 second run on the same node trades a later day. Restart the node to come back
-to today.
+to today. Readings are tied to the clock too: the BMS's is fresh for one slot,
+the forecast for an hour; the flow signs new ones each run.
 
 Each run opens a new session, so the flow can be run again on the same
 deployment. A run that stops half-way leaves its session's orders locked;
@@ -1456,8 +1568,7 @@ agent's session allows and until when; the events `ProsumerRegistered` and
 
 | Step | Adds                                                                                 |
 | ---- | ------------------------------------------------------------------------------------ |
-| 5    | 5.1 to 5.3 built: signed readings, the oracles that sign them, deliverability S3. Next, battery cycles S4, ramp S5 |
-| 6    | The attack matrix against all baselines, the false-positive rate on honest arms, gas |
+| 6    | The full attack matrix against all baselines; the false-positive rate on the honest arms of `data/arms/`, scored against B2; gas as a function of n and k, the policies as separate contracts against one monolithic contract |
 
 
 Dan answered every open decision on 16 October (log 4.9): the decisions of

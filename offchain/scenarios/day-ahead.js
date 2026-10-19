@@ -6,22 +6,31 @@
 //   npm run demo:flow
 //
 //   1  the operator opens the day-ahead session for the next delivery day:
-//      every hour from 00:00 to 24:00 Brussels time, trading closing at 12:00
-//      the day before, as on the European day-ahead market
-//   2  every prosumer places an order for every hour: Alice's and Carol's
-//      agents through the gate, Bob on his own, without an agent
-//   3  Alice's agent modifies one of her bids: past her soft budget, flagged
-//   4  Alice's agent tries to go past her hard budget: refused by S1, and the
-//      refusal is in the log
-//   5  trading closes; an agent order is now refused
-//   6  the matcher matches every hour and finalises the session
-//   7  a keeper expires what was not matched and reconciles the ledger
-//   8  the delivery day passes; each prosumer's sensor settles its hours
-//   9  final balances
+//      every half hour from 00:00 to 24:00 Brussels time, trading closing at
+//      12:00 the day before, as on the European day-ahead market. The clock
+//      first moves to 09:00 that day, if it is earlier
+//   2  the oracles report: the PV relay posts each agent's forecast, from the
+//      data's day; each house's BMS signs its battery's state
+//   3  every prosumer places an order for every half hour: Alice's and
+//      Carol's agents through the gate, the battery reading with the first
+//      order; Bob on his own, without an agent
+//   4  Alice's agent modifies one of her bids: past her soft budget, flagged
+//   5  Alice's agent tries to go past her hard budget: refused, by S1 and S3,
+//      and the refusal is in the log
+//   6  Carol's agent offers more than her battery can deliver overnight:
+//      refused by S3; a smaller offer passes
+//   7  Carol's agent hands in an older, fuller battery reading: refused by
+//      the oracle verifier
+//   8  trading closes; an agent order is now refused
+//   9  the matcher matches every slot and finalises the session
+//  10  a keeper expires what was not matched and reconciles the ledger
+//  11  the delivery day passes; each prosumer's sensor settles its slots
+//  12  final balances
 //
-// The agents trade under the policies of prosumers.json's "agentPolicies"
-// (step 4): per-action bounds, a budget S1, export and import caps S2, and a
-// cancellation quota S6.
+// The agents trade under the policies of prosumers.json's "agentPolicies":
+// per-action bounds, a budget S1, export and import caps S2 and a
+// cancellation quota S6 (step 4); deliverability S3, cycles S4 and the ramp
+// S5, set from each prosumer's battery (step 5).
 //
 // Run it again for another day: each run opens the next session.
 
@@ -29,7 +38,8 @@ import { loadDeployment, send, read, calldata, events, now, warpTo, price, usd, 
 import { runMatcher } from "../matcher/index.js";
 import { expireUnmatched, reconcile } from "../keeper/index.js";
 import { commitmentOf, report } from "../sensor/index.js";
-import { wallClock, nextDayAhead, label, hhmm } from "./calendar.js";
+import { postForecast, bmsReading, batteryOf, batteryAt, forecastAt } from "../oracle/index.js";
+import { wallClock, nextDayAhead, brussels, addDays, label, hhmm } from "./calendar.js";
 
 const ELECTRICITY = 0;
 const step = (n, text) => console.log(`\n── ${n}. ${text} ${"─".repeat(Math.max(0, 66 - text.length))}`);
@@ -43,7 +53,8 @@ const nameOf = Object.fromEntries(Object.entries(P).map(([name, p]) => [p.accoun
 // --- the prosumers' days ----------------------------------------------------
 //
 // Each returns, for an hour of the Brussels day, the order that prosumer
-// places: [side, Wh, USD per kWh].
+// places: [side, Wh in that hour, USD per kWh]. A half-hour slot takes half
+// the hour's Wh.
 
 const profiles = {
   // A household: buys every hour, more at the morning and evening peaks, and
@@ -63,9 +74,9 @@ const profiles = {
  * gate's submit, and the gate has the account call the prosumer contract.
  * agent → account (session) → PolicyGate → account → Prosumer.
  */
-async function viaAgent(name, fn, args) {
+async function viaAgent(name, fn, args, readings = []) {
   const p = P[name];
-  const submit = calldata("PolicyGate", "submit", [p.prosumer, calldata("Prosumer", fn, args), []]);
+  const submit = calldata("PolicyGate", "submit", [p.prosumer, calldata("Prosumer", fn, args), readings]);
   const receipt = await send(p.agent.keyIndex, p.account, "MiniAccount", "executeAsSession", [gate, submit]);
   const legs = events(receipt, "PolicyGate", "OrderSubmitted")[0].args.legs.length;
   const rejected = events(receipt, "PolicyGate", "Rejected").length > 0;
@@ -85,8 +96,24 @@ function policyResults(name, receipt) {
 
 const VERDICT = ["execute", "FLAG", "REJECT"];
 
+/** One policy's result, in its own units. */
+function describe(r) {
+  if (r.name.startsWith("S1")) return `${usd(r.valueBefore)} → ${usd(r.valueAfter)}, hard ${usd(r.hard)}`;
+  if (r.name.startsWith("A1")) return `bounds broken: ${r.valueAfter}`;
+  if (r.valueAfter === 2n ** 256n - 1n) return "cannot judge it (no fresh reading, or beyond the horizon)";
+  if (r.name.startsWith("S3")) return `undeliverable ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)}`;
+  if (r.name.startsWith("S4")) return `drawn from the cells ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)}, cap ${kWh(r.hard)}`;
+  if (r.name.startsWith("S5")) return `largest step ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)}, at most ${kWh(r.hard)}`;
+  return `${r.valueBefore} → ${r.valueAfter} of ${r.hard}`;
+}
+
+/** Which instances refused a submission. */
+function refusedBy(name, receipt) {
+  return policyResults(name, receipt).filter((r) => r.verdict === 2).map((r) => `${r.name} (${describe(r)})`).join("; ");
+}
+
 /** The owner's own call, through its account, without an agent. */
-async function viaOwner(name, fn, args) {
+async function viaOwner(name, fn, args, _readings) {
   const p = P[name];
   const receipt = await send(p.owner.keyIndex, p.account, "MiniAccount", "execute", [p.prosumer, 0n, calldata("Prosumer", fn, args)]);
   return { receipt, legs: null, gas: receipt.gasUsed };
@@ -106,6 +133,11 @@ async function balances() {
 async function main() {
   // ── 1 ───────────────────────────────────────────────────────────────────
   step(1, "The operator opens the day-ahead session");
+  // At 09:00 the day before delivery the physical policies' horizon, 96
+  // half-hour slots, reaches the end of the delivery day.
+  const day = nextDayAhead(await now(), SLOT);
+  const morning = brussels(addDays(wallClock(day.start), -1), 9);
+  if (morning > (await now())) await warpTo(morning);
   const t = await now();
   const { start, end, closesAt, firstSlot, slotCount } = nextDayAhead(t, SLOT);
   const slotStart = (i) => (firstSlot + i) * SLOT;
@@ -115,27 +147,54 @@ async function main() {
   ]);
   const session = await read(manager, "MarketManager", "currentSession", [ELECTRICITY]);
   console.log(`  session  ${session}`);
-  console.log(`  delivery ${label(start)} → ${label(end)}: ${slotCount} hourly slots`);
+  console.log(`  delivery ${label(start)} → ${label(end)}: ${slotCount} half-hour slots`);
   console.log(`  trading  open now (${label(t)}), closes ${label(closesAt)}`);
   console.log("\n  Balances before trading:");
   await balances();
 
   // ── 2 ───────────────────────────────────────────────────────────────────
-  step(2, "Every prosumer places an order for every hour");
+  step(2, "The oracles report");
+  const nowSlot = Math.floor(t / SLOT) * SLOT;
+  const readings = {};
+  const horizon = d.oracles.horizonSlots ?? 96;
+  console.log(`  data: ${d.dataDate}, laid on the delivery day; the forecast is the PV that came`);
+  for (const name of Object.keys(P).filter((n) => P[n].bms)) {
+    const state = batteryAt(P[name], d.dataDate, start, nowSlot);
+    const pvWh = forecastAt(P[name], d.dataDate, start, nowSlot, horizon, SLOT);
+    await postForecast(d, name, { firstSlotStart: nowSlot, pvWh, issuedAt: await now() });
+    readings[name] = [await bmsReading(d, name, nowSlot, state)];
+    const tomorrow = pvWh.slice((start - nowSlot) / SLOT, (end - nowSlot) / SLOT).reduce((a, b) => a + b, 0);
+    console.log(
+      `  ${name.padEnd(6)} battery ${kWh(state.socWh)} stored, odometer ${kWh(state.dischargeOdometerWh)} (${state.source});` +
+        ` forecast ${pvWh.length} slots, ${kWh(tomorrow)} of PV on the delivery day`,
+    );
+  }
+
+  // ── 3 ───────────────────────────────────────────────────────────────────
+  step(3, "Every prosumer places an order for every half hour");
   const placed = {};
   for (const name of Object.keys(P)) {
     const bids = [];
     const offers = [];
     for (let i = 0; i < slotCount; i++) {
-      const [side, wh, eurPerKWh] = profiles[name](wallClock(slotStart(i)).h);
-      (side === "bid" ? bids : offers).push(req(i, wh, eurPerKWh));
+      const [side, whPerHour, eurPerKWh] = profiles[name](wallClock(slotStart(i)).h);
+      (side === "bid" ? bids : offers).push(req(i, (whPerHour * SLOT) / 3600, eurPerKWh));
     }
     const how = P[name].agent ? "agent → gate" : "directly";
     const call = P[name].agent ? viaAgent : viaOwner;
     placed[name] = [];
-    for (const [fn, list] of [["placeBids", bids], ["placeOffers", offers]]) {
-      if (list.length === 0) continue;
-      const { receipt, legs, gas } = await call(name, fn, [ELECTRICITY, list]);
+    // At most 24 orders a call: a whole day of half-hour slots under every
+    // policy would pass the 16.8M gas a transaction may use (EIP-7825).
+    const calls = [];
+    for (const [fn, all] of [["placeBids", bids], ["placeOffers", offers]]) {
+      for (let k = 0; k < all.length; k += 24) calls.push([fn, all.slice(k, k + 24)]);
+    }
+    for (const [fn, list] of calls) {
+      // The agent brings the battery reading with its first order.
+      const extra = P[name].agent && readings[name] ? [readings[name]] : [];
+      if (extra.length) delete readings[name];
+      const { receipt, legs, gas, rejected } = await call(name, fn, [ELECTRICITY, list], ...extra);
+      if (rejected) console.log(`  !! ${name}'s ${fn} was refused: ${refusedBy(name, receipt)}`);
       placed[name].push(...events(receipt, "Prosumer", "OrderBooked").map((e) => e.args));
       const what = fn === "placeBids" ? "bids" : "offers";
       console.log(
@@ -149,43 +208,67 @@ async function main() {
     console.log(`  ledger: ${name} has ${open} open orders booked`);
   }
 
-  // ── 3 ───────────────────────────────────────────────────────────────────
-  step(3, "Alice's agent modifies her 19:00 bid");
+  // ── 4 ───────────────────────────────────────────────────────────────────
+  step(4, "Alice's agent modifies her 19:00 bid");
   const evening = placed.alice.find((o) => wallClock(Number(o.slot) * SLOT).h === 19);
-  const modify = await viaAgent("alice", "modifyOrder", [evening.id, req(Number(evening.slot) - firstSlot, 1800, "0.28")]);
-  console.log(`  19:00: 1.5 kWh at 0.27 → 1.8 kWh at 0.28, ${modify.legs} legs (cancel, then place)`);
+  const modify = await viaAgent("alice", "modifyOrder", [evening.id, req(Number(evening.slot) - firstSlot, 900, "0.28")]);
+  console.log(`  19:00: 0.75 kWh at 0.27 → 0.9 kWh at 0.28, ${modify.legs} legs (cancel, then place)`);
   const budget = policyResults("alice", modify.receipt).find((r) => r.name === "S1 budget");
   console.log(
     `  S1 budget: ${usd(budget.valueBefore)} → ${usd(budget.valueAfter)}, soft ${usd(budget.soft)}, ` +
       `hard ${usd(budget.hard)}: ${VERDICT[budget.verdict]}`,
   );
 
-  // ── 4 ───────────────────────────────────────────────────────────────────
-  step(4, "Alice's agent tries to go past her budget");
+  // ── 5 ───────────────────────────────────────────────────────────────────
+  step(5, "Alice's agent tries to go past her budget");
   const greedy = await viaAgent("alice", "placeBids", [ELECTRICITY, [req(12, 5000, "0.40")]]);
   console.log(`  one more bid: 5 kWh at 0.40, ${usd(price("0.40") * 5n)} — ${greedy.rejected ? "refused" : "!! executed"}`);
   for (const r of policyResults("alice", greedy.receipt)) {
-    const amounts = r.name.startsWith("S1")
-      ? `${usd(r.valueBefore)} → ${usd(r.valueAfter)}, hard ${usd(r.hard)}`
-      : r.name.startsWith("A1")
-        ? `bounds broken: ${r.valueAfter}`
-        : `${r.valueBefore} → ${r.valueAfter} of ${r.hard}`;
-    console.log(`    ${r.name.padEnd(16)} ${VERDICT[r.verdict].padEnd(8)} ${amounts}`);
+    console.log(`    ${r.name.padEnd(18)} ${VERDICT[r.verdict].padEnd(8)} ${describe(r)}`);
   }
   console.log("  The call did not revert: the refusal and every policy's view of it are on chain.");
 
-  // ── 5 ───────────────────────────────────────────────────────────────────
-  step(5, "Trading closes at 12:00 the day before delivery");
-  await warpTo(closesAt);
+  // ── 6 ───────────────────────────────────────────────────────────────────
+  step(6, "Carol's agent offers more than her battery can deliver");
+  const night = (h, m) => req((brussels(wallClock(start), h) + m * 60 - start) / SLOT, 2500, "0.25");
+  const oversell = await viaAgent("carol", "placeOffers", [ELECTRICITY, [night(21, 0), night(21, 30), night(22, 0), night(22, 30)]]);
+  const s3 = policyResults("carol", oversell.receipt).find((r) => r.name === "S3 deliverability");
+  console.log(`  10 kWh offered between 21:00 and 23:00, after sunset — ${oversell.rejected ? "refused" : "!! executed"}`);
+  console.log(`    S3 deliverability  ${VERDICT[s3.verdict].padEnd(8)} ${describe(s3)}`);
+  // The horizon reaches into the night after the delivery day, when the
+  // battery must also cover Carol's reserve until the sun is back.
+  const fewer = await viaAgent("carol", "placeOffers", [ELECTRICITY, [{ ...night(21, 0), quantity: 200n }, { ...night(21, 30), quantity: 200n }]]);
+  const s3fewer = policyResults("carol", fewer.receipt).find((r) => r.name === "S3 deliverability");
+  console.log(`  0.4 kWh offered at 21:00 and 21:30 instead — ${fewer.rejected ? "!! refused: " + refusedBy("carol", fewer.receipt) : "placed"}`);
+  console.log(`    S3 deliverability  ${VERDICT[s3fewer.verdict].padEnd(8)} ${describe(s3fewer)}`);
+
+  // ── 7 ───────────────────────────────────────────────────────────────────
+  step(7, "Carol's agent hands in an older, fuller battery reading");
+  const held = await batteryOf(d, "carol");
+  const older = await bmsReading(d, "carol", Number(held.timestamp) - 60, { socWh: 9000, dischargeOdometerWh: held.dischargeOdometerWh });
   try {
-    await viaAgent("alice", "placeBids", [ELECTRICITY, [req(0, 500, "0.25")]]);
-    console.log("  !! an order after closing was accepted");
+    await viaAgent("carol", "placeOffers", [ELECTRICITY, [night(22, 0)]], [older]);
+    console.log("  !! the older reading was accepted");
   } catch (error) {
-    console.log(`  an agent order after closing is refused: ${error.message}`);
+    console.log(`  a genuine reading, a minute older than the one held, showing 9 kWh: ${error.message}`);
   }
 
-  // ── 6 ───────────────────────────────────────────────────────────────────
-  step(6, "The matcher matches every hour");
+  // ── 8 ───────────────────────────────────────────────────────────────────
+  step(8, "Trading closes at 12:00 the day before delivery");
+  await warpTo(closesAt);
+  // The agent's battery reading is no longer fresh, so the gate refuses first,
+  // without reaching the market. Bob, without a gate, meets the market's rule.
+  const late = await viaAgent("alice", "placeBids", [ELECTRICITY, [req(0, 500, "0.25")]]);
+  console.log(`  an agent order after closing — ${late.rejected ? "refused by the gate: " + refusedBy("alice", late.receipt) : "!! accepted"}`);
+  try {
+    await viaOwner("bob", "placeOffers", [ELECTRICITY, [req(0, 500, "0.25")]]);
+    console.log("  !! an order after closing was accepted by the market");
+  } catch (error) {
+    console.log(`  Bob's own order after closing is refused by the market: ${error.message}`);
+  }
+
+  // ── 9 ───────────────────────────────────────────────────────────────────
+  step(9, "The matcher matches every slot");
   const trades = await runMatcher(d, session, {
     log: (line) => !line.startsWith("              ") && console.log("  " + line),
   });
@@ -203,8 +286,8 @@ async function main() {
     console.log(`  ${hhmm(slotStart(i))}  ${(bySlot.get(firstSlot + i) ?? ["no trade"]).join(";  ")}`);
   }
 
-  // ── 7 ───────────────────────────────────────────────────────────────────
-  step(7, "A keeper expires the rest and reconciles the ledger");
+  // ── 10 ──────────────────────────────────────────────────────────────────
+  step(10, "A keeper expires the rest and reconciles the ledger");
   console.log(`  expired ${await expireUnmatched(d, session)} orders with an unmatched remainder`);
 
   for (const name of Object.keys(P).filter((n) => P[n].agent)) {
@@ -220,13 +303,13 @@ async function main() {
     }
     const open = await read(ledger, "PositionLedger", "openOrderCount", [p.account]);
     console.log(
-      `  ${name.padEnd(6)} ${open} orders left open; ledger and market agree in ${agree} of ${slotCount} hours` +
+      `  ${name.padEnd(6)} ${open} orders left open; ledger and market agree in ${agree} of ${slotCount} slots` +
         (differ ? `, DIFFER in ${differ}` : ""),
     );
   }
 
-  // ── 8 ───────────────────────────────────────────────────────────────────
-  step(8, "The delivery day passes; sensors settle every hour");
+  // ── 11 ──────────────────────────────────────────────────────────────────
+  step(11, "The delivery day passes; sensors settle every slot");
   await warpTo(end);
   // Measured, as a share of the commitment: Bob's battery falls short at
   // 19:00, by more than 10%; otherwise he delivers 95% and everyone else 100%.
@@ -257,13 +340,13 @@ async function main() {
   }
   for (const [name, x] of Object.entries(tally)) {
     console.log(
-      `  ${name.padEnd(6)} ${String(x.settled).padStart(2)} hours settled: bought ${kWh(x.bought)} for ${usd(x.paid)},` +
+      `  ${name.padEnd(6)} ${String(x.settled).padStart(2)} slots settled: bought ${kWh(x.bought)} for ${usd(x.paid)},` +
         ` sold ${kWh(x.sold)} for ${usd(x.received)}, penalties ${usd(x.penalty)}`,
     );
   }
 
-  // ── 9 ───────────────────────────────────────────────────────────────────
-  step(9, "Final balances");
+  // ── 12 ──────────────────────────────────────────────────────────────────
+  step(12, "Final balances");
   await balances();
   console.log(`  manager (penalties collected) ${usd(await read(token, "LockableERC1155", "balanceOf", [manager, 0n]))}`);
 }

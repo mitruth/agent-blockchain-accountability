@@ -89,6 +89,7 @@ export async function send(from, address, contract, functionName, args = []) {
 const EVERY_CONTRACT = [
   "PolicyGate", "PositionLedger", "MiniAccount", "Prosumer", "MarketSession",
   "MarketManager", "LockableERC1155", "ProsumerDecoder", "WindowProbe", "OracleVerifier",
+  "DeliverabilityPolicy", "CyclePolicy", "RampPolicy",
 ];
 
 function revertData(error) {

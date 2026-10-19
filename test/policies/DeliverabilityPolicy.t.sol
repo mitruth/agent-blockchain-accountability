@@ -168,6 +168,14 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
         assertEq(market.orderCount(), 1);
     }
 
+    /// @dev The ledger's sale in slot 4 and the new one there share the
+    ///      slot's 1,500 Wh of discharge power.
+    function test_aSecondSaleInTheSameSlotCountsTheFirst() public {
+        _submitWith(_placeCall(Side.SELL, 4, 1_500, PRICE), _battery(5_000));
+        assertEq(_sell(4, 100), bytes32(0));
+        assertTrue(_sell(5, 100) != bytes32(0));
+    }
+
     function test_PVRaisesTheDischargeLimitOfItsSlot() public {
         _forecastNow(_pvAt(4, 200));
         _submitWith(_placeCall(Side.SELL, 4, 1_700, PRICE), _battery(5_000));
@@ -195,6 +203,27 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
         _forecastNow(_pvAt(4, 1_000));
         _submitWith(_placeCall(Side.SELL, 8, 100, PRICE), _battery(5_000));
         assertEq(market.orderCount(), 1);
+    }
+
+    /// @dev A forecast past its maximum age gives no credit: issued at slot 0,
+    ///      it is stale by slot 3, and the second sale needs its PV.
+    function test_aStaleForecastGivesNoCredit() public {
+        _forecastNow(_pvAt(7, 1_000));
+        vm.warp(block.timestamp + 3 * SLOT_SECONDS);
+        _submitWith(_placeCall(Side.SELL, 6, 1_400, PRICE), _battery(3_000));
+        assertEq(market.orderCount(), 1);
+        assertEq(_sell(7, 1_400), bytes32(0));
+    }
+
+    /// @dev A full battery cannot store the PV of slot 4: it is spilled, and
+    ///      gives no room for later sales. Three sales of 1,500 draw 4,737,
+    ///      more than the 4,500 above the floor.
+    function test_PVBeyondAFullBatteryIsSpilled() public {
+        _forecastNow(_pvAt(4, 2_000));
+        _submitWith(_placeCall(Side.SELL, 6, 1_500, PRICE), _battery(5_000));
+        _sell(7, 1_500);
+        assertEq(_sell(8, 1_500), bytes32(0));
+        assertEq(market.orderCount(), 2);
     }
 
     // ------------------------------------------------------------------

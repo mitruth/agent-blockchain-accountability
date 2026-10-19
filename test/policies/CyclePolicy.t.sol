@@ -104,6 +104,25 @@ contract CyclePolicyTest is PolicyFixture, OracleFixture {
         _sellWith(6, 100, new SignedReading[](0));
         assertEq(market.orderCount(), 2);
         assertEq(_lastResult().valueAfter, 5_054);
+
+        // The cap itself is allowed: 49 Wh draws 52, to 5,000 exactly. One
+        // more Wh draws 2.
+        _sellWith(6, 49, new SignedReading[](0));
+        assertEq(market.orderCount(), 3);
+        assertEq(_lastResult().valueAfter, 5_000);
+        _sellWith(7, 1, new SignedReading[](0));
+        assertEq(market.orderCount(), 3);
+        assertEq(_lastResult().valueAfter, 5_002);
+    }
+
+    /// @dev Over the cap, a sale made smaller passes (D10): it takes less.
+    function test_aSmallerSalePassesOverTheCap() public {
+        _sellWith(4, 1_400, _battery(10_000));
+        bytes32 sale = bytes32(market.orderCount());
+        _nextSlot();
+        _submitWith(abi.encodeCall(MockEnergyMarket.modifyOrder, (sale, 4, 700, PRICE)), _battery(16_000));
+        assertFalse(market.isOpen(sale));
+        assertEq(market.orderCount(), 2);
     }
 
     function test_theDischargeIsCountedAtTheNextAcceptedSubmission() public {
@@ -168,6 +187,17 @@ contract CyclePolicyTest is PolicyFixture, OracleFixture {
         vm.recordLogs();
         _sellWith(4, 100, new SignedReading[](0));
         assertEq(market.orderCount(), 0);
+        assertEq(_lastResult().valueAfter, type(uint256).max);
+    }
+
+    /// @dev A reading that was fresh and has aged is not one: S4 cannot judge
+    ///      a sale on it.
+    function test_aSaleAfterTheReadingWentStaleIsRefused() public {
+        _sellWith(4, 100, _battery(0));
+        vm.warp(block.timestamp + SLOT_SECONDS + 1);
+        vm.recordLogs();
+        _sellWith(6, 100, new SignedReading[](0));
+        assertEq(market.orderCount(), 1);
         assertEq(_lastResult().valueAfter, type(uint256).max);
     }
 

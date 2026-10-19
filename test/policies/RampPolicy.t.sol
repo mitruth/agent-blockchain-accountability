@@ -82,6 +82,11 @@ contract RampPolicyTest is PolicyFixture {
         assertEq(market.orderCount(), 4);
     }
 
+    function test_theStepToTheRightCountsToo() public {
+        _place(Side.BUY, 6, 800, PRICE);
+        assertEq(_place(Side.SELL, 5, 800, PRICE), bytes32(0));
+    }
+
     function test_aSaleNextToABidCountsTheWholeSwing() public {
         _place(Side.BUY, 5, 800, PRICE);
         // From +800 to -800 is a step of 1,600.
