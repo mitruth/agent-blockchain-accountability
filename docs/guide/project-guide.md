@@ -1149,9 +1149,14 @@ Kernel. One test per account, same scenario:
 5. The session cannot reach the market directly, the gate's owner path, or
   `installModule` and `uninstallModule`; nor can it reach the account through
   `submit`. Afterwards no rogue module is installed and the gate still is.
-6. The owner proposes a widening. It is not in force at once. After 24 hours
+6. Nor can the owner open those doors: approving the account or the gate as a
+  target is refused, and nothing ends up approved; the owner's own `submit` of
+  an unapproved function fails as `PolicyGate_UnknownCall`. The reference
+  account and Nexus pass the gate's error up as it is; Safe7579 and Kernel wrap
+  it in their own, so there the test checks only that the call failed.
+7. The owner proposes a widening. It is not in force at once. After 24 hours
   the agent's session still cannot apply it, and the owner can.
-7. The owner uninstalls the gate, and the session reaches nothing.
+8. The owner uninstalls the gate, and the session reaches nothing.
 
 
 
@@ -1204,7 +1209,7 @@ by breaking one line of the gate, running the tests, and restoring the line.
 | Run                                                                                                                              | Defects | Result                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Against `test/gate/`                                                                                                             | 51      | 49 caught at first. The 2 that survived were gaps in the tests; two tests were added and all 51 are caught                                                                                                                                                                                                                                           |
-| Against `test/accounts/`                                                                                                         | 9       | 9 caught                                                                                                                                                                                                                                                                                                                                             |
+| Against `test/accounts/`                                                                                                         | 9       | 9 caught at step 1. Re-run against the step 5 gate on 19 October, the first time since step 4.1 replaced the agent registry by the session: 6 caught at first. Three gaps (the account and the gate approved as targets, an unknown call), each a second lock the test never tried: three checks added, 9 caught. Report: `docs/reports/mutation-accounts-2026-10-19.md` |
 | Step 2 code (ledger, gate booking, mock market, decoder) against `test/gate/`                                                    | 51      | 41 caught at first. Seven survivors were gaps in the ledger and gate tests; nine tests were added and all seven are caught. The other three are in the mock market, now a test double                                                                                                                                                                |
 | The market port (token, session, prosumer contract, manager, settlement rule, decoder) against `test/market/` and the gate tests | 54      | 48 caught at first. The six survivors were tests that never reached an edge: a direct cancel on the session, a bid over-matched, exactly 10%, a 16% deviation, rounding of a penalty and of a leg's value. Six tests were added and all 54 are caught                                                                                                |
 | Step 4: the `policies` catalogue (the gate's phases, `StaticOrderPolicy`, `WindowPolicy`, `CancelQuotaPolicy`), on 16 October | 43 | 42 caught at first; one gap (a 24-hour window always expired by the time a 24-hour widening applied): a test was added, caught. Report: `docs/reports/mutation-policies-2026-10-16.md` |
@@ -1283,7 +1288,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **419 passed**: the 411 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 16 October, after step 5.1, with 341. Not re-run at the end of step 5: Docker was not running (log 5.7).
+Expect **419 passed**: the 411 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 19 October, at the end of step 5: 419 passed.
 
 With Foundry installed and allowed to run:
 

@@ -10,6 +10,7 @@ import {SessionFixture} from "./SessionFixture.sol";
 import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
 import {GateBase} from "../../contracts/gate/GateBase.sol";
+import {DecoderRegistry} from "../../contracts/gate/DecoderRegistry.sol";
 import {StubMarket, StubDecoder, CapPolicy} from "../gate/mocks/GateMocks.sol";
 import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
@@ -146,6 +147,24 @@ contract PolicyGateAccountsTest is SessionFixture {
         _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (account, install, new SignedReading[](0))));
         _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (account, uninstall, new SignedReading[](0))));
 
+        // Nor can the owner open those doors: the account and the gate are never
+        // approved as targets, and an unapproved function fails as unknown.
+        _expectOwnerRefused(instance, DecoderRegistry.DecoderRegistry_ForbiddenTarget.selector);
+        instance.exec(address(gate), abi.encodeCall(gate.setDecoder, (account, bytes4(install), decoder)));
+        _expectOwnerRefused(instance, DecoderRegistry.DecoderRegistry_ForbiddenTarget.selector);
+        instance.exec(address(gate), abi.encodeCall(gate.setDecoder, (address(gate), DecoderRegistry.setDecoder.selector, decoder)));
+        // ModuleKit checks a revert's reason only when there is one: check
+        // that nothing was approved.
+        assertEq(address(gate.decoderOf(account, account, bytes4(install))), address(0), "the account is no target");
+        assertEq(
+            address(gate.decoderOf(account, address(gate), DecoderRegistry.setDecoder.selector)), address(0), "the gate is no target"
+        );
+        _expectOwnerRefused(instance, PolicyGate.PolicyGate_UnknownCall.selector);
+        instance.exec(
+            address(gate),
+            abi.encodeCall(gate.submit, (address(market), abi.encodeCall(StubMarket.withdrawAll, ()), new SignedReading[](0)))
+        );
+
         assertEq(market.orderCount(), 1, "nothing else reached the market");
         assertFalse(instance.isModuleInstalled(MODULE_TYPE_EXECUTOR, address(rogue)), "rogue module not installed");
         assertTrue(instance.isModuleInstalled(MODULE_TYPE_EXECUTOR, address(gate)), "gate still installed");
@@ -168,6 +187,17 @@ contract PolicyGateAccountsTest is SessionFixture {
         assertFalse(gate.isInstalled(account));
         _expectSessionRefused(instance, agent, address(gate), abi.encodeCall(gate.submit, (address(market), order, new SignedReading[](0))));
         assertEq(market.orderCount(), 1);
+    }
+
+    /// @dev The reference account and Nexus pass the gate's own error up as it
+    ///      is; Safe7579 and Kernel wrap it in theirs. Where it comes through,
+    ///      it must be the expected one.
+    function _expectOwnerRefused(AccountInstance memory instance, bytes4 selector) internal {
+        if (instance.accountType == AccountType.DEFAULT || instance.accountType == AccountType.NEXUS) {
+            instance.expect4337Revert(selector);
+        } else {
+            instance.expect4337Revert();
+        }
     }
 
     function _hardCap(address account) internal view returns (uint64 hard) {

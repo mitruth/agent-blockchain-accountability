@@ -164,7 +164,8 @@ the physical system (step 5), or how often an honest agent is refused (step
 | `npm run test:offchain` | 29 passing |
 | Mutation, `physical` catalogue | 42 of 42 caught (`docs/reports/mutation-physical-2026-10-19.md`) |
 | `npm run demo:flow` | The day in half-hour slots under all eight policies; S3 refuses Carol's overnight oversell, the verifier her older reading |
-| Foundry | **Not re-run** at the end of step 5: Docker was not running. Last: 341 passed, after 5.1 |
+| Foundry, the whole suite | 419 passed, 19 October |
+| Mutation, `accounts` catalogue (the real-account tests, against the step 5 gate) | 9 of 9 caught, after three checks added (`docs/reports/mutation-accounts-2026-10-19.md`) |
 | Step 5's acceptance criteria | All met on the ported market, `test/policies/Step5Acceptance.t.sol` |
 | Gas as a function of k | `docs/reports/gas-step5-2026-10-19.md`: the three physical policies add 146k to an offer at k = 8, 405k at k = 48, 723k at k = 96 |
 | Excess cycling (spec step 5) | Blocked by S4: `test_excessCyclingIsBlocked` |
@@ -247,6 +248,5 @@ Things noticed in steps 0 and 1 that belong to a later step.
 | A deployment script, and a test with a real owner validator | Before any testnet run |
 | The agent's session on a real account: expiry by a time-frame user-op policy, revocation by removing it; events name the account, not the agent (log 3.9, 4.1) | Before any testnet run |
 | Install Smart Sessions on Kernel without a hook; deploy Smart Sessions v1.0.0 or later (log 3.9) | Before any testnet run |
-| Run Foundry and the `accounts` mutation catalogue (Docker) against the step 5 gate: Docker was not running at the end of step 5 | Next time Docker runs |
 | S3 and S4 read the same positions and forecast, each for itself; a combined policy would read them once (gas report, step 5) | Step 6, with the monolithic variant (D14) |
 | A consumer's S3 value is never zero with a constant reserve load; a signed load forecast (D4) would fix it (log 5.7) | After step 6 |

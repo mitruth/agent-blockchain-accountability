@@ -2968,6 +2968,51 @@ Bob's own order for the market's `MarketSession_Closed`.
   The ledger and the market agree in 48 of 48 slots for both agents, and
   settlement and balances are as before.
 
+
+### 5.8 — Foundry and the real-account mutants, at the end of step 5
+
+**Status.** Proposed. Run once Dan had Docker running (19 October).
+
+**Foundry, the whole suite in Docker: 419 passed.** That is `npm test`'s 411 and
+the 8 real-account tests. This closes what 5.7 left open.
+
+- Foundry prints unresolved imports from one ModuleKit test utility,
+  `UserOpGasLog.sol`. It names `src/external/ERC4337.sol` by a path that only
+  resolves in ModuleKit's own repository. Nothing in this project imports it,
+  and every suite builds and passes.
+
+**The `accounts` mutation catalogue had not run since step 4.1.** The
+runner's Docker call could not run on Windows.
+
+- **Why.** It went through a host shell, which on Windows is cmd.exe. cmd.exe
+  does not take single quotes as quoting, so the container's `sh` received a
+  broken command, and every mutant "did not build".
+- **Fixed.** `offchain/mutation/index.js` now calls Docker with an argument
+  list and no host shell.
+
+**Run against the step 5 gate: 6 of 9 caught at first.** The three survivors
+were gaps in `test/accounts/PolicyGateAccounts.t.sol`, not in the gate.
+
+- **The account allowed as a target, and the gate allowed as one.** The test
+  only tried the agent's path, which a second lock closes anyway: `submit`
+  finds no decoder for the account or the gate. It now has the owner try to
+  approve each as a target, and asserts that nothing was approved.
+
+  The assertion matters. ModuleKit's `expect4337Revert` checks a revert's
+  reason only when there is a revert; it does not fail when there is none.
+- **The unknown-call check removed.** Calling a decoder at address 0 reverts
+  anyway, so the call was still refused, for another reason. The owner's own
+  `submit` of an unapproved function must now fail as `PolicyGate_UnknownCall`.
+
+**What the accounts pass up.** The reference account and Nexus pass the gate's
+error up as it is; Safe7579 and Kernel wrap it in their own. The test checks the
+reason on the first two and only the failure on the others. This is a
+difference between account implementations, for the security analysis, like
+the module-type check of step 1.
+
+**After it:** 9 of 9 caught (`docs/reports/mutation-accounts-2026-10-19.md`).
+Foundry passed 419 again with the stronger test.
+
 ---
 
 ## Open decisions

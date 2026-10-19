@@ -177,14 +177,21 @@ export function runMutant(catalog, mutant, { verifierRuns = { seeds: 3, steps: 4
  * The Foundry-only tests, in the Foundry image (forge.exe is blocked on this
  * machine). Assumes Docker is running and the volume foundry-svm holds the
  * compilers; never starts Docker itself.
+ *
+ * Docker is called with an argument list and no host shell: on Windows a host
+ * shell is cmd.exe, which does not take single quotes as quoting, and the
+ * container's sh then received a broken command.
  */
 function forgeInDocker(catalog) {
   const repo = ROOT.replace(/\\/g, "/");
   const match = catalog.tests.map((t) => `--match-path "${t}"`).join(" ");
   const p = spawnSync(
-    `docker run --rm -v "${repo}:/repo" -v foundry-svm:/home/foundry/.svm -w /repo --entrypoint sh ` +
-      `ghcr.io/foundry-rs/foundry:v1.8.5 -c 'forge test ${match} 2>&1'`,
-    { cwd: ROOT, shell: true, encoding: "utf8", timeout: TEST_TIMEOUT, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, MSYS_NO_PATHCONV: "1" } },
+    "docker",
+    [
+      "run", "--rm", "-v", `${repo}:/repo`, "-v", "foundry-svm:/home/foundry/.svm", "-w", "/repo",
+      "--entrypoint", "sh", "ghcr.io/foundry-rs/foundry:v1.8.5", "-c", `forge test ${match} 2>&1`,
+    ],
+    { cwd: ROOT, encoding: "utf8", timeout: TEST_TIMEOUT, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, MSYS_NO_PATHCONV: "1" } },
   );
   const out = (p.stdout ?? "") + (p.stderr ?? "");
   if (out.includes("Compiler run failed") || !out.includes("Suite result")) {
