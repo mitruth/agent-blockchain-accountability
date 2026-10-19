@@ -2591,6 +2591,113 @@ test deploys the verifier on a chain inside the process.
   - `--mode yesterday` posts a different forecast;
   - `demo:flow` then runs the same day as before.
 
+
+### 5.3 — S3: DeliverabilityPolicy
+
+**Status.** Proposed.
+
+**Decision.** `contracts/policies/DeliverabilityPolicy.sol`, spec 6.4.
+
+- **Two projections over the horizon,** from the battery's signed energy at
+  the start of the current slot:
+  - **floor:** PV forecast × α and **filled** bids in; committed sells and the
+    reserve load out; the battery must stay at or above its minimum;
+  - **ceiling:** every placed bid in, PV left out; the reserve load out; the
+    battery must stay at or below its maximum.
+
+  Per slot, sells may not exceed the discharge power plus the PV credit, and
+  bids beyond the reserve load may not exceed the charge power.
+- **One value, in Wh:** the energy short of the floor, plus every excess over
+  the ceiling and the two power limits.
+  - **Rejected** when the submission leaves a value above zero and makes it
+    larger than without it.
+  - **Passes** when it keeps it or reduces it: a cancellation always, and a
+    smaller modification or a bid while the floor is short (D10).
+  - No soft bound.
+- **Refused when it cannot be judged:** a placement with no fresh battery
+  reading, or for a slot outside the horizon. `valueAfter` is then 2^256 − 1.
+  A submission of cancellations only never needs judging.
+- **The horizon** is k slots from the one holding the reading's timestamp. The
+  slot length is read from the market through the decoder (`slotStart` of two
+  consecutive slots); slots are taken to be of equal length.
+- **No state of its own;** `commit` and `credit` do nothing. Positions come
+  from the ledger and the battery and forecast from the verifier. Two batch
+  views were added for it:
+  - `PositionLedger.positionsOf(account, firstSlot, count)`;
+  - `OracleVerifier.pvSeries(account, firstSlotStart, slotSeconds, count)`,
+    which reads zero for any slot the forecast cannot serve.
+- **Configuration:**
+  - the parameters: horizon, capacity, floor and ceiling, charge and
+    discharge power, both efficiencies, PV credit α, reserve load;
+  - **any other horizon widens,** as a change of shape (spec 5.6);
+  - **widens:** more capacity, a lower floor, a higher ceiling, more power,
+    higher efficiencies, more PV credit, less reserve;
+  - the horizon is at most 96 slots, the longest forecast the verifier holds.
+
+**The physics of the projection.**
+
+- **Rounding.** The floor rounds gains down and losses up; the ceiling the
+  other way.
+- **The floor projection:**
+  - what rises above the maximum is spilled;
+  - what falls below the minimum is counted as short, and the battery stops
+    there.
+
+  So the shortfall is energy promised but not deliverable, and it only grows
+  with every extra sale.
+- **The ceiling projection** never goes below the minimum, and counts what
+  rises above the maximum.
+
+**Why "leaves a shortfall and makes it larger".** A battery reading can show
+less than the plan assumed: the house used more, or the sun was weaker. A rule
+of "no shortfall after" would then refuse even orders that help. The value
+grows with every sale and every bid, so "larger" is exactly what adds
+exposure.
+
+**H_slots ≤ k by construction.** A placement outside S3's horizon is refused by
+S3 itself. So every slot the agent can reach is one S3 covers, whatever A6
+allows. The spec's configure-time check would have tied two policy contracts'
+configurations together through the gate; it is not needed. The spec's
+mutant "H_slots ≤ k check removed" becomes "S3 accepts a placement outside its
+horizon" (5.7).
+
+**The horizon in a day-ahead market.** The spec's default, k = 8, suits a
+continuous market. In Dan's market, orders are for tomorrow and trading closes
+at noon, so the horizon must run from now to the end of tomorrow: about 72 to
+96 half-hour slots. Gas grows with it.
+
+| Horizon | Gas of the check (one sale, in the test) |
+|---:|---:|
+| k = 8 | 119,827 |
+| k = 16 | 188,342 |
+| k = 48 | 531,372 |
+| k = 96 | 1,008,918 |
+
+About 10,500 a slot, most of it the two projections, not the storage reads. To
+be measured on whole submissions, and cut if it can be, in 5.6.
+
+**Simplifications, to say in the paper.**
+
+- **socMin is one constant.** The spec allows a floor that varies with time.
+- **The reserve load is one constant per slot (D4).**
+- **The per-slot discharge limit leaves out the reserve load,** as the spec
+  writes it.
+
+**Rejected.**
+
+- **A ring of k entries in the policy:** the ledger already keeps positions
+  per slot.
+- **Reverting when a reading is missing:** a refusal is recorded without
+  reverting, like every policy rejection.
+- **Crediting placed bids in the floor:** D3, the phantom-buy attack;
+  `test_anUnfilledBidCannotJustifyASale` shows it.
+
+**Checked.**
+
+- `npm test`: 359 passing, 26 of them for S3.
+- `npm run mutate -- --check`: every pattern found.
+- Not re-run: Foundry and the demo, which do not use S3 yet.
+
 ---
 
 ## Open decisions

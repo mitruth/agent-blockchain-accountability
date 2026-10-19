@@ -213,6 +213,19 @@ contract PositionLedger {
         return _positions[account][slot];
     }
 
+    /// @notice The positions of `count` consecutive slots from `firstSlot`, in
+    ///         one call: what a policy looking over a horizon reads.
+    function positionsOf(address account, uint32 firstSlot, uint256 count)
+        external
+        view
+        returns (Position[] memory positions)
+    {
+        positions = new Position[](count);
+        for (uint256 i = 0; i < count; ++i) {
+            positions[i] = _positions[account][uint32(firstSlot + i)];
+        }
+    }
+
     function recordOf(address account, address market, bytes32 orderId) external view returns (OrderRecord memory) {
         return _records[account][market][orderId];
     }

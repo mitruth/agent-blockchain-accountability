@@ -4,7 +4,7 @@ Owner-side sequence policies for delegated energy-trading agents. Draft, 9 Octob
 
 This brief supersedes `Policy_Spec_Energy_Agent_v0.md` for implementation purposes. It folds in the review of v0 and the decisions taken on 9 October 2026. Read it fully before touching code. Section 10 must be filled in from the repo before step 1 starts.
 
-> **Build status, 16 October 2026.** Steps 1 to 4 of 6 are built and meet their acceptance criteria (Section 9). Step 5 is in progress: 5.1, the oracle verifier, and 5.2, the oracles that sign for it, are built. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
+> **Build status, 16 October 2026.** Steps 1 to 4 of 6 are built and meet their acceptance criteria (Section 9). Step 5 is in progress: 5.1, the oracle verifier, 5.2, the oracles that sign for it, and 5.3, S3, are built. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
 >
 > The text below is the brief as written on 9 October. Where it has since been changed or implemented, a marked note says so: *Amended* points to Section 12, *As built* describes the implementation, *Status* reports a build step.
 
@@ -315,6 +315,8 @@ Used by S1, S2, S4 and S6.
 - **Cancels:** a SELL cancel never violates S3. A BUY cancel of unfilled volume does not change the floor check, because unfilled buys were never credited.
 - **Cost:** O(k) per order. The ring of k entries is tagged by slot to detect stale entries.
 
+> **As built (step 5.3).** `DeliverabilityPolicy` keeps no ring: the ledger already holds positions per slot, and the policy reads k of them in one call. The horizon starts at the slot of the battery reading, and a placement outside it is refused, so H_slots ≤ k holds by construction rather than as a check across two configurations. What the projection cannot deliver is summed in Wh; a submission is refused when it leaves a shortfall and makes it larger (D10). socMin is one constant, not a function of t. In a day-ahead market k must reach the end of tomorrow, about 72 to 96 half-hour slots, not 8. See log 5.3.
+
 ### 6.5 S4. Battery cycles per window, CyclePolicy
 
 - **Source (D5):** attested BMS discharge odometer.
@@ -508,7 +510,7 @@ Do not reorder. Each step has to pass before the next starts.
   - an exposure-reducing cancel always passes;
   - gas is reported as a function of k.
 
-> **Status: in progress.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). 5.2 adds the oracles off-chain: the PV relay and a BMS per house, whose EIP-712 signatures the verifier accepts (`offchain/oracle/signing.test.js`). S3, S4 and S5 follow (log 5.1, 5.2).
+> **Status: in progress.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). 5.2 adds the oracles off-chain: the PV relay and a BMS per house, whose EIP-712 signatures the verifier accepts (`offchain/oracle/signing.test.js`). 5.3 adds S3, `DeliverabilityPolicy`: **cross-slot over-commitment is blocked** (`test/policies/DeliverabilityPolicy.t.sol`: `test_crossSlotOverCommitmentIsBlocked`), and an exposure-reducing cancel passes (`test_aCancellationAlwaysPasses`, `test_aCancellationPassesWithNoReadingAtAll`). S4 and S5 follow (log 5.1 to 5.3).
 
 **Step 6. Evaluation.**
 - Full attack matrix (Section 9.1), against all baselines.

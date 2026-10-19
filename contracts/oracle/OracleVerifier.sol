@@ -182,6 +182,29 @@ contract OracleVerifier {
         return (f.pvWh[index], true);
     }
 
+    /// @notice The forecast for `count` consecutive slots of `slotSeconds`
+    ///         from `firstSlotStart`, in one call. A slot the forecast cannot
+    ///         serve -- not covered exactly, or the forecast stale -- reads
+    ///         zero, the conservative value for a policy that credits PV.
+    function pvSeries(address account, uint64 firstSlotStart, uint32 slotSeconds, uint256 count)
+        external
+        view
+        returns (uint64[] memory pvWh)
+    {
+        pvWh = new uint64[](count);
+        StoredForecast storage f = _pv[account];
+        if (
+            f.slotSeconds == 0 || f.slotSeconds != slotSeconds || firstSlotStart < f.firstSlotStart
+                || (firstSlotStart - f.firstSlotStart) % slotSeconds != 0
+                || !_isFresh(account, ReadingKind.PV_FORECAST, f.issuedAt)
+        ) return pvWh;
+        uint256 offset = (firstSlotStart - f.firstSlotStart) / slotSeconds;
+        uint256 length = f.pvWh.length;
+        for (uint256 i = 0; i < count && offset + i < length; ++i) {
+            pvWh[i] = f.pvWh[offset + i];
+        }
+    }
+
     /// @notice The last PV forecast accepted for `account`, in full.
     function forecastOf(address account) external view returns (StoredForecast memory) {
         return _pv[account];

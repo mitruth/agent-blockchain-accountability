@@ -42,7 +42,7 @@ The build follows six steps, fixed by Section 9 of the spec.
 | 2    | Position ledger, reconcile, the P2P market port and its decoder             | **Built and passing** |
 | 3    | `WindowLib`, independent verifier, mutation suite                           | **Built and passing** |
 | 4    | The session entry point, the policy phases; per-action policies, S1, S2, S6 | **Built and passing** |
-| 5    | Oracle verification, PV relay, S3, S4, S5                                   | In progress: 5.1 and 5.2 built |
+| 5    | Oracle verification, PV relay, S3, S4, S5                                   | In progress: 5.1 to 5.3 built |
 | 6    | Evaluation                                                                  | Not started           |
 
 
@@ -70,6 +70,9 @@ crossing is flagged and goes ahead; released volume is credited back.
   import caps, Wh), on `WindowLib`.
   - `CancelQuotaPolicy`, S6: cancelled volume weighted near the gate, the
   cancel-to-place ratio and the message count.
+  - `DeliverabilityPolicy`, S3 (step 5.3): the battery, from its signed
+  reading, must be able to deliver every sale over the next k slots, counting
+  only certain energy: the PV forecast and filled bids.
   Section 3 explains what each checks; section 6 shows four attacks blocked.
 - **A position ledger:** every order the agent placed, and per delivery slot
 the account's committed and cleared volume, buy and sell.
@@ -107,10 +110,10 @@ under Hardhat; the other 3 are faults in test doubles.
 
 ### What does not exist yet
 
-**No policy that uses the readings yet.** The verifier (5.1) and the oracles
-that sign and post readings (5.2) are built; the physical policies, S3
-deliverability, S4 battery cycles and S5 ramp (5.3 to 5.5), come next. The
-demo's agents do not bring readings with their orders yet (5.7). There
+**Two physical policies to go.** The verifier (5.1), the oracles (5.2) and S3
+deliverability (5.3) are built; S4 battery cycles and S5 ramp (5.4, 5.5) come
+next. The demo's agents do not bring readings with their orders, and do not
+trade under S3, yet (5.7). There
 is no tariff oracle, so A3's price bounds stay absolute (spec A8). Nothing is
 deployed to a network.
 
@@ -370,6 +373,33 @@ shape, by default an hour of five-minute buckets:
 An expiry is never a cancellation. `reasons()` says which rule a refused
 submission broke.
 
+`DeliverabilityPolicy`**: S3, can the battery deliver what was sold** (spec
+6.4). From the battery's signed state at the start of the current slot, it
+projects the battery over the next k slots, with the submission and without:
+
+
+| Projection | Comes in                                     | Goes out                       | Must stay                         |
+| ---------- | -------------------------------------------- | ------------------------------ | --------------------------------- |
+| Floor      | PV forecast × α, and **filled** bids only    | committed sells, reserve load  | at or above the minimum charge    |
+| Ceiling    | every placed bid; PV left out (curtailable)  | reserve load                   | at or below the maximum charge    |
+
+
+Per slot, sells may not exceed the discharge power plus the PV credit, and
+bids beyond the reserve load may not exceed the charge power.
+
+- **The value** is what the projection cannot deliver, in Wh: the energy short
+  of the floor plus every excess over the ceiling and the power limits.
+- **The verdict.** Rejected when the submission leaves a shortfall and makes it
+  larger. One that keeps it or reduces it passes, a cancellation always (D10).
+  There is no soft bound.
+- **What it cannot judge, it refuses:** a placement with no fresh battery
+  reading, or for a slot outside the horizon. `valueAfter` is then 2^256 − 1.
+  The horizon starts at the reading's slot, so every slot the agent can reach
+  is covered.
+- **No state of its own.** It reads the ledger's positions and the verifier's
+  reading and forecast, one call each (`positionsOf`, `pvSeries`).
+- **`assess()`** gives the projection's four parts before and after.
+
 **Windows other than sliding.** `WindowPolicy` and `CancelQuotaPolicy` accept
 any of `WindowLib`'s five classes. Sliding is what the owner should use; the
 other four are the evaluation's baselines, and section 6 shows what each lets
@@ -572,6 +602,7 @@ configuration.
 | `StaticOrderPolicy.sol` | A1 to A4 and A6, each order on its own; the result reports the bounds broken as a bitmask                                                                                                                                                              |
 | `WindowPolicy.sol`      | S1, the budget (BUY value), and S2, the export and import caps (Wh), on a `WindowLib` window per instance                                                                                                                                              |
 | `CancelQuotaPolicy.sol` | S6: cancelled Wh weighted near the gate, the cancel-to-place ratio, the message count                                                                                                                                                                  |
+| `DeliverabilityPolicy.sol` | S3: the battery projected over the horizon from its signed reading, against the floor, the ceiling and the power limits                                                                                                                             |
 
 
 
@@ -648,6 +679,7 @@ and agent validity; and `agentPolicies`, the policies every agent trades under
 | `policies/StaticOrderPolicy.t.sol`  | 15                                                    | Hardhat and Foundry |
 | `policies/WindowPolicy.t.sol`       | 10                                                    | Hardhat and Foundry |
 | `policies/CancelQuotaPolicy.t.sol`  | 9                                                     | Hardhat and Foundry |
+| `policies/DeliverabilityPolicy.t.sol` | 26                                                  | Hardhat and Foundry |
 | `policies/Step4Acceptance.t.sol`    | 15: the attacks and gas                               | Hardhat and Foundry |
 | `policies/PolicyFixture.sol`        | Shared setup for the policy tests, on the mock market |                     |
 | `market/MarketFixture.sol`          | Shared setup for the market tests                     |                     |
@@ -953,6 +985,27 @@ allowance; the message count, which a refused submission does not use; an
 expiry using none of the quota; the quota renewing after an hour; the direction
 table.
 
+### `test/policies/DeliverabilityPolicy.t.sol`: 26 tests
+
+S3 through the gate on the mock market, with home_01's battery as the arms
+ran it: 5 kWh, 3 kW, 95 % each way, 10 % to 100 %; a horizon of 16
+half-hour slots.
+
+
+| Group                   | Tests | What it establishes                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The floor               | 6     | A deliverable sale passes. **Cross-slot over-commitment is blocked** (spec step 5): two sales that each fit, together 448 Wh short, wherever the second falls; the boundary is to the Wh. The PV forecast makes room, but only its credited share. **An unfilled bid cannot justify a sale** (spec 9.1, D3); once filled, it can |
+| Power and ceiling       | 5     | A sale beyond the discharge power is blocked, and PV raises its slot's limit. A bid beyond the charge power, or one that would overfill the battery, is blocked. PV alone never causes a rejection                                                                                                                          |
+| Reserve load            | 1     | The owner's reserve stays covered, to the Wh                                                                                                                                                                                                                                                                             |
+| Only reducing passes    | 4     | A cancellation passes with an empty battery, and with no reading at all. A smaller modification passes while the plan is short. A bid passes while the floor is short; a sale does not                                                                                                                                |
+| What cannot be judged   | 4     | With no fresh reading, or once it goes stale, a placement is refused. A slot beyond the horizon is refused, and the horizon moves with the reading                                                                                                                                                                       |
+| An independent bound    | 1     | Fuzz: whatever sales the agent tries, those executed never draw more from the cells than the energy above the floor                                                                                                                                                                                                    |
+| Gas                     | 1     | The check at k = 8, 16, 48, 96, printed                                                                                                                                                                                                                                                                                 |
+| Configuration           | 4     | Malformed configurations are invalid; each looser parameter, and any other horizon, widens; tighter ones tighten; only the gate configures                                                                                                                                                                             |
+
+
+
+
 ### `test/policies/Step4Acceptance.t.sol`: 15 tests
 
 Step 4's acceptance criteria, on the ported market through the gate. Each
@@ -1127,14 +1180,14 @@ npm install
 
 ### The Hardhat suite
 
-Expect **333 passing** in about two minutes:
+Expect **359 passing** in about two minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
   market, 8 ledger, 15 policy phases, 14 readings;
 - the oracle verifier: 35;
 - the market: 23 token, 41 market flow, 12 gated market, 6 settlement rule;
 - the windows and the policies: 32 `WindowLib`, 15 `StaticOrderPolicy`, 11
-  `WindowPolicy`, 9 `CancelQuotaPolicy`, 15 acceptance (attacks and gas).
+  `WindowPolicy`, 9 `CancelQuotaPolicy`, 26 `DeliverabilityPolicy`, 15 acceptance (attacks and gas).
 
 ```bash
 npm test
@@ -1145,7 +1198,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **341 passed**: the 333 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 16 October, after step 5.1.
+Expect **367 passed**: the 359 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 16 October, after step 5.1, with 341.
 
 With Foundry installed and allowed to run:
 
@@ -1403,7 +1456,7 @@ agent's session allows and until when; the events `ProsumerRegistered` and
 
 | Step | Adds                                                                                 |
 | ---- | ------------------------------------------------------------------------------------ |
-| 5    | 5.1 and 5.2 built: signed readings, and the oracles that sign them. Next, deliverability S3, battery cycles S4, ramp S5 |
+| 5    | 5.1 to 5.3 built: signed readings, the oracles that sign them, deliverability S3. Next, battery cycles S4, ramp S5 |
 | 6    | The attack matrix against all baselines, the false-positive rate on honest arms, gas |
 
 

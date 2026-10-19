@@ -16,7 +16,7 @@ abstract contract OracleFixture is Test {
     uint32 internal constant BMS_MAX_AGE = 30 minutes;
     /// @dev Spec 5.4: tau_pv = 1 h.
     uint32 internal constant PV_MAX_AGE = 1 hours;
-    uint32 internal constant SLOT = 30 minutes;
+    uint32 internal constant PV_SLOT = 30 minutes;
 
     uint256 internal constant N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
 
@@ -93,7 +93,7 @@ abstract contract OracleFixture is Test {
         returns (PvForecast memory)
     {
         return PvForecast({
-            account: account, issuedAt: issuedAt, firstSlotStart: firstSlotStart, slotSeconds: SLOT, pvWh: pvWh
+            account: account, issuedAt: issuedAt, firstSlotStart: firstSlotStart, slotSeconds: PV_SLOT, pvWh: pvWh
         });
     }
 

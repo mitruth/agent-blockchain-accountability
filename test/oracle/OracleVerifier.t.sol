@@ -68,8 +68,8 @@ contract OracleVerifierTest is OracleFixture {
 
     function test_aNewerReadingReplacesTheLast() public {
         verifier.accept(_signBms(verifier, BMS_KEY, _bms(account, t0, 3_000, 100)));
-        vm.warp(block.timestamp + SLOT);
-        verifier.accept(_signBms(verifier, BMS_KEY, _bms(account, t0 + SLOT, 2_000, 1_150)));
+        vm.warp(block.timestamp + PV_SLOT);
+        verifier.accept(_signBms(verifier, BMS_KEY, _bms(account, t0 + PV_SLOT, 2_000, 1_150)));
         (BmsReading memory stored,) = verifier.bmsOf(account);
         assertEq(stored.socWh, 2_000);
         assertEq(stored.dischargeOdometerWh, 1_150);
@@ -295,15 +295,15 @@ contract OracleVerifierTest is OracleFixture {
         (uint64 pv, bool usable) = verifier.pvAt(account, first);
         assertTrue(usable);
         assertEq(pv, 100);
-        (pv, usable) = verifier.pvAt(account, first + 15 * SLOT);
+        (pv, usable) = verifier.pvAt(account, first + 15 * PV_SLOT);
         assertTrue(usable);
         assertEq(pv, 250);
 
         // Before, after, and between slots: not covered.
-        (pv, usable) = verifier.pvAt(account, first - SLOT);
+        (pv, usable) = verifier.pvAt(account, first - PV_SLOT);
         assertFalse(usable);
         assertEq(pv, 0);
-        (, usable) = verifier.pvAt(account, first + 16 * SLOT);
+        (, usable) = verifier.pvAt(account, first + 16 * PV_SLOT);
         assertFalse(usable);
         (, usable) = verifier.pvAt(account, first + 60);
         assertFalse(usable);
@@ -321,7 +321,7 @@ contract OracleVerifierTest is OracleFixture {
     function test_aStaleForecastIsNotUsed() public {
         verifier.accept(_signPv(verifier, PV_KEY, _forecast(account, t0, t0, _values(8, 100))));
         vm.warp(t0 + PV_MAX_AGE + 1);
-        (uint64 pv, bool usable) = verifier.pvAt(account, t0 + 2 * SLOT);
+        (uint64 pv, bool usable) = verifier.pvAt(account, t0 + 2 * PV_SLOT);
         assertFalse(usable);
         assertEq(pv, 0);
     }
@@ -329,14 +329,14 @@ contract OracleVerifierTest is OracleFixture {
     function test_aNewerForecastReplacesTheOldOneWhole() public {
         verifier.accept(_signPv(verifier, PV_KEY, _forecast(account, t0, t0, _values(16, 100))));
         vm.warp(block.timestamp + 600);
-        verifier.accept(_signPv(verifier, PV_KEY, _forecast(account, t0 + 600, t0 + SLOT, _values(2, 7))));
-        (uint64 pv, bool usable) = verifier.pvAt(account, t0 + SLOT);
+        verifier.accept(_signPv(verifier, PV_KEY, _forecast(account, t0 + 600, t0 + PV_SLOT, _values(2, 7))));
+        (uint64 pv, bool usable) = verifier.pvAt(account, t0 + PV_SLOT);
         assertEq(pv, 7);
         assertTrue(usable);
         // Slots only the old forecast covered are gone with it.
         (, usable) = verifier.pvAt(account, t0);
         assertFalse(usable);
-        (, usable) = verifier.pvAt(account, t0 + 5 * SLOT);
+        (, usable) = verifier.pvAt(account, t0 + 5 * PV_SLOT);
         assertFalse(usable);
     }
 
@@ -363,7 +363,7 @@ contract OracleVerifierTest is OracleFixture {
     function test_aFullTwoDayForecastFits() public {
         uint256 most = verifier.MAX_FORECAST_SLOTS();
         verifier.accept(_signPv(verifier, PV_KEY, _forecast(account, t0, t0, _values(most, 0))));
-        (uint64 pv, bool usable) = verifier.pvAt(account, t0 + uint64(most - 1) * SLOT);
+        (uint64 pv, bool usable) = verifier.pvAt(account, t0 + uint64(most - 1) * PV_SLOT);
         assertTrue(usable);
         assertEq(pv, uint64(most - 1) * 10);
     }
