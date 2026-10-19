@@ -4,7 +4,7 @@ Owner-side sequence policies for delegated energy-trading agents. Draft, 9 Octob
 
 This brief supersedes `Policy_Spec_Energy_Agent_v0.md` for implementation purposes. It folds in the review of v0 and the decisions taken on 9 October 2026. Read it fully before touching code. Section 10 must be filled in from the repo before step 1 starts.
 
-> **Build status, 16 October 2026.** Steps 1 to 4 of 6 are built and meet their acceptance criteria (Section 9). Step 5 is in progress: 5.1, the oracle verifier, 5.2, the oracles that sign for it, and 5.3, S3, are built. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
+> **Build status, 16 October 2026.** Steps 1 to 4 of 6 are built and meet their acceptance criteria (Section 9). Step 5 is in progress: 5.1, the oracle verifier, 5.2, the oracles that sign for it, 5.3, S3, 5.4, S4, and 5.5, S5, are built. The earlier design's code is removed (D13). What exists is described in `docs/guide/project-guide.md`; why it was built that way, in `docs/decisions/design-decisions.md`.
 >
 > The text below is the brief as written on 9 October. Where it has since been changed or implemented, a marked note says so: *Amended* points to Section 12, *As built* describes the implementation, *Status* reports a build step.
 
@@ -326,12 +326,16 @@ Used by S1, S2, S4 and S6.
 - **Check:** (windowDischargeWh + pendingWh) / C_bat ≤ N_max, with tiers.
 - **Defaults:** W = 24 h, b = one slot (15 min in the brief; *amended, A2*).
 
+> **As built (step 5.4).** No snapshots at bucket boundaries. At every submission the gate accepts, `CyclePolicy` adds the discharge since the last one, from the odometer, to a sliding `WindowLib` window at that time: discharge is never counted before it happened and may be counted after, so the window can only overstate. What the odometer shows beyond the last addition is counted on top, and the pending sales' draw over the horizon after that. The cap is N_max × C_bat in Wh. Only a sale is judged. See log 5.4.
+
 ### 6.6 S5. Ramp between consecutive slots, RampPolicy
 
 - netPos(slot) = committedBuy − committedSell. Shares the PositionLedger.
 - When an order changes slot t, require |netPos(t) − netPos(t − 1)| ≤ R_max and |netPos(t + 1) − netPos(t)| ≤ R_max.
 - **Exemption (D10):** an order that reduces |netPos(t) − netPos(t ± 1)| is never rejected. Cancels that reduce exposure pass.
 - **Positions (D8):** committed positions.
+
+> **As built (step 5.5).** `RampPolicy` judges every step next to a slot the submission changes: a step above R_max is a rejection, above S a flag, but only when the submission made that step larger. See log 5.5.
 
 ### 6.7 S6. Cancellation and message quota, CancelQuotaPolicy
 
@@ -510,7 +514,7 @@ Do not reorder. Each step has to pass before the next starts.
   - an exposure-reducing cancel always passes;
   - gas is reported as a function of k.
 
-> **Status: in progress.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). 5.2 adds the oracles off-chain: the PV relay and a BMS per house, whose EIP-712 signatures the verifier accepts (`offchain/oracle/signing.test.js`). 5.3 adds S3, `DeliverabilityPolicy`: **cross-slot over-commitment is blocked** (`test/policies/DeliverabilityPolicy.t.sol`: `test_crossSlotOverCommitmentIsBlocked`), and an exposure-reducing cancel passes (`test_aCancellationAlwaysPasses`, `test_aCancellationPassesWithNoReadingAtAll`). S4 and S5 follow (log 5.1 to 5.3).
+> **Status: in progress.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). 5.2 adds the oracles off-chain: the PV relay and a BMS per house, whose EIP-712 signatures the verifier accepts (`offchain/oracle/signing.test.js`). 5.3 adds S3, `DeliverabilityPolicy`: **cross-slot over-commitment is blocked** (`test/policies/DeliverabilityPolicy.t.sol`: `test_crossSlotOverCommitmentIsBlocked`), and an exposure-reducing cancel passes (`test_aCancellationAlwaysPasses`, `test_aCancellationPassesWithNoReadingAtAll`). 5.4 adds S4, `CyclePolicy`: **excess cycling is blocked** (`test/policies/CyclePolicy.t.sol`: `test_excessCyclingIsBlocked`). 5.5 adds S5, `RampPolicy`: **a position spike is blocked** (`test/policies/RampPolicy.t.sol`: `test_aPositionSpikeIsBlocked`). The acceptance run on the ported market and gas as a function of k follow (log 5.1 to 5.5).
 
 **Step 6. Evaluation.**
 - Full attack matrix (Section 9.1), against all baselines.

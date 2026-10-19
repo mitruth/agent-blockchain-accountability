@@ -2698,6 +2698,113 @@ be measured on whole submissions, and cut if it can be, in 5.6.
 - `npm run mutate -- --check`: every pattern found.
 - Not re-run: Foundry and the demo, which do not use S3 yet.
 
+
+### 5.4 — S4: CyclePolicy; the horizon shared; S3 cheaper
+
+**Status.** Proposed.
+
+**Decision.** `contracts/policies/CyclePolicy.sol`, spec 6.5. Its value is in Wh
+drawn from the cells, the sum of three parts:
+
+- **the window:** at every submission the gate accepts, the discharge since
+  the last one, from the BMS odometer (D5), is added to a `WindowLib` window at
+  the submission's time;
+- **what the odometer shows beyond it:** the latest fresh reading, less the
+  odometer at the last addition;
+- **pending:** per slot of the horizon, the committed sales beyond the PV
+  credit, over the discharge efficiency, rounded up.
+
+The window's cap is the hard bound, N_max × C_bat; `softWh` is the soft one.
+The judgement and the configuration:
+
+- **Only a sale adds to S4.** A submission with no sale placed in it is never
+  judged and needs no reading. A sale is rejected when it takes the value above
+  the cap and the value grew; flagged above the soft bound on the same terms.
+- **Refused when it cannot be judged:** a sale with no fresh reading, or for
+  a slot outside the horizon.
+- **The configuration:** soft bound, window, horizon, PV credit, discharge
+  efficiency. A change of window shape or of horizon widens; so does a higher
+  cap, soft bound, efficiency or PV credit.
+
+**Why no snapshots at bucket boundaries.** The spec keeps the odometer at each
+bucket boundary. Nothing runs at a boundary, so a snapshot can only be taken
+when a submission comes, and the nearest earlier one would have to be found in
+a ring. Adding the discharge at the next accepted submission is simpler, and
+errs the same way: discharge enters the window no earlier than it happened, so
+it stays in it at least as long as it should.
+
+- The agent cannot make it lower. Fewer submissions only add discharge later,
+  in one larger amount.
+- The odometer is signed and only moves forward (5.1).
+- What has not been added yet is counted on top at every check.
+
+**A new BMS.** An odometer below the last one, as after a change of device,
+moves the start without counting. **The first reading an instance sees** sets
+its start: what was discharged before is not known to it.
+
+**`HorizonLib`.** S3 and S4 share how a horizon is found from the reading,
+and the ledger interface they read.
+
+**S3, cheaper.** The two projections run in one unchecked function. When the
+projection with the submission is clean, the one without it is skipped: the
+verdict is EXECUTE whatever it holds, and `valueBefore` reads zero. `assess()`
+still computes both.
+
+| Horizon | Check gas at 5.3 | Now |
+|---:|---:|---:|
+| k = 8 | 119,827 | 84,544 |
+| k = 16 | 188,342 | 117,791 |
+| k = 48 | 531,372 | 319,608 |
+| k = 96 | 1,008,918 | 584,915 |
+
+**Checked.** 14 tests for S4 (`test/policies/CyclePolicy.t.sol`):
+
+- **Excess cycling is blocked** (spec step 5). With 2,000 Wh already
+  discharged, two sales that will draw 2,948 more are flagged at 4,948 of
+  5,000, and a further 100 Wh, which would make it 5,054, is refused.
+- Discharge enters the window at the next accepted submission and leaves it a
+  day later.
+- The PV credit nets the pending draw. A bid needs no reading. A cancellation
+  passes even over the cap. A new BMS starts again without counting.
+- The configuration, and only the gate configuring.
+
+S3's 26 tests still pass.
+
+### 5.5 — S5: RampPolicy
+
+**Status.** Proposed.
+
+**Decision.** `contracts/policies/RampPolicy.sol`, spec 6.6.
+
+- **netPos(t) = committed buy − committed sell,** from the ledger (D8).
+- **For every slot a submission changes,** the policy looks at the steps to
+  both neighbours, as they stand and with the submission.
+- **A step above R_max is a rejection, above S a flag,** but only when the
+  submission made that step larger (D10). So an order that smooths a profile
+  already too steep passes: a cancellation, a bid that fills a dip, a
+  modification that spreads a spike.
+- **The value** is the largest of those steps, before and after, in Wh.
+- **S5 needs no oracle reading.** It keeps nothing of its own.
+- **The configuration:** S and R_max. A higher one widens.
+
+**Why per step, not per order.** Spec 6.6 phrases the exemption as "an order
+that reduces |netPos(t) − netPos(t ± 1)|". Judging each step separately means
+an order that eases one side of a spike while steepening the other past R_max
+is still refused.
+
+**Checked.** 11 tests (`test/policies/RampPolicy.t.sol`):
+
+- **A position spike is blocked** (spec step 5): 1,000 Wh sold in a slot
+  passes, 600 more in the same slot, a step of 1,600, is refused.
+- **A buy spike is blocked, and so is a swing from +800 to −800.** A ramp
+  built slot by slot passes.
+- **Over a profile already too steep:** a smoothing bid passes, then a sale
+  next to the spike, while a sale that steepens it is refused. Cancelling the
+  spike passes; so does spreading it by a modification.
+- The configuration.
+
+`npm test`: 384 passing.
+
 ---
 
 ## Open decisions

@@ -20,7 +20,7 @@ Where the build stands and what comes next. Update this file as steps close.
 | 2 | Position ledger, reconcile, the P2P market port and its decoder | **Done**, 2026-10-14. Acceptance criteria met on the port |
 | 3 | `WindowLib`, independent verifier, mutation suite | **Done**, 2026-10-15. Acceptance criteria met |
 | 4 | The Smart Session entry point (D1), the policy phases, `StaticOrderPolicy`, S1, S2, S6 | **Done**, 2026-10-16. Acceptance criteria met |
-| 5 | `OracleVerifier`, PV relay, S3, S4, S5 | **In progress**: 5.1 to 5.3 done |
+| 5 | `OracleVerifier`, PV relay, S3, S4, S5 | **In progress**: 5.1 to 5.5 done |
 | 6 | Evaluation | Not started |
 
 ### What was verified for step 1
@@ -152,17 +152,19 @@ the physical system (step 5), or how often an honest agent is refused (step
 |---|---|---|
 | 5.1 | `OracleVerifier`: signed BMS readings and PV forecasts, the signer registry, staleness, order; `submit` takes readings | Done, `279b139` |
 | 5.2 | The oracles off-chain: EIP-712 signing, a PV forecast relay and a BMS per house, fed from `data/homes/` and `data/arms/`; `npm run oracle:post` | Done, `d1aeaed` |
-| 5.3 | S3, deliverability: `DeliverabilityPolicy` | Done, this commit |
-| 5.4 | S4, battery cycles | Next |
-| 5.5 | S5, ramp | |
-| 5.6 | The acceptance tests; gas as a function of k | |
+| 5.3 | S3, deliverability: `DeliverabilityPolicy` | Done, `31b591d` |
+| 5.4 | S4, battery cycles: `CyclePolicy`; the horizon shared in `HorizonLib`; S3's check 42 % cheaper | Done, this commit |
+| 5.5 | S5, ramp: `RampPolicy` | Done, this commit |
+| 5.6 | The acceptance tests; gas as a function of k | Next |
 | 5.7 | Mutation, the demo with oracles, docs | |
 
-| Check, after 5.3 | Result |
+| Check, after 5.5 | Result |
 |---|---|
-| `npm test` | 359 passing (35 verifier, 14 readings through the gate, 26 S3) |
+| `npm test` | 384 passing (35 verifier, 14 readings through the gate, 26 S3, 14 S4, 11 S5) |
+| Excess cycling (spec step 5) | Blocked by S4: `test_excessCyclingIsBlocked` |
+| A position spike (spec step 5) | Blocked by S5: `test_aPositionSpikeIsBlocked` |
 | Cross-slot over-commitment (spec step 5) | Blocked by S3: `test_crossSlotOverCommitmentIsBlocked` |
-| S3 check gas | about 10,500 a slot of horizon: 120k at k = 8, 1.01M at k = 96 |
+| S3 check gas | after 5.4: 85k at k = 8, 585k at k = 96 (was 120k and 1.01M) |
 | `npm run test:offchain` | 29 passing (14 for the oracles, 4 of them against the contract) |
 | Foundry, the whole suite | 341 passed, after 5.1 |
 | `npm run oracle:post -- --attacks` | Forecasts and battery readings accepted for Alice and Carol; the reordered and the forged reading refused |
