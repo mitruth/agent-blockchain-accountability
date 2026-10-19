@@ -514,7 +514,18 @@ Do not reorder. Each step has to pass before the next starts.
   - an exposure-reducing cancel always passes;
   - gas is reported as a function of k.
 
-> **Status: in progress.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). 5.2 adds the oracles off-chain: the PV relay and a BMS per house, whose EIP-712 signatures the verifier accepts (`offchain/oracle/signing.test.js`). 5.3 adds S3, `DeliverabilityPolicy`: **cross-slot over-commitment is blocked** (`test/policies/DeliverabilityPolicy.t.sol`: `test_crossSlotOverCommitmentIsBlocked`), and an exposure-reducing cancel passes (`test_aCancellationAlwaysPasses`, `test_aCancellationPassesWithNoReadingAtAll`). 5.4 adds S4, `CyclePolicy`: **excess cycling is blocked** (`test/policies/CyclePolicy.t.sol`: `test_excessCyclingIsBlocked`). 5.5 adds S5, `RampPolicy`: **a position spike is blocked** (`test/policies/RampPolicy.t.sol`: `test_aPositionSpikeIsBlocked`). The acceptance run on the ported market and gas as a function of k follow (log 5.1 to 5.5).
+> **Status: in progress.** 5.1, `OracleVerifier`, is built: a stale or reordered reading is refused (`test/oracle/OracleVerifier.t.sol`: `test_aStaleReadingIsRefused`, `test_aReorderedReadingIsRefused`, `testFuzz_onlyNewerReadingsAreAccepted`; through the gate, `test/gate/GateReadings.t.sol`). 5.2 adds the oracles off-chain: the PV relay and a BMS per house, whose EIP-712 signatures the verifier accepts (`offchain/oracle/signing.test.js`). 5.3 adds S3, `DeliverabilityPolicy`: **cross-slot over-commitment is blocked** (`test/policies/DeliverabilityPolicy.t.sol`: `test_crossSlotOverCommitmentIsBlocked`), and an exposure-reducing cancel passes (`test_aCancellationAlwaysPasses`, `test_aCancellationPassesWithNoReadingAtAll`). 5.4 adds S4, `CyclePolicy`: **excess cycling is blocked** (`test/policies/CyclePolicy.t.sol`: `test_excessCyclingIsBlocked`). 5.5 adds S5, `RampPolicy`: **a position spike is blocked** (`test/policies/RampPolicy.t.sol`: `test_aPositionSpikeIsBlocked`). 5.6 runs the criteria on the ported market, through the gate (`test/policies/Step5Acceptance.t.sol`); each attack also passes under per-action bounds only:
+
+> | Criterion | Shown by |
+> |---|---|
+> | Cross-slot over-commitment is blocked | `test_crossSlotOverCommitment_isBlockedByS3`; and the phantom bid, `test_phantomBuy_isBlockedByS3` |
+> | Excess cycling is blocked | `test_excessCycling_isBlockedByS4`, `test_excessCycling_countsWhatTheBatteryAlreadyDischarged` |
+> | A position spike is blocked | `test_positionSpike_isBlockedByS5` |
+> | A stale or reordered reading is rejected | `test_aStaleReadingIsRejected`, `test_aReorderedReadingIsRejected`, `test_aStoredReadingGoneStaleNoLongerServes` |
+> | An exposure-reducing cancel always passes | `testFuzz_anExposureReducingCancelAlwaysPasses`, under A1–A6, S1, S2, S3, S4: every open order cancelled, however bad the battery turns out. S6 counts cancellations (log 4.5); S5 may refuse a cancel that opens a steep step, which is not exposure-reducing for it (log 5.6) |
+> | Gas as a function of k | `docs/reports/gas-step5-2026-10-19.md` |
+>
+> Mutation, the demo with the oracles and the docs follow (5.7).
 
 **Step 6. Evaluation.**
 - Full attack matrix (Section 9.1), against all baselines.

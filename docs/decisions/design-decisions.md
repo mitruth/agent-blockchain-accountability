@@ -2805,6 +2805,60 @@ is still refused.
 
 `npm test`: 384 passing.
 
+
+### 5.6 — Step 5's acceptance criteria, and gas as a function of k
+
+**Status.** Proposed for the reading of the criteria below; the results are
+measured.
+
+**The run.** `test/policies/Step5Acceptance.t.sol`, 21 tests, on the ported
+P2P market through the gate, like step 4's. Alice's battery is home_01's as the
+arms ran it; the market has hourly slots; the horizon is 48 slots, to reach
+tomorrow's session.
+
+| Attack (spec 9.1) | Blocked by | Passes under per-action bounds only |
+|---|---|---|
+| Cross-slot over-commitment: three offers of 1.5 kWh, 4.7 kWh from the cells against 3.5 above the floor | S3: the batch refused whole; spread over calls, the third | Yes, all three |
+| Phantom-buy justification: a bid that will never fill, then an offer against it | S3, D3 | Yes |
+| Excess cycling: offers drawing 6.3 kWh in a day against one cycle, 5 kWh | S4: the fourth refused; with 3.5 kWh already discharged, the second | Yes |
+| Position spike: 3 kWh in one hour, steps of at most 2 | S5; more energy, spread as a ramp, passes | Yes |
+| Stale or favourable reading: an older reading of a full battery, handed in after the current one | The verifier: `Oracle_Reordered`, `Oracle_Stale`; a stored reading gone stale serves no more | Yes: per-action bounds read no reading |
+
+**An exposure-reducing cancel always passes.**
+`testFuzz_anExposureReducingCancelAlwaysPasses` runs 256 sequences under
+A1–A6, S1, S2, S3 and S4. After random offers and bids, the battery turns out
+nearly empty and heavily cycled, and every open order is cancelled, with a
+fresh reading and without; every cancellation goes through. Two policies are
+left out, on purpose:
+
+- **S6** counts cancellations; D10 does not exempt them there (log 4.5).
+- **S5** may refuse a cancellation. Cancelling the middle of a plateau can
+  open a step steeper than R_max. For S5's own quantity that cancellation adds
+  exposure, and spec 6.6 exempts only "cancels that reduce exposure". S5's
+  tests show a cancel that smooths the profile passing.
+
+**Gas as a function of k:** `docs/reports/gas-step5-2026-10-19.md`.
+
+- **The measurement.** The agent's whole submission, one offer and one bid,
+  each line adding a policy.
+- **Per slot of horizon:** S3 about 30,500 plus 4,050; S4 about 38,000 plus
+  2,500, for an offer (a bid, never judged, a flat 20,500); S5 a flat 24,000.
+- **The three together add to one offer:** 146,000 at k = 8, 405,000 at
+  k = 48, 723,000 at k = 96.
+- **The day-ahead batch,** 24 offers at k = 48 under every policy but S6:
+  10.64M gas, against 8.79M with none.
+
+**Two measurement mistakes, caught and fixed before recording.**
+
+- **The first "bid" figures were cold first writes.** The steady-state
+  warm-up placed only offers.
+- **They then measured refusals.** The battery was full, so S3 rightly
+  refused every bid as overfilling it.
+
+The battery is now half full, and every measured order is asserted placed.
+
+`npm test`: 405 passing.
+
 ---
 
 ## Open decisions

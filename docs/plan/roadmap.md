@@ -20,7 +20,7 @@ Where the build stands and what comes next. Update this file as steps close.
 | 2 | Position ledger, reconcile, the P2P market port and its decoder | **Done**, 2026-10-14. Acceptance criteria met on the port |
 | 3 | `WindowLib`, independent verifier, mutation suite | **Done**, 2026-10-15. Acceptance criteria met |
 | 4 | The Smart Session entry point (D1), the policy phases, `StaticOrderPolicy`, S1, S2, S6 | **Done**, 2026-10-16. Acceptance criteria met |
-| 5 | `OracleVerifier`, PV relay, S3, S4, S5 | **In progress**: 5.1 to 5.5 done |
+| 5 | `OracleVerifier`, PV relay, S3, S4, S5 | **In progress**: 5.1 to 5.6 done; acceptance criteria met |
 | 6 | Evaluation | Not started |
 
 ### What was verified for step 1
@@ -153,14 +153,16 @@ the physical system (step 5), or how often an honest agent is refused (step
 | 5.1 | `OracleVerifier`: signed BMS readings and PV forecasts, the signer registry, staleness, order; `submit` takes readings | Done, `279b139` |
 | 5.2 | The oracles off-chain: EIP-712 signing, a PV forecast relay and a BMS per house, fed from `data/homes/` and `data/arms/`; `npm run oracle:post` | Done, `d1aeaed` |
 | 5.3 | S3, deliverability: `DeliverabilityPolicy` | Done, `31b591d` |
-| 5.4 | S4, battery cycles: `CyclePolicy`; the horizon shared in `HorizonLib`; S3's check 42 % cheaper | Done, this commit |
-| 5.5 | S5, ramp: `RampPolicy` | Done, this commit |
-| 5.6 | The acceptance tests; gas as a function of k | Next |
-| 5.7 | Mutation, the demo with oracles, docs | |
+| 5.4 | S4, battery cycles: `CyclePolicy`; the horizon shared in `HorizonLib`; S3's check 42 % cheaper | Done, `2fa70bd` |
+| 5.5 | S5, ramp: `RampPolicy` | Done, `2fa70bd` |
+| 5.6 | The acceptance tests on the ported market; gas as a function of k | Done, this commit |
+| 5.7 | Mutation, the demo with oracles, docs | Next |
 
-| Check, after 5.5 | Result |
+| Check, after 5.6 | Result |
 |---|---|
-| `npm test` | 384 passing (35 verifier, 14 readings through the gate, 26 S3, 14 S4, 11 S5) |
+| `npm test` | 405 passing (35 verifier, 14 readings through the gate, 26 S3, 14 S4, 11 S5, 21 step 5 acceptance) |
+| Step 5's acceptance criteria | All met on the ported market, `test/policies/Step5Acceptance.t.sol` |
+| Gas as a function of k | `docs/reports/gas-step5-2026-10-19.md`: the three physical policies add 146k to an offer at k = 8, 405k at k = 48, 723k at k = 96 |
 | Excess cycling (spec step 5) | Blocked by S4: `test_excessCyclingIsBlocked` |
 | A position spike (spec step 5) | Blocked by S5: `test_aPositionSpikeIsBlocked` |
 | Cross-slot over-commitment (spec step 5) | Blocked by S3: `test_crossSlotOverCommitmentIsBlocked` |
