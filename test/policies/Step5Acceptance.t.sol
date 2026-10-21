@@ -373,6 +373,7 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         c.sellFloor = 0;
         c.buyCeiling = 10_000_000;
         c.horizonSeconds = uint32(3 * DAY);
+        c.ratedPowerW = type(uint32).max;
         _add(statics, keccak256("A"), abi.encode(c));
     }
 
@@ -394,7 +395,7 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         return DeliverabilityPolicy.Config({
             horizonSlots: k,
             capacityWh: 5_000,
-            socMinBps: 1_000,
+            socMinProfileBps: _flat(1_000),
             socMaxBps: 10_000,
             chargePowerW: 3_000,
             dischargePowerW: 3_000,
@@ -403,6 +404,12 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
             pvCreditBps: 10_000,
             reserveLoadWh: 0
         });
+    }
+
+    function _flat(uint16 bps) internal pure returns (uint16[24] memory profile) {
+        for (uint256 i = 0; i < 24; ++i) {
+            profile[i] = bps;
+        }
     }
 
     function _addS3() internal {

@@ -9,7 +9,9 @@ import {FreshBatteryPolicy} from "./mocks/OracleMocks.sol";
 import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {DecoderRegistry} from "../../contracts/gate/DecoderRegistry.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
-import {ReadingKind, BmsReading, SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {
+    ReadingKind, BmsReading, GridState, GridLevel, GridDirection, SignedReading
+} from "../../contracts/oracle/OracleTypes.sol";
 import {CheckResult, Verdict} from "../../contracts/gate/GateTypes.sol";
 
 /// @notice Readings handed in with an order (spec 4.1, step 3; step 5.1): the
@@ -168,6 +170,26 @@ contract GateReadingsTest is GateFixture, OracleFixture {
         _submitWith(_order(1500), theirs);
     }
 
+    /// @dev A grid state names no account (spec v0.2, section 4), so the
+    ///      gate takes it for a reading meant for someone else. Relays post it
+    ///      to the verifier directly.
+    function test_aGridStateCannotComeWithAnOrder() public {
+        SignedReading[] memory state = new SignedReading[](1);
+        state[0] = _signGrid(
+            oracle,
+            GRID_KEY,
+            GridState({
+                issuedAt: uint64(block.timestamp),
+                validUntil: uint64(block.timestamp + 1 hours),
+                level: GridLevel.ALERT,
+                direction: GridDirection.DEFICIT,
+                horizonSlots: 4
+            })
+        );
+        vm.expectRevert(abi.encodeWithSelector(PolicyGate.PolicyGate_ReadingForAnotherAccount.selector, address(0)));
+        _submitWith(_order(1500), state);
+    }
+
     function test_atMostFourReadingsPerSubmission() public {
         SignedReading[] memory five = new SignedReading[](5);
         vm.expectRevert(abi.encodeWithSelector(PolicyGate.PolicyGate_TooManyReadings.selector, 5));
@@ -177,6 +199,20 @@ contract GateReadingsTest is GateFixture, OracleFixture {
     // ------------------------------------------------------------------
     // The agent cannot reach the signer list
     // ------------------------------------------------------------------
+
+    /// @dev Nor withdraw the declaration of its own key, register a meter, or
+    ///      declare a key: the verifier is no target.
+    function test_theAgentCannotTouchAgentKeysOrTheMeterThroughTheGate() public {
+        bytes[3] memory calls = [
+            abi.encodeCall(OracleVerifier.setAgentKey, (agent, false)),
+            abi.encodeCall(OracleVerifier.setMeter, (vm.addr(OTHER_KEY), 1800)),
+            abi.encodeCall(OracleVerifier.setAgentKey, (vm.addr(OTHER_KEY), true))
+        ];
+        for (uint256 i = 0; i < calls.length; ++i) {
+            vm.expectRevert(abi.encodeWithSelector(PolicyGate.PolicyGate_ForbiddenTarget.selector, address(oracle)));
+            _submit(address(oracle), calls[i]);
+        }
+    }
 
     function test_theAgentCannotRegisterASignerThroughTheGate() public {
         bytes memory takeover =

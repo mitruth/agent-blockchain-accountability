@@ -103,7 +103,11 @@ contract LeglessDecoder is IOrderDecoder {
 
     function gateTime(address, uint32) external pure override returns (uint64) {}
 
-    function slotStart(address, uint32) external pure override returns (uint64) {}
+    /// @dev Hourly slots from 1970, the grid of the other stub decoders, so
+    ///      that it can be registered beside them.
+    function slotStart(address, uint32 slot) external pure override returns (uint64) {
+        return uint64(slot) * 3600;
+    }
 }
 
 /// @notice Accepts any calldata and reads it as a placement of 1 Wh, with an

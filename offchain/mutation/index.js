@@ -28,9 +28,10 @@ import window from "./catalogs/window.js";
 import accounts from "./catalogs/accounts.js";
 import policies from "./catalogs/policies.js";
 import physical from "./catalogs/physical.js";
+import oracle2 from "./catalogs/oracle2.js";
 import pending from "./catalogs/pending.js";
 
-export const CATALOGS = { gate, ledger, market, window, policies, physical, accounts };
+export const CATALOGS = { gate, ledger, market, window, policies, physical, oracle2, accounts };
 export { pending };
 
 const BACKUP = ".mutation-backup";

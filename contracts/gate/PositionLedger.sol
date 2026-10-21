@@ -28,10 +28,27 @@ import {Order, OrderKind, Side, FillState} from "./GateTypes.sol";
 /// Fills are read through the order's decoder, never supplied by a caller. A
 /// fill the ledger has not yet booked leaves the cleared totals low, which errs
 /// on the safe side: unfilled buys are never credited.
+///
+/// Positions are summed over every market the account trades on (spec v0.2,
+/// C4): a slot's totals hold the orders of all venues, so S3 and S5 -- and every
+/// policy that reads positions -- judge the account's whole position, not one
+/// venue's. That is only sound if a slot number means the same delivery
+/// interval on every market. So each account has one slot grid, an origin and a
+/// slot length, fixed by the first market registered for it; a market on any
+/// other grid is refused at registration (D15, extended to the origin on
+/// 21 October 2026). The grid is kept here, not in the gate, because the
+/// positions outlive a reinstall of the gate, and so must the grid they are
+/// numbered on. It never changes.
 contract PositionLedger {
     /// @notice Upper bound on one account's open orders. A placement beyond it
     ///         is refused.
     uint256 public constant MAX_OPEN_ORDERS = 64;
+
+    /// @notice An account's slot grid: slot n starts at origin + n × slotSeconds.
+    struct Grid {
+        uint64 origin;
+        uint32 slotSeconds;
+    }
 
     enum Status {
         NONE,
@@ -77,10 +94,13 @@ contract PositionLedger {
     mapping(address account => mapping(address writer => bool)) public isWriter;
     mapping(address account => uint256) public openOrderCount;
 
+    mapping(address account => Grid) private _grids;
+
     mapping(address account => mapping(uint32 slot => Position)) private _positions;
     mapping(address account => mapping(address market => mapping(bytes32 orderId => OrderRecord))) private _records;
 
     event WriterSet(address indexed account, address indexed writer, bool allowed);
+    event GridFixed(address indexed account, uint64 origin, uint32 slotSeconds);
     event OrderOpened(
         address indexed account,
         address indexed market,
@@ -105,6 +125,8 @@ contract PositionLedger {
     error PositionLedger_TooManyOpenOrders(address account);
     error PositionLedger_NotOpen(address market, bytes32 orderId);
     error PositionLedger_InconsistentFill(bytes32 orderId, uint64 booked, uint64 reported, uint64 qtyWh);
+    error PositionLedger_ZeroSlotLength();
+    error PositionLedger_OffGrid(uint64 origin, uint32 slotSeconds, uint64 accountOrigin, uint32 accountSlotSeconds);
 
     modifier onlyWriter(address account) {
         if (!isWriter[account][msg.sender]) revert PositionLedger_NotWriter(account, msg.sender);
@@ -125,6 +147,21 @@ contract PositionLedger {
     // ------------------------------------------------------------------
     // Writers
     // ------------------------------------------------------------------
+
+    /// @notice Check a market's grid against the account's, fixing the
+    ///         account's grid on the first call. Reverts when the market is on
+    ///         another grid: another origin or another slot length.
+    function fixGrid(address account, uint64 origin, uint32 slotSeconds) external onlyWriter(account) {
+        if (slotSeconds == 0) revert PositionLedger_ZeroSlotLength();
+        Grid storage grid = _grids[account];
+        if (grid.slotSeconds == 0) {
+            grid.origin = origin;
+            grid.slotSeconds = slotSeconds;
+            emit GridFixed(account, origin, slotSeconds);
+        } else if (grid.origin != origin || grid.slotSeconds != slotSeconds) {
+            revert PositionLedger_OffGrid(origin, slotSeconds, grid.origin, grid.slotSeconds);
+        }
+    }
 
     /// @notice Book a placement the market has accepted.
     function recordPlace(address account, address market, IOrderDecoder decoder, bytes32 orderId, Order calldata leg)
@@ -208,6 +245,11 @@ contract PositionLedger {
     // ------------------------------------------------------------------
     // Views
     // ------------------------------------------------------------------
+
+    /// @notice The account's slot grid; a zero slot length while none is fixed.
+    function gridOf(address account) external view returns (Grid memory) {
+        return _grids[account];
+    }
 
     function positionOf(address account, uint32 slot) external view returns (Position memory) {
         return _positions[account][slot];

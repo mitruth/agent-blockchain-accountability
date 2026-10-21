@@ -548,6 +548,9 @@ contract KeyModelTest is GateFixture {
     function test_strangerCallingOnInstallGainsNothingOverTheAccount() public {
         vm.startPrank(stranger);
         gate.onInstall("");
+        // Registering a market fixes the slot grid in the ledger (C4), which
+        // takes the gate as the stranger's writer -- in its own namespace too.
+        ledger.setWriter(address(gate), true);
         gate.setDecoder(address(market), StubMarket.withdrawAll.selector, decoder);
         vm.stopPrank();
 

@@ -1,15 +1,17 @@
 # Project guide
 
 What the project contains today, what every file does, what the tests prove,
-and how to run everything. Current as of 2026-10-16: steps 1 to 4 of 6 are
-built, step 2 on a port of Dan's P2P energy flexibility market. Step 4 gave the
-agent a session entry point, ran every policy on every submission, and built
-the per-action bounds and the sequence policies S1, S2 and S6.
+and how to run everything. Current as of 2026-10-21: v0.1 steps 1 to 5 are
+built, and v0.2 step 1 of 8 (`docs/spec/policy-spec-v0.2-gap-policies.md`,
+Section 11.6): A1's rated-power term and minimum order, S3's floor by hour of
+day, positions summed on one slot grid across markets, the tariff, meter,
+envelope and grid-state oracles, and distinct trust anchors.
 
 
 | For                                     | Read                                 |
 | --------------------------------------- | ------------------------------------ |
 | What must be built, all six steps       | `docs/spec/policy-spec-v0.1.md`      |
+| What v0.2 adds, and its build order     | `docs/spec/policy-spec-v0.2-gap-policies.md`, Section 11 |
 | Why each thing was built the way it was | `docs/decisions/design-decisions.md` |
 | Status and what comes next              | `docs/plan/roadmap.md`               |
 
@@ -43,7 +45,20 @@ The build follows six steps, fixed by Section 9 of the spec.
 | 3    | `WindowLib`, independent verifier, mutation suite                           | **Built and passing** |
 | 4    | The session entry point, the policy phases; per-action policies, S1, S2, S6 | **Built and passing** |
 | 5    | Oracle verification, PV relay, S3, S4, S5                                   | **Built and passing** |
-| 6    | Evaluation                                                                  | Not started           |
+| 6    | Evaluation                                                                  | Folded into v0.2 step 8 |
+
+v0.2 (Section 11.6 of its spec), one branch per step:
+
+| Step | Content | Status |
+| ---- | ------- | ------ |
+| 1 | C1–C5, the four new oracle kinds, signer distinctness | **Built and passing** (`v0.2/1-oracles-aggregation`) |
+| 2 | G1 session circuit breaker, A9 recipient lock | Not started |
+| 3 | Tariff-relative price band A3T, dominated-trade budget S7 | Not started |
+| 4 | Same-slot round-trip quota S8 | Not started |
+| 5 | Delivery reconciliation S9, `poke`, calibration | Not started |
+| 6 | Operating envelope S10 | Not started |
+| 7 | Grid-state direction gate A10 | Not started |
+| 8 | Evaluation | Not started |
 
 
 
@@ -64,7 +79,8 @@ submission before it reaches the market, all legs at once. A rejection is
 recorded on chain without reverting and leaves nothing behind; a soft-bound
 crossing is flagged and goes ahead; released volume is credited back.
 - **The policies of step 4**, in `contracts/policies/`:
-  - `StaticOrderPolicy`, the per-action bounds A1 to A4 and A6: quantity,
+  - `StaticOrderPolicy`, the per-action bounds A1 to A4 and A6: quantity
+  (at most min(maxQtyWh, rated power × slot length), at least minQtyWh),
   value, price floor and ceiling, blocked hours, horizon.
   - `WindowPolicy`, S1 (the owner's budget, BUY value) and S2 (the export and
   import caps, Wh), on `WindowLib`.
@@ -72,7 +88,8 @@ crossing is flagged and goes ahead; released volume is credited back.
   cancel-to-place ratio and the message count.
   - `DeliverabilityPolicy`, S3 (step 5.3): the battery, from its signed
   reading, must be able to deliver every sale over the next k slots, counting
-  only certain energy: the PV forecast and filled bids.
+  only certain energy: the PV forecast and filled bids. Its floor may differ
+  by UTC hour (v0.2, C3).
   - `CyclePolicy`, S4 (step 5.4): the battery's discharge over a sliding day,
   from its signed odometer, plus what the sales placed will draw, against
   N_max cycles.
@@ -80,12 +97,18 @@ crossing is flagged and goes ahead; released volume is credited back.
   R_max from one slot to the next.
   Section 3 explains what each checks; section 6 shows four attacks blocked.
 - **A position ledger:** every order the agent placed, and per delivery slot
-the account's committed and cleared volume, buy and sell.
-- **An oracle verifier** (step 5.1): the signed readings the physical policies
-will rely on, the battery's state from its BMS and the PV forecast. It checks
-each reading's signature against the signer the account registered, refuses a
-stale, future or reordered reading, and keeps the latest. The agent hands in
-readings with its order; it cannot register a signer.
+the account's committed and cleared volume, buy and sell, summed over every
+market (v0.2, C4). Each account has one slot grid, fixed by its first market; a
+market on another grid cannot be registered.
+- **An oracle verifier** (step 5.1, v0.2 step 1): the signed readings the
+policies rely on: the battery's state from its BMS, the PV forecast, the tariff,
+the meter, the DSO's envelope and the grid state. It checks each reading's
+signature against the signer the account registered and refuses a stale, future,
+reordered or conflicting reading. Meter readings are kept one per slot, in a
+ring of 128, in any order once the slot is over. A meter or envelope signer may
+not be the BMS or PV signer, and no signer may be a key the owner declared as
+the agent's. The agent hands in readings with its order; it cannot register a
+signer.
 - **The oracles, played from the data** (step 5.2, `offchain/oracle/`): a PV
 forecast relay and a BMS for each agent's house. The forecast is the home's
 PV from `data/homes/`, actual or yesterday's; the battery replays an honest
@@ -104,9 +127,9 @@ call it.
 classes: sliding (what the policies use), tumbling, refill, stream and
 lifetime (the baselines). Section 6 shows a daily tumbling window admitting
 twice its cap across midnight, where a sliding one admits it once.
-- **An independent verifier** (`offchain/verifier/`): rebuilds every window
-from the event log and recomputes it by a different algorithm, then compares
-every figure the chain reported.
+- **An independent verifier** (`offchain/verifier/`): rebuilds every window,
+and the ledger's per-slot totals across markets, from the event log, recomputes
+them by a different algorithm, then compares every figure the chain reported.
 - **A mutation suite** (`offchain/mutation/`): 201 deliberate defects, each of
 which must make a test fail. The last full run caught 189 of the 192 that run
 under Hardhat; the other 3 are faults in test doubles.
@@ -115,8 +138,9 @@ under Hardhat; the other 3 are faults in test doubles.
 
 ### What does not exist yet
 
-**No tariff oracle,** so A3's price bounds stay absolute (spec A8). Nothing is
-deployed to a network. The false-positive rate on honest agents, the full attack
+The tariff oracle exists (v0.2 step 1), but no policy reads it yet: A3's price
+bounds stay absolute until A3T (v0.2 step 3). Likewise the meter, envelope and
+grid-state oracles wait for S9, S10 and A10. Nothing is deployed to a network. The false-positive rate on honest agents, the full attack
 matrix and the monolithic gas variant are step 6.
 
 Two roles of the market are outside the repository by design: the off-chain
@@ -661,7 +685,7 @@ reads the data that `dataset/` writes.
 | `keeper/`    | Expires the orders a finalised session left unmatched and reconciles the gate's ledger. Anyone may do both                                                                                                                                                                                                 | a scenario                          |
 | `sensor/`    | A prosumer's meter reporting what it measured in a slot, which settles that slot. Where a real meter feed would be connected                                                                                                                                                                               | a scenario                          |
 | `scenarios/` | `day-ahead.js`, one market day from opening the session to settlement; `calendar.js`, the Brussels clock and the day-ahead closing time                                                                                                                                                                    | `npm run demo:flow`                 |
-| `verifier/`  | The independent check of the windows: `windows.js` defines each class, `guarantees.js` measures spec 5.3's bounds over every interval, `verify.js` replays a history and compares, `fuzz.js` runs random and scripted histories through `WindowProbe`, `selftest.js` tampers with histories it must reject | `npm run verify:window`             |
+| `verifier/`  | The independent check of the windows: `windows.js` defines each class, `guarantees.js` measures spec 5.3's bounds over every interval, `verify.js` replays a history and compares, `fuzz.js` runs random and scripted histories through `WindowProbe`, `selftest.js` tampers with histories it must reject; `ledger.js` replays the ledger's events and sums each slot over every order on every market, `ledger-fuzz.js` drives the ledger through `LedgerProbeDecoder`, `ledger-cli.js` compares and tampers | `npm run verify:window`, `npm run verify:ledger` |
 | `mutation/`  | The mutation suite: `catalogs/` holds the defects per part of the system, `index.js` applies one at a time and runs the tests                                                                                                                                                                              | `npm run mutate`                    |
 | `oracle/`    | The trusted devices, played from the data: `typed.js` signs EIP-712 BMS readings and PV forecasts as the verifier expects; `battery.js` is a battery as its BMS sees it, a simple model or an honest arm replayed; `forecast.js` gives the PV forecast, actual or yesterday's; `relay.js` posts and reads them on the chain; `play.js` gives one house's battery and forecast at a point in market time, for the scenario | `npm run oracle:post`, a scenario |
 | `dataset/`   | Writes `data/homes/` from Dan's raw HEMS dataset (`index.js`: the six homes' PV and battery, a year of 30-minute slots per home, prices, daily totals, representative days) and `data/arms/` from `Demo_PlanApplyEvaluate` (`arms.js`: the honest controllers' step logs, settings, tasks and results), checking one against the other. Integers only; `decimal.js` reads every digit of the CSVs' decimals exactly, without floating point | `npm run data:extract`              |
@@ -861,7 +885,7 @@ double, `QtyPolicy`, that counts the Wh placed against a soft and a hard bound.
 
 
 
-### `test/gate/GateReadings.t.sol`: 14 tests
+### `test/gate/GateReadings.t.sol`: 16 tests
 
 Readings handed in with an order, through the gate, with a test double,
 `FreshBatteryPolicy`, that rejects unless the account's battery reading is
@@ -871,8 +895,32 @@ fresh and shows enough stored energy.
 | Group                         | Tests | What it establishes                                                                                                                                                                                                                                                          |
 | ----------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Accepted                      | 6     | A reading that comes with an order is accepted and emitted before the policies check, and the policy sees its values. Without a fresh reading the policy rejects. A reading serves later orders until it goes stale; the same reading may come with every order of the slot. A rejected order keeps the genuine reading it brought |
-| Refused                       | 5     | A stale, reordered or forged reading reverts the whole submission, and nothing is placed. So does a genuine reading for another account. At most four readings per submission                                                                                              |
-| The signer list is out of reach | 3   | The agent cannot have the gate call the verifier, and the owner cannot approve a decoder for it either. The agent's session cannot call the verifier directly                                                                                                             |
+| Refused                       | 6     | A stale, reordered or forged reading reverts the whole submission, and nothing is placed. So does a genuine reading for another account, and a grid state, which names no account. At most four readings per submission                                                    |
+| The signer list is out of reach | 4   | The agent cannot have the gate call the verifier -- not to register a signer or a meter, nor to declare or withdraw an agent key -- and the owner cannot approve a decoder for it either. The agent's session cannot call the verifier directly                              |
+
+
+### `test/gate/MultiMarket.t.sol`: 13 tests
+
+v0.2, C4: one account on two mock markets.
+
+| Group | Tests | What it establishes |
+| ----- | ----- | ------------------- |
+| The grid | 8 | The first market fixes the account's grid. A market with another slot length (D15), another origin, an origin shifted by whole slots, or no grid at all is refused. The grid survives a reinstall of the gate. Only a writer fixes a grid, and never one of zero length |
+| Positions across venues | 5 | A slot's totals hold both markets' orders. S5 and S3 each pass a sale on either market alone and reject the same sales together |
+
+
+### `test/oracle/OracleVerifierV2.t.sol`: 35 tests
+
+v0.2, section 4: the four new oracle kinds and signer distinctness.
+
+| Group | Tests | What it establishes |
+| ----- | ----- | ------------------- |
+| Type strings | 1 | The contract hashes what the EIP-712 type strings say, for all four kinds |
+| Tariff | 7 | Accepted and served per slot, only for the slots it covers, until its maximum age. Malformed, future, stale, reordered, conflicting, wrongly signed and high-s tariffs are refused; the same one again is a no-op |
+| Envelope | 3 | Served per slot; malformed or stale refused; a new signer drops the schedule held, the tariff's too |
+| Meter | 9 | Accepted once its slot has ended, to the second, and in any order. Conflicting, off-grid, too old (one slot past the ring) and wrongly signed readings are refused; the ring evicts a slot one ring later; a new meter drops the old readings |
+| Grid state | 6 | Holds until `validUntil`, to the second; inert from another operator or with none registered; bad, future, expired, reordered and conflicting states refused; it takes no maximum age |
+| Distinctness | 9 | Meter and envelope signers are neither the BMS nor the PV signer, in both registration orders. No signer of any kind is a declared agent key, and no agent key a registered signer. At most 8 agent keys; withdrawal; removing a signer is always allowed; the tariff may share a signer |
 
 
 
@@ -934,7 +982,7 @@ The market on its own, owners as plain addresses, phase by phase.
 
 
 
-### `test/market/GatedMarket.t.sol`: 12 tests
+### `test/market/GatedMarket.t.sol`: 13 tests
 
 The whole system: an agent trades for Alice through PolicyGate on the ported
 market; Bob is the counterparty. A day-ahead batch of 24 bids is 24 legs and 24
@@ -945,7 +993,9 @@ expires without the market's `expire` call; an order the owner cancels directly
 is closed elsewhere; the agent has no direct route into the market or the
 token. A fuzz test, 256 runs of random trading and matching, checks after every
 step that the ledger's books balance, and at the end that the ledger and Alice's
-prosumer contract agree slot by slot on what she bought and sold.
+prosumer contract agree slot by slot on what she bought and sold. v0.2, C5: a
+filled bid takes from Alice the trade's value and nothing more, and S1 has
+counted at least that; the market charges no fee.
 
 ### `test/market/ClassicSettlement.t.sol`: 6 tests
 
@@ -974,7 +1024,7 @@ second.
 
 
 
-### `test/policies/StaticOrderPolicy.t.sol`: 15 tests
+### `test/policies/StaticOrderPolicy.t.sol`: 19 tests
 
 Each per-action bound at its edge, by calling `check` directly, then through
 the gate.
@@ -985,7 +1035,8 @@ the gate.
 | The bounds       | 8     | A1 and A2 inclusive; A3's ceiling for BUY and floor for SELL, each for its side only; A4 blocking an hour for one side, half-hours included; A6 bounded on both sides, a slot starting now excluded; several broken bounds reported together |
 | Legs             | 1     | One bad leg rejects the whole submission; a cancellation is never checked                                                                                                                                                                    |
 | Through the gate | 2     | A broken bound stops the order, with the bitmask in the logged result; a modification is checked as its new order, and cancelling stays possible when nothing may be placed                                                                  |
-| Configuration    | 4     | Every looser parameter is a widening, a mixed change included; every tighter one a tightening; a malformed configuration is invalid; only the gate writes the policy                                                                         |
+| Configuration    | 5     | Every looser parameter is a widening, a mixed change included; every tighter one a tightening; a malformed configuration is invalid, including a zero rated power or a minimum above the maximum; a lower minimum widens; only the gate writes the policy |
+| v0.2 C1, C2      | 3     | The rated-power term binds at its edge and rounds down; the minimum order size binds at its edge, and a small order can still be cancelled                                                                                                  |
 
 
 
@@ -1014,7 +1065,7 @@ allowance; the message count, which a refused submission does not use; an
 expiry using none of the quota; the quota renewing after an hour; the direction
 table.
 
-### `test/policies/DeliverabilityPolicy.t.sol`: 29 tests
+### `test/policies/DeliverabilityPolicy.t.sol`: 32 tests
 
 S3 through the gate on the mock market, with home_01's battery as the arms
 ran it: 5 kWh, 3 kW, 95 % each way, 10 % to 100 %; a horizon of 16
@@ -1030,7 +1081,8 @@ half-hour slots.
 | What cannot be judged   | 5     | With no fresh reading, or once it goes stale, a placement is refused; a stale forecast gives no PV credit. A slot beyond the horizon is refused, and the horizon moves with the reading                                                                                                                                                                       |
 | An independent bound    | 1     | Fuzz: whatever sales the agent tries, those executed never draw more from the cells than the energy above the floor                                                                                                                                                                                                    |
 | Gas                     | 1     | The check at k = 8, 16, 48, 96, printed                                                                                                                                                                                                                                                                                 |
-| Configuration           | 4     | Malformed configurations are invalid; each looser parameter, and any other horizon, widens; tighter ones tighten; only the gate configures                                                                                                                                                                             |
+| Configuration           | 4     | Malformed configurations are invalid, a floor above the ceiling in one hour included; each looser parameter, a floor lower in one hour, and any other horizon, widens; tighter ones tighten; only the gate configures                                                                                                    |
+| v0.2 C3                 | 3     | A reserve from noon on rejects a morning sale a flat floor allows (974 Wh short at 12:00). A slot takes the floor of the hour it starts in. A fractional floor rounds up (10.01 % of 5 kWh is 501 Wh)                                                                                                                                                                               |
 
 
 
@@ -1125,7 +1177,14 @@ The largest run so far was 30 seeds × 80 steps:
 - the scripted burst gave 2.00 × cap under tumbling, within 3 seconds;
 - all 720 tamperings were caught.
 
-`npm run test:offchain` (12 tests) checks the verifier's definitions without a
+**The ledger (v0.2, C4).** `npm run verify:ledger` places, fills, cancels,
+expires and closes orders at random for two accounts on two markets, reads the
+chain's position after every write, and compares it with the verifier's replay
+of the ledger's events, which sums each slot afresh over every order. Four
+tampered logs must be rejected. Default run (4 seeds × 80 writes): 1,280 totals
+compared, no disagreement, all four tamperings caught.
+
+`npm run test:offchain` (33 tests) checks the verifier's definitions without a
 chain, including REFILL's closed form against a step-by-step simulation, and
 the matcher's rule.
 
@@ -1268,14 +1327,14 @@ npm install
 
 ### The Hardhat suite
 
-Expect **411 passing** in about three minutes:
+Expect **469 passing** in about three minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
-  market, 8 ledger, 15 policy phases, 14 readings;
-- the oracle verifier: 35;
-- the market: 23 token, 41 market flow, 12 gated market, 6 settlement rule;
-- the windows and the policies: 32 `WindowLib`, 15 `StaticOrderPolicy`, 11
-  `WindowPolicy`, 9 `CancelQuotaPolicy`, 29 `DeliverabilityPolicy`, 16
+  market, 8 ledger, 15 policy phases, 16 readings, 13 multi-market;
+- the oracle verifier: 35, and 35 for the v0.2 kinds;
+- the market: 23 token, 41 market flow, 13 gated market, 6 settlement rule;
+- the windows and the policies: 32 `WindowLib`, 19 `StaticOrderPolicy`, 11
+  `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
   `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 21 step 5 acceptance
   (attacks and gas).
 
@@ -1288,7 +1347,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **419 passed**: the 411 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 19 October, at the end of step 5: 419 passed.
+Expect **477 passed**: the 469 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 21 October, at the end of v0.2 step 1: 477 passed.
 
 With Foundry installed and allowed to run:
 
@@ -1332,7 +1391,7 @@ and `test_gateIsNeverATargetWhateverTheCall`. Put the line back.
 
 ### The JavaScript tests
 
-Expect **29 passing** in a few seconds, after a build:
+Expect **33 passing** in a few seconds, after a build:
 
 - the verifier's definitions, the matcher's rule and the dataset's decimal
   reading, with no chain;
@@ -1379,6 +1438,17 @@ More histories, or other seeds:
 
 ```bash
 node offchain/verifier/cli.js --seeds 30 --steps 80 --first-seed 1000
+```
+
+The ledger across two markets (v0.2, C4), the same way; it must end "no
+disagreement":
+
+```bash
+npm run verify:ledger
+```
+
+```bash
+node offchain/verifier/ledger-cli.js --seeds 10 --steps 200
 ```
 
 

@@ -15,11 +15,14 @@ import {MockEnergyMarket} from "../gate/mocks/MockEnergyMarket.sol";
 ///
 /// The default configuration: at most 2000 Wh and 600,000 units per order;
 /// SELL at no less than 0.10, BUY at no more than 0.30 per kWh; BUY blocked
-/// for slots starting at 14:00 UTC; slots up to 24 hours ahead.
+/// for slots starting at 14:00 UTC; slots up to 24 hours ahead; a rated power
+/// of 5 kW; no minimum order size.
 contract StaticOrderPolicyTest is PolicyFixture {
     bytes32 internal constant ID = keccak256("static");
     uint64 internal constant FLOOR = 100_000;
     uint64 internal constant CEILING = 300_000;
+    /// @dev 5 kW: 2,500 Wh in a half-hour slot, above maxQtyWh.
+    uint32 internal constant RATED_W = 5_000;
 
     StaticOrderPolicy internal policy;
 
@@ -37,6 +40,8 @@ contract StaticOrderPolicyTest is PolicyFixture {
         c.buyBlockedHours = uint24(1) << 14;
         c.sellBlockedHours = 0;
         c.horizonSeconds = 24 hours;
+        c.minQtyWh = 0;
+        c.ratedPowerW = RATED_W;
     }
 
     /// Slot 12 starts at 15:00 UTC: not blocked for either side.
@@ -55,6 +60,39 @@ contract StaticOrderPolicyTest is PolicyFixture {
     function test_A1_quantityIsBoundedInclusively() public view {
         assertEq(_broken(_buy(OPEN_SLOT, 2000, 200_000)), 0);
         assertEq(_broken(_buy(OPEN_SLOT, 2001, 200_000)), policy.A1_QUANTITY());
+    }
+
+    /// C1: the rated-power term. 3 kW over a half-hour slot is 1,500 Wh,
+    /// below maxQtyWh, so it is the binding bound.
+    function test_A1_ratedPowerBoundsTheQuantityInclusively() public {
+        StaticOrderPolicy.Config memory c = _config();
+        c.ratedPowerW = 3_000;
+        _asAccount(abi.encodeCall(gate.setConfig, (policy, ID, abi.encode(c))));
+        assertEq(_broken(_buy(OPEN_SLOT, 1_500, 200_000)), 0);
+        assertEq(_broken(_buy(OPEN_SLOT, 1_501, 200_000)), policy.A1_QUANTITY());
+    }
+
+    /// The rated term rounds down: 3,001 W over 1,800 s is 1,500.5 Wh, so
+    /// 1,500 Wh at most.
+    function test_A1_ratedPowerRoundsDown() public {
+        StaticOrderPolicy.Config memory c = _config();
+        c.ratedPowerW = 3_001;
+        _asAccount(abi.encodeCall(gate.setConfig, (policy, ID, abi.encode(c))));
+        assertEq(_broken(_buy(OPEN_SLOT, 1_500, 200_000)), 0);
+        assertEq(_broken(_buy(OPEN_SLOT, 1_501, 200_000)), policy.A1_QUANTITY());
+    }
+
+    /// C2: an order below the minimum is refused, one at it passes, and a
+    /// cancellation of a small order still passes (D10).
+    function test_A1_minimumQuantityIsBoundedInclusively() public {
+        bytes32 small = _place(Side.BUY, OPEN_SLOT, 40, 200_000);
+        StaticOrderPolicy.Config memory c = _config();
+        c.minQtyWh = 50;
+        _asAccount(abi.encodeCall(gate.setConfig, (policy, ID, abi.encode(c))));
+        assertEq(_broken(_buy(OPEN_SLOT, 50, 200_000)), 0);
+        assertEq(_broken(_buy(OPEN_SLOT, 49, 200_000)), policy.A1_MIN_QUANTITY());
+        _cancel(small);
+        assertFalse(market.isOpen(small), "the cancellation passes");
     }
 
     /// 2000 Wh at 0.30 per kWh is 600,000 units, the bound; one unit of price
@@ -149,8 +187,9 @@ contract StaticOrderPolicyTest is PolicyFixture {
     // ------------------------------------------------------------------
 
     function test_everyLooserParameterIsAWidening() public view {
-        StaticOrderPolicy.Config[7] memory looser;
-        for (uint256 i = 0; i < 7; ++i) looser[i] = _config();
+        StaticOrderPolicy.Config[8] memory looser;
+        for (uint256 i = 0; i < 8; ++i) looser[i] = _config();
+        looser[7].ratedPowerW += 1;
         looser[0].maxQtyWh += 1;
         looser[1].maxValue += 1;
         looser[2].sellFloor -= 1;
@@ -159,14 +198,16 @@ contract StaticOrderPolicyTest is PolicyFixture {
         looser[5].horizonSeconds += 1;
         looser[6].maxQtyWh -= 1; // tighter here...
         looser[6].horizonSeconds += 1; // ...but looser there: mixed is a widening
-        for (uint256 i = 0; i < 7; ++i) {
+        for (uint256 i = 0; i < 8; ++i) {
             assertEq(uint8(_classify(looser[i])), uint8(ConfigChange.WIDEN));
         }
     }
 
     function test_everyTighterParameterIsATightening() public view {
-        StaticOrderPolicy.Config[7] memory tighter;
-        for (uint256 i = 0; i < 7; ++i) tighter[i] = _config();
+        StaticOrderPolicy.Config[9] memory tighter;
+        for (uint256 i = 0; i < 9; ++i) tighter[i] = _config();
+        tighter[7].ratedPowerW -= 1;
+        tighter[8].minQtyWh += 1;
         tighter[0].maxQtyWh -= 1;
         tighter[1].maxValue -= 1;
         tighter[2].sellFloor += 1;
@@ -174,7 +215,7 @@ contract StaticOrderPolicyTest is PolicyFixture {
         tighter[4].buyBlockedHours |= 1;
         tighter[5].sellBlockedHours |= 1;
         tighter[6].horizonSeconds -= 1;
-        for (uint256 i = 0; i < 7; ++i) {
+        for (uint256 i = 0; i < 9; ++i) {
             assertEq(uint8(_classify(tighter[i])), uint8(ConfigChange.TIGHTEN));
         }
         assertEq(uint8(_classify(_config())), uint8(ConfigChange.TIGHTEN), "unchanged");
@@ -182,6 +223,23 @@ contract StaticOrderPolicyTest is PolicyFixture {
 
     function test_aMalformedConfigurationIsInvalid() public view {
         assertEq(uint8(policy.classifyConfig(address(account), ID, hex"1234")), uint8(ConfigChange.INVALID));
+
+        StaticOrderPolicy.Config memory c = _config();
+        c.ratedPowerW = 0;
+        assertEq(uint8(_classify(c)), uint8(ConfigChange.INVALID), "no rated power");
+        c = _config();
+        c.minQtyWh = c.maxQtyWh + 1;
+        assertEq(uint8(_classify(c)), uint8(ConfigChange.INVALID), "minimum above maximum");
+        c.minQtyWh = c.maxQtyWh;
+        assertEq(uint8(_classify(c)), uint8(ConfigChange.TIGHTEN), "minimum at maximum");
+    }
+
+    function test_aLowerMinimumIsAWidening() public {
+        StaticOrderPolicy.Config memory c = _config();
+        c.minQtyWh = 50;
+        _asAccount(abi.encodeCall(gate.setConfig, (policy, ID, abi.encode(c))));
+        c.minQtyWh = 49;
+        assertEq(uint8(_classify(c)), uint8(ConfigChange.WIDEN));
     }
 
     function test_onlyTheGateWritesThePolicy() public {

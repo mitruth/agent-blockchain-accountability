@@ -51,12 +51,15 @@ contract DeliverabilityPolicy is PolicyBase {
     uint16 public constant MAX_HORIZON = 96;
 
     uint256 private constant BPS = 10_000;
-    uint256 private constant CONFIG_LENGTH = 10 * 32;
+    uint256 private constant CONFIG_LENGTH = (9 + 24) * 32;
 
     /// @param horizonSlots     k: how many slots the projection covers, from
     ///                         the slot of the battery reading.
     /// @param capacityWh       C_bat.
-    /// @param socMinBps        The floor, a share of the capacity.
+    /// @param socMinProfileBps The floor, a share of the capacity, by the UTC
+    ///                         hour a slot starts in (spec v0.2, C3): a higher
+    ///                         reserve at night, say. A constant profile is one
+    ///                         floor all day.
     /// @param socMaxBps        The ceiling.
     /// @param chargePowerW     P_ch.
     /// @param dischargePowerW  P_dis.
@@ -67,7 +70,7 @@ contract DeliverabilityPolicy is PolicyBase {
     struct Config {
         uint16 horizonSlots;
         uint64 capacityWh;
-        uint16 socMinBps;
+        uint16[24] socMinProfileBps;
         uint16 socMaxBps;
         uint32 chargePowerW;
         uint32 dischargePowerW;
@@ -168,12 +171,13 @@ contract DeliverabilityPolicy is PolicyBase {
     // ------------------------------------------------------------------
 
     /// @notice INVALID: malformed; a horizon of 0 or above 96 slots; no
-    ///         capacity; a floor above the ceiling or a ceiling above 100 %;
-    ///         an efficiency of 0 or above 100 %; a PV credit above 100 %.
+    ///         capacity; a floor, in any hour, above the ceiling, or a ceiling
+    ///         above 100 %; an efficiency of 0 or above 100 %; a PV credit
+    ///         above 100 %.
     ///         WIDEN: another horizon (a change of shape, spec 5.6), or any
-    ///         parameter looser: more capacity, a lower floor, a higher
-    ///         ceiling, more power, higher efficiencies, more PV credit, less
-    ///         reserve load.
+    ///         parameter looser: more capacity, a lower floor in any hour, a
+    ///         higher ceiling, more power, higher efficiencies, more PV credit,
+    ///         less reserve load.
     function classifyConfig(address account, bytes32 policyId, bytes calldata config)
         external
         view
@@ -183,14 +187,15 @@ contract DeliverabilityPolicy is PolicyBase {
         if (config.length != CONFIG_LENGTH) return ConfigChange.INVALID;
         Config memory n = abi.decode(config, (Config));
         if (
-            n.horizonSlots == 0 || n.horizonSlots > MAX_HORIZON || n.capacityWh == 0 || n.socMinBps > n.socMaxBps
+            n.horizonSlots == 0 || n.horizonSlots > MAX_HORIZON || n.capacityWh == 0 || _maxOf(n.socMinProfileBps) > n.socMaxBps
                 || n.socMaxBps > BPS || n.etaChargeBps == 0 || n.etaChargeBps > BPS || n.etaDischargeBps == 0
                 || n.etaDischargeBps > BPS || n.pvCreditBps > BPS
         ) return ConfigChange.INVALID;
 
         Config memory o = _configs[account][policyId];
         if (o.horizonSlots == 0) return ConfigChange.TIGHTEN;
-        bool wider = n.horizonSlots != o.horizonSlots || n.capacityWh > o.capacityWh || n.socMinBps < o.socMinBps
+        bool wider = n.horizonSlots != o.horizonSlots || n.capacityWh > o.capacityWh
+            || _lowerSomewhere(n.socMinProfileBps, o.socMinProfileBps)
             || n.socMaxBps > o.socMaxBps || n.chargePowerW > o.chargePowerW || n.dischargePowerW > o.dischargePowerW
             || n.etaChargeBps > o.etaChargeBps || n.etaDischargeBps > o.etaDischargeBps
             || n.pvCreditBps > o.pvCreditBps || n.reserveLoadWh < o.reserveLoadWh;
@@ -242,6 +247,19 @@ contract DeliverabilityPolicy is PolicyBase {
     // Internals
     // ------------------------------------------------------------------
 
+    function _maxOf(uint16[24] memory profile) private pure returns (uint16 m) {
+        for (uint256 i = 0; i < 24; ++i) {
+            if (profile[i] > m) m = profile[i];
+        }
+    }
+
+    function _lowerSomewhere(uint16[24] memory next, uint16[24] memory current) private pure returns (bool) {
+        for (uint256 i = 0; i < 24; ++i) {
+            if (next[i] < current[i]) return true;
+        }
+        return false;
+    }
+
     /// @dev What the PLACE legs add to, and the CANCEL legs take from, each
     ///      slot of the horizon. Not inside when a placement falls outside it;
     ///      a cancellation outside it changes nothing here.
@@ -278,9 +296,12 @@ contract DeliverabilityPolicy is PolicyBase {
     }
 
     /// @dev The configuration in Wh per slot. The floor rounds up, the
-    ///      ceiling and the power limits down.
+    ///      ceiling and the power limits down. The floor is per UTC hour; slot i
+    ///      of the horizon starts at firstStart + i x slotSeconds.
     struct Limits {
-        int256 minWh;
+        int256[24] minWh;
+        uint256 firstStart;
+        uint256 slotSeconds;
         int256 maxWh;
         int256 dischargeWh;
         int256 chargeWh;
@@ -291,7 +312,11 @@ contract DeliverabilityPolicy is PolicyBase {
     }
 
     function _limits(Config memory c, HorizonLib.Horizon memory h) private pure returns (Limits memory l) {
-        l.minWh = int256((uint256(c.capacityWh) * c.socMinBps + BPS - 1) / BPS);
+        for (uint256 hour = 0; hour < 24; ++hour) {
+            l.minWh[hour] = int256((uint256(c.capacityWh) * c.socMinProfileBps[hour] + BPS - 1) / BPS);
+        }
+        l.firstStart = h.firstStart;
+        l.slotSeconds = h.slotSeconds;
         l.maxWh = int256((uint256(c.capacityWh) * c.socMaxBps) / BPS);
         l.dischargeWh = int256((uint256(c.dischargePowerW) * h.slotSeconds) / 3600);
         l.chargeWh = int256((uint256(c.chargePowerW) * h.slotSeconds) / 3600);
@@ -325,39 +350,60 @@ contract DeliverabilityPolicy is PolicyBase {
                 if (sold > l.dischargeWh + pvCredit) a.dischargeExcessWh += uint256(sold - l.dischargeWh - pvCredit);
                 if (charge > l.chargeWh) a.chargeExcessWh += uint256(charge - l.chargeWh);
 
-                a.floorShortfallWh +=
-                    _floorStep(l, level, pvCredit + int256(uint256(p.clearedBuyWh)) - sold - l.reserveWh);
-                a.ceilingExcessWh += _ceilingStep(l, level, charge);
+                _levelSteps(l, level, a, pvCredit + int256(uint256(p.clearedBuyWh)) - sold - l.reserveWh, charge, i);
             }
         }
     }
 
+    /// @dev Both levels through slot i of the horizon, against the floor of
+    ///      the UTC hour the slot starts in.
+    function _levelSteps(
+        Limits memory l,
+        int256[2] memory level,
+        Assessment memory a,
+        int256 floorFlow,
+        int256 charge,
+        uint256 i
+    ) private pure {
+        int256 minWh = l.minWh[((l.firstStart + i * l.slotSeconds) / 3600) % 24];
+        a.floorShortfallWh += _floorStep(l, level, floorFlow, minWh);
+        a.ceilingExcessWh += _ceilingStep(l, level, charge, minWh);
+    }
+
     /// @dev Floor: certain inflows only, gains rounded down and losses up.
-    ///      What falls short of the minimum is counted, and the battery stops
-    ///      there; what rises above the maximum is spilled.
-    function _floorStep(Limits memory l, int256[2] memory level, int256 flow) private pure returns (uint256 short) {
+    ///      What falls short of the slot's minimum is counted, and the battery
+    ///      stops there; what rises above the maximum is spilled.
+    function _floorStep(Limits memory l, int256[2] memory level, int256 flow, int256 minWh)
+        private
+        pure
+        returns (uint256 short)
+    {
         if (flow >= 0) {
             level[0] += (flow * l.etaCharge) / int256(BPS);
             if (level[0] > l.maxWh) level[0] = l.maxWh;
         } else {
             level[0] -= (-flow * int256(BPS) + l.etaDischarge - 1) / l.etaDischarge;
         }
-        if (level[0] < l.minWh) {
-            short = uint256(l.minWh - level[0]);
-            level[0] = l.minWh;
+        if (level[0] < minWh) {
+            short = uint256(minWh - level[0]);
+            level[0] = minWh;
         }
     }
 
     /// @dev Ceiling: every placed buy, gains rounded up and losses down. What
     ///      rises above the maximum is counted, and the battery stops there; it
-    ///      never goes below the minimum.
-    function _ceilingStep(Limits memory l, int256[2] memory level, int256 flow) private pure returns (uint256 excess) {
+    ///      never goes below the slot's minimum.
+    function _ceilingStep(Limits memory l, int256[2] memory level, int256 flow, int256 minWh)
+        private
+        pure
+        returns (uint256 excess)
+    {
         if (flow >= 0) {
             level[1] += (flow * l.etaCharge + int256(BPS) - 1) / int256(BPS);
         } else {
             level[1] -= (-flow * int256(BPS)) / l.etaDischarge;
         }
-        if (level[1] < l.minWh) level[1] = l.minWh;
+        if (level[1] < minWh) level[1] = minWh;
         if (level[1] > l.maxWh) {
             excess = uint256(level[1] - l.maxWh);
             level[1] = l.maxWh;

@@ -3015,6 +3015,177 @@ Foundry passed 419 again with the stronger test.
 
 ---
 
+## v0.2 Step 1. C1–C5, four oracle kinds, signer distinctness
+
+Spec: `docs/spec/policy-spec-v0.2-gap-policies.md`, Section 11.6 step 1. Branch
+`v0.2/1-oracles-aggregation`, from `1259622`.
+
+### v0.2-1.1 — Dan's answers before the step (21 October)
+
+Three points where the spec was silent or the repo contradicted it.
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | Signer distinctness names "registered agent addresses", but since D1 the gate has no agent registry: the agent is a Smart Session key | **The owner declares agent keys** in the OracleVerifier (at most 8). The check holds against the declaration, not against who holds the session |
+| 2 | C4: the ledger keys positions by the market's slot number. D15 covers a different slot length, not a different origin | **Refuse both.** A market off the account's grid, in length or origin, cannot be registered |
+| 3 | Meter readings: "reordered" is refused for every kind, so a late reading could never arrive, and S9 (D16) would block sales for good | **Per-slot rules.** Any order once the slot has ended; refused if not yet over, outside the ring, or conflicting |
+
+### v0.2-1.2 — C4: one slot grid per account, kept in the ledger
+
+**What the audit found.** The ledger already sums positions across markets:
+`_positions[account][slot]` has no market key. S3 and S5 therefore read the
+account's whole position. The sum is only sound if slot n means the same
+delivery interval on every market. `MockEnergyMarket` has a `genesis`, so two
+markets with equal slot lengths could put different times under one number.
+
+**Built.**
+
+- `PositionLedger.fixGrid(account, origin, slotSeconds)`, writer only. The first
+  call fixes the account's grid; a different one later reverts
+  (`PositionLedger_OffGrid`). A zero length is refused.
+- `DecoderRegistry.setDecoder` reads `slotStart(target, 0)` and
+  `slotStart(target, 1)` through the decoder and has the ledger fix or check the
+  grid. A decoder whose slots do not advance is refused
+  (`DecoderRegistry_NoSlotGrid`). No interface change. The check assumes a
+  linear grid; the decoder is trusted code.
+- **Why the ledger and not the gate.** Positions outlive a reinstall of the gate
+  (log 1.20), so the grid they are numbered on must too. It never changes.
+- **Consequence.** The account must authorise the gate as a ledger writer before
+  it registers a market. The deploy script and every fixture already did, except
+  one KeyModel test's stranger account, now fixed.
+
+**Tests.** `test/gate/MultiMarket.t.sol`: two markets on one grid. S5 and S3
+each pass on either venue alone, and reject the sum. Markets with another
+length, another origin, or an origin shifted by whole slots are refused. The
+grid survives a reinstall.
+
+### v0.2-1.3 — C1, C2: A1's rated-power term and minimum order
+
+- `StaticOrderPolicy.Config` gains `minQtyWh` and `ratedPowerW`, at the end.
+- A1 now checks `qtyWh ≤ min(maxQtyWh, ratedPowerW × slotSeconds / 3600)`. The
+  rated term is rounded down, the stricter side. The slot length comes from the
+  decoder (`slotStart(slot + 1) − slotStart(slot)`).
+- `qtyWh ≥ minQtyWh` reports its own bit, `A1_MIN_QUANTITY = 32`.
+- **Direction.** A lower rated power or a higher minimum is tighter. INVALID: a
+  zero rated power, or a minimum above the maximum.
+- **Demo.** `perAction.ratedPowerW = 10000` (a 10 kW connection: 5,000 Wh a
+  half-hour, the value that was folded into `maxQtyWh` by hand) and
+  `minQtyWh = 50`. The demo's smallest order is 200 Wh.
+
+### v0.2-1.4 — C3: S3's floor by hour of day
+
+- `socMinBps` becomes `uint16[24] socMinProfileBps`, indexed by the UTC hour a
+  slot starts in, the rule A4 uses.
+- Each slot of the projection is held to its own hour's floor, in the floor and
+  in the ceiling projection (where the floor is the lower clamp).
+- INVALID if any hour's floor exceeds the ceiling. A floor lower in any hour is a
+  widening.
+- A constant profile is v0.1's S3: every earlier S3 test passes with one.
+- `_project` hit "stack too deep"; the two per-slot steps moved into a helper.
+  The cost per slot rises slightly (gas report below).
+
+### v0.2-1.5 — C5: the market charges no fee
+
+- `Prosumer` takes no fee on a trade. A bid locks its value at the limit price
+  and pays the seller at the trade price; the rest is released when the bid is
+  fully matched or expires.
+- The deviation penalty in `Prosumer.settle` is not order-time spend: the sensor
+  triggers it after delivery. S9 addresses its cause, the shortfall.
+- So S1 is unchanged; its NatSpec says so.
+- **Test.** `GatedMarket.t.sol`: a bid of 2,000 Wh at 0.25 fills at 0.22. S1
+  counted 500,000; Alice paid 440,000, the trade's value, and nothing locked
+  remains.
+
+### v0.2-1.6 — The four new oracle kinds
+
+All in `OracleVerifier`, same domain (`PolicyOracle`, version 1).
+
+| Kind | Stored | Freshness | Refused |
+|---|---|---|---|
+| TARIFF | Latest schedule, retail and feed-in per slot, ≤ 96 | maxAge (owner, ≤ 7 days) | the shared rules; series of unequal lengths, empty, or > 96 |
+| ENVELOPE | Latest schedule, export and import limits per slot, ≤ 96 | maxAge | as the tariff |
+| METER | Ring of 128 slots, one reading each, tagged by slot start | n/a | not over yet, older than the ring, off the slot grid, conflicting |
+| GRID_STATE | Latest per signer | `issuedAt ≤ now ≤ validUntil` | future, expired, `validUntil < issuedAt`, reordered, conflicting |
+
+- **Meter.** Registered with `setMeter(signer, slotSeconds)`, since a reading
+  names only its slot start. Slot starts must be multiples of the slot length
+  (true for every market here; S9 will check it against the grid). A change of
+  signer or length bumps a generation, so the old ring reads empty. The same
+  reading again is a no-op.
+- **Grid state** names no account. It is kept per signer, and an account reads
+  the state of the operator it registered (`setDevice(GRID_STATE, signer, 0)`;
+  no maximum age). A state signed by anyone else is inert. Inside `submit`, the
+  gate refuses it as a reading for another account; relays post it directly.
+- **Views.** `tariffAt`, `envelopeAt` (value, value, usable), `meterAt`
+  (import, export, present), `gridStateOf` (state, fresh).
+- **Size.** OracleVerifier 15,609 bytes (was 7,293); PolicyGate 17,403. Both under
+  EIP-170.
+
+### v0.2-1.7 — Signer distinctness
+
+- A METER or ENVELOPE signer may be neither the BMS nor the PV signer. The
+  reverse is checked too: without it, registering the meter first would get
+  around the rule.
+- `setAgentKey(key, declared)`: no signer of any kind may be a declared key, and
+  no key may be declared that is a registered signer.
+- Removing a signer is always allowed. Withdrawing a declaration is immediate:
+  owner path, no timelock.
+- TARIFF and GRID_STATE may share a signer with the battery's devices; the spec
+  names METER and ENVELOPE only.
+- The agent cannot reach any of it: the verifier is a forbidden target
+  (`GateReadings.t.sol` tries `setAgentKey` and `setMeter` through `submit`).
+
+### v0.2-1.8 — The verifier recomputes the ledger
+
+The verifier is JavaScript (log 3.7), not Python as the repo's CLAUDE.md says.
+It now also replays the ledger.
+
+- `offchain/verifier/ledger.js` rebuilds every order from `OrderOpened`,
+  `FillBooked` and `OrderClosed`, and sums a slot's four totals afresh over all
+  orders on all markets. The contract keeps running sums instead.
+- `npm run verify:ledger`: two markets, two accounts, random placements, fills,
+  cancellations, expiries and orders closed elsewhere. The chain's position is
+  read after every write and compared with the replay up to that block. Four
+  tampered logs must be rejected.
+- A1, S3 and the oracle rules are not replayed; tests and mutants cover them.
+
+### v0.2-1.9 — Mutation runs: the new mutants, not every catalogue again
+
+**What ran.**
+- `oracle2` in full: 34 mutants, 34 caught.
+- In `policies` and `physical`, only the mutants this step added or whose pattern
+  moved: `--only "A1 "` (11), `"longer horizon"` (1), `"floor"` (7) and
+  `"shortfall"` (2). One survivor at first: **"S3 profile floor rounded down"**.
+  Every test floor was a whole number of Wh. Now caught by
+  `test_C3_aFractionalFloorRoundsUp` (10.01 % of 5 kWh is 501 Wh).
+- In all, 55 of 55 caught. `npm run mutate -- --check`: every pattern found once.
+
+**Why not every catalogue.** Dan, 21 October: a full rerun of `policies` and
+`physical` takes about 100 minutes (a recompile and the acceptance suites per
+mutant). Their v0.1 mutants were all caught at `1259622`, and this step only
+added tests around them. The full run before it was stopped had caught 31 of
+`policies`' 53, with no survivor. Full catalogues run again at v0.2 step 8.
+`gate`, `ledger` and `accounts` were not rerun; `oracle2` covers the registry
+and ledger code this step changed.
+
+### v0.2-1.10 — Checked, 21 October
+
+- `npm test`: **469 passing** (was 411).
+- Foundry in Docker, the four real accounts included: **477 passed**.
+- `npm run test:offchain`: **33 passing** (was 29).
+- `npm run verify:ledger`: 1,280 totals compared, no disagreement; 4 of 4
+  tamperings caught.
+- `npm run verify:window`: 42 windows, 6,875 figures, no disagreement.
+- Mutation: 55 of 55 (v0.2-1.9).
+- Gas (`docs/reports/gas-v0.2-step1-2026-10-21.md`):
+  - S3 is now about 49,000 fixed plus 4,630 per slot (was 30,500 plus 4,050);
+  - A1 adds about 4,000 a leg;
+  - the day-ahead batch at k = 48 under every policy costs 10,782,758, +1.3 %,
+    under the EIP-7825 cap.
+- Sizes: OracleVerifier 15,609 bytes, PolicyGate 17,403; both under EIP-170.
+
+---
+
 ## Open decisions
 
 None left. Dan answered every item on 16 October (log 4.9); the table keeps the questions and records the answers.

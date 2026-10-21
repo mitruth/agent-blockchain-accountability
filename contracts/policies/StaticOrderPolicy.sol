@@ -11,8 +11,10 @@ import {
 /// @notice The per-action bounds (spec 6.1): each order on its own, whatever
 ///         came before it.
 ///
-///   A1  quantity      qtyWh <= maxQtyWh. The owner sets maxQtyWh to
-///                     min(qMax, P_rated x slot length)
+///   A1  quantity      qtyWh <= min(maxQtyWh, ratedPowerW x slot length),
+///                     the second term in Wh rounded down (spec v0.2, C1); and
+///                     qtyWh >= minQtyWh, so dust orders cannot fill the
+///                     ledger's open-order bound (C2)
 ///   A2  value         value <= maxValue, at the limit price, rounded up (D12)
 ///   A3  price         SELL: price >= sellFloor; BUY: price <= buyCeiling
 ///   A4  time of day   the slot does not start in a blocked UTC hour for that
@@ -37,6 +39,7 @@ contract StaticOrderPolicy is PolicyBase {
     uint256 public constant A3_PRICE = 4;
     uint256 public constant A4_TIME_OF_DAY = 8;
     uint256 public constant A6_HORIZON = 16;
+    uint256 public constant A1_MIN_QUANTITY = 32;
 
     /// @param maxQtyWh         A1, Wh per order.
     /// @param maxValue         A2, token units per order.
@@ -46,6 +49,9 @@ contract StaticOrderPolicy is PolicyBase {
     ///                         hour h (0 to 23).
     /// @param sellBlockedHours A4, the same for SELL.
     /// @param horizonSeconds   A6, how far ahead a slot may start.
+    /// @param minQtyWh         A1, the smallest order, Wh.
+    /// @param ratedPowerW      A1, P_rated: the most the house can deliver or
+    ///                         take, W. Never zero.
     struct Config {
         uint64 maxQtyWh;
         uint64 maxValue;
@@ -54,9 +60,11 @@ contract StaticOrderPolicy is PolicyBase {
         uint24 buyBlockedHours;
         uint24 sellBlockedHours;
         uint32 horizonSeconds;
+        uint64 minQtyWh;
+        uint32 ratedPowerW;
     }
 
-    uint256 private constant CONFIG_LENGTH = 7 * 32;
+    uint256 private constant CONFIG_LENGTH = 9 * 32;
 
     mapping(address account => mapping(bytes32 policyId => Config)) private _configs;
     mapping(address account => mapping(bytes32 policyId => bool)) public isConfigured;
@@ -71,9 +79,10 @@ contract StaticOrderPolicy is PolicyBase {
     // Configuration
     // ------------------------------------------------------------------
 
-    /// @notice Tighter is: a lower maxQtyWh, maxValue or buyCeiling; a higher
-    ///         sellFloor; more blocked hours; a shorter horizon. A change that
-    ///         loosens any of them is a WIDEN.
+    /// @notice Tighter is: a lower maxQtyWh, maxValue, buyCeiling or
+    ///         ratedPowerW; a higher sellFloor or minQtyWh; more blocked hours;
+    ///         a shorter horizon. A change that loosens any of them is a WIDEN.
+    ///         INVALID: a zero ratedPowerW, or minQtyWh above maxQtyWh.
     function classifyConfig(address account, bytes32 policyId, bytes calldata config)
         external
         view
@@ -82,6 +91,7 @@ contract StaticOrderPolicy is PolicyBase {
     {
         if (config.length != CONFIG_LENGTH) return ConfigChange.INVALID;
         Config memory next = abi.decode(config, (Config));
+        if (next.ratedPowerW == 0 || next.minQtyWh > next.maxQtyWh) return ConfigChange.INVALID;
         if (!isConfigured[account][policyId]) return ConfigChange.TIGHTEN;
 
         Config memory current = _configs[account][policyId];
@@ -89,7 +99,8 @@ contract StaticOrderPolicy is PolicyBase {
             || next.sellFloor < current.sellFloor || next.buyCeiling > current.buyCeiling
             || (current.buyBlockedHours & ~next.buyBlockedHours) != 0
             || (current.sellBlockedHours & ~next.sellBlockedHours) != 0
-            || next.horizonSeconds > current.horizonSeconds;
+            || next.horizonSeconds > current.horizonSeconds || next.minQtyWh < current.minQtyWh
+            || next.ratedPowerW > current.ratedPowerW;
         return wider ? ConfigChange.WIDEN : ConfigChange.TIGHTEN;
     }
 
@@ -133,11 +144,15 @@ contract StaticOrderPolicy is PolicyBase {
         view
         returns (uint256 broken)
     {
-        if (leg.qtyWh > c.maxQtyWh) broken |= A1_QUANTITY;
+        uint64 start = IOrderDecoder(ctx.decoder).slotStart(ctx.market, leg.slot);
+        uint64 slotSeconds = IOrderDecoder(ctx.decoder).slotStart(ctx.market, leg.slot + 1) - start;
+        uint256 ratedWh = uint256(c.ratedPowerW) * slotSeconds / 3600;
+
+        if (leg.qtyWh > c.maxQtyWh || leg.qtyWh > ratedWh) broken |= A1_QUANTITY;
+        if (leg.qtyWh < c.minQtyWh) broken |= A1_MIN_QUANTITY;
         if (leg.value > c.maxValue) broken |= A2_VALUE;
         if (leg.side == Side.SELL ? leg.price < c.sellFloor : leg.price > c.buyCeiling) broken |= A3_PRICE;
 
-        uint64 start = IOrderDecoder(ctx.decoder).slotStart(ctx.market, leg.slot);
         uint256 hour = (start / 3600) % 24;
         uint24 blocked = leg.side == Side.SELL ? c.sellBlockedHours : c.buyBlockedHours;
         if ((uint256(blocked) >> hour) & 1 == 1) broken |= A4_TIME_OF_DAY;

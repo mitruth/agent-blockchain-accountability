@@ -38,7 +38,7 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
         return DeliverabilityPolicy.Config({
             horizonSlots: K,
             capacityWh: 5_000,
-            socMinBps: 1_000,
+            socMinProfileBps: _flat(1_000),
             socMaxBps: 10_000,
             chargePowerW: 3_000,
             dischargePowerW: 3_000,
@@ -47,6 +47,13 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
             pvCreditBps: 10_000,
             reserveLoadWh: 0
         });
+    }
+
+    /// @dev One floor for every hour of the day: S3 as v0.1 built it.
+    function _flat(uint16 bps) internal pure returns (uint16[24] memory profile) {
+        for (uint256 i = 0; i < 24; ++i) {
+            profile[i] = bps;
+        }
     }
 
     // --- readings -----------------------------------------------------------
@@ -387,7 +394,7 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
         bad[0].horizonSlots = 0;
         bad[1].horizonSlots = 97;
         bad[2].capacityWh = 0;
-        bad[3].socMinBps = 6_000;
+        bad[3].socMinProfileBps[5] = 6_000; // one hour above the ceiling is enough
         bad[3].socMaxBps = 5_000;
         bad[4].etaDischargeBps = 0;
         bad[5].pvCreditBps = 10_001;
@@ -404,7 +411,7 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
     function test_whatLoosensWidensAndWhatTightensTightens() public {
         DeliverabilityPolicy.Config memory base = _config();
         base.capacityWh = 4_000;
-        base.socMinBps = 2_000;
+        base.socMinProfileBps = _flat(2_000);
         base.socMaxBps = 9_000;
         base.chargePowerW = 2_000;
         base.dischargePowerW = 2_000;
@@ -421,7 +428,7 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
         looser[0].horizonSlots = K - 1;
         looser[1].horizonSlots = K + 1;
         looser[2].capacityWh = 4_001;
-        looser[3].socMinBps = 1_999;
+        looser[3].socMinProfileBps[7] = 1_999; // lower in one hour only
         looser[4].socMaxBps = 9_001;
         looser[5].chargePowerW = 2_001;
         looser[6].dischargePowerW = 2_001;
@@ -437,7 +444,7 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
 
         DeliverabilityPolicy.Config memory tighter = _copy(base);
         tighter.capacityWh = 3_999;
-        tighter.socMinBps = 2_001;
+        tighter.socMinProfileBps = _flat(2_001);
         tighter.socMaxBps = 8_999;
         tighter.chargePowerW = 1_999;
         tighter.dischargePowerW = 1_999;
@@ -452,6 +459,66 @@ contract DeliverabilityPolicyTest is PolicyFixture, OracleFixture {
     /// @dev A struct assigned in memory is the same struct: copy it.
     function _copy(DeliverabilityPolicy.Config memory c) internal pure returns (DeliverabilityPolicy.Config memory) {
         return abi.decode(abi.encode(c), (DeliverabilityPolicy.Config));
+    }
+
+    // ------------------------------------------------------------------
+    // C3: the floor by hour of day
+    // ------------------------------------------------------------------
+
+    /// @dev The floor rounds up (D12). 1,425 Wh in slot 4 and 950 Wh in slot
+    ///      5 draw exactly 1,500 and 1,000 Wh at 95 %, leaving exactly 500 Wh
+    ///      of 3,000. A 10 % floor is 500 Wh: both pass. A 10.01 % floor is
+    ///      500.5 Wh, so 501: the second sale leaves the battery 1 Wh short.
+    function test_C3_aFractionalFloorRoundsUp() public {
+        _submitWith(_placeCall(Side.SELL, 4, 1_425, PRICE), _battery(3_000));
+        _submitWith(_placeCall(Side.SELL, 5, 950, PRICE), new SignedReading[](0));
+        assertEq(market.orderCount(), 2, "a floor of exactly 500 Wh is met");
+
+        _cancel(bytes32(uint256(2)));
+        DeliverabilityPolicy.Config memory c = _config();
+        c.socMinProfileBps = _flat(1_001);
+        _asAccount(abi.encodeCall(gate.setConfig, (s3, S3, abi.encode(c))));
+        vm.recordLogs();
+        _submitWith(_placeCall(Side.SELL, 5, 950, PRICE), new SignedReading[](0));
+        assertEq(market.orderCount(), 2, "refused");
+        assertEq(_lastResult().valueAfter, 1, "1 Wh short of 501");
+    }
+
+    /// @dev 1,400 Wh sold in slot 4 (11:00) leaves 1,526 Wh of 3,000. With
+    ///      the flat 10 % floor that is fine (see the first test). With a 50 %
+    ///      reserve from noon on, the battery would be 974 Wh short at 12:00:
+    ///      the sale is rejected, though nothing is wrong before noon.
+    function test_C3_aLaterReserveRejectsASaleAFlatFloorAllows() public {
+        DeliverabilityPolicy.Config memory c = _config();
+        for (uint256 h = 12; h < 24; ++h) {
+            c.socMinProfileBps[h] = 5_000;
+        }
+        _asAccount(abi.encodeCall(gate.setConfig, (s3, S3, abi.encode(c))));
+
+        vm.recordLogs();
+        _submitWith(_placeCall(Side.SELL, 4, 1_400, PRICE), _battery(3_000));
+        assertEq(market.orderCount(), 0, "rejected");
+        CheckResult memory r = _lastResult();
+        assertEq(r.valueBefore, 0);
+        assertEq(r.valueAfter, 974);
+    }
+
+    /// @dev The floor of a slot is the one of the hour it starts in. 50 % at
+    ///      10:00 and 10 % at 11:00: the battery is still full at 10:00 and
+    ///      the sale in slot 4 (11:00) passes. Raise 11:00 to 50 % as well and
+    ///      that sale leaves the battery 974 Wh short at 11:00, so a further
+    ///      100 Wh in slot 5 is refused.
+    function test_C3_aSlotTakesTheFloorOfTheHourItStartsIn() public {
+        DeliverabilityPolicy.Config memory c = _config();
+        c.socMinProfileBps[10] = 5_000;
+        _asAccount(abi.encodeCall(gate.setConfig, (s3, S3, abi.encode(c))));
+        _submitWith(_placeCall(Side.SELL, 4, 1_400, PRICE), _battery(3_000));
+        assertEq(market.orderCount(), 1, "10:00 at 50 %: passes");
+
+        c.socMinProfileBps[11] = 5_000;
+        _asAccount(abi.encodeCall(gate.setConfig, (s3, S3, abi.encode(c))));
+        _submitWith(_placeCall(Side.SELL, 5, 100, PRICE), new SignedReading[](0));
+        assertEq(market.orderCount(), 1, "11:00 at 50 %: the battery is short already, and more is refused");
     }
 
     function test_lessPVCreditOrMoreReserveTightens() public view {

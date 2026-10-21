@@ -302,6 +302,7 @@ contract Step4AcceptanceTest is MarketFixture {
         c.sellFloor = 0;
         c.buyCeiling = 1_000_000;
         c.horizonSeconds = uint32(3 * DAY);
+        c.ratedPowerW = type(uint32).max;
         _add(statics, keccak256("A"), abi.encode(c));
     }
 

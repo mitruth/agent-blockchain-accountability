@@ -262,6 +262,12 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
         return super._isForbiddenTarget(account, target) || target == address(ledger) || target == address(oracle);
     }
 
+    /// @dev The grid lives in the ledger, beside the positions numbered on it.
+    ///      The account must have authorised this gate as a writer there.
+    function _fixGrid(address account, uint64 origin, uint32 slotSeconds) internal override {
+        ledger.fixGrid(account, origin, slotSeconds);
+    }
+
     /// @dev The approved decoder for the call, and the legs it reads.
     function _decode(address account, address target, bytes calldata callData)
         private

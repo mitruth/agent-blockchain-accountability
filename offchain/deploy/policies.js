@@ -34,6 +34,8 @@ const STATIC_CONFIG = {
     { name: "buyBlockedHours", type: "uint24" },
     { name: "sellBlockedHours", type: "uint24" },
     { name: "horizonSeconds", type: "uint32" },
+    { name: "minQtyWh", type: "uint64" },
+    { name: "ratedPowerW", type: "uint32" },
   ],
 };
 
@@ -60,7 +62,7 @@ const S3_CONFIG = {
   components: [
     { name: "horizonSlots", type: "uint16" },
     { name: "capacityWh", type: "uint64" },
-    { name: "socMinBps", type: "uint16" },
+    { name: "socMinProfileBps", type: "uint16[24]" },
     { name: "socMaxBps", type: "uint16" },
     { name: "chargePowerW", type: "uint32" },
     { name: "dischargePowerW", type: "uint32" },
@@ -118,6 +120,8 @@ export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
       buyBlockedHours: 0,
       sellBlockedHours: 0,
       horizonSeconds: a.horizonHours * 3600,
+      minQtyWh: BigInt(a.minQtyWh),
+      ratedPowerW: a.ratedPowerW,
     }]),
   });
 
@@ -170,7 +174,8 @@ export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
       config: encodeAbiParameters([S3_CONFIG], [{
         horizonSlots: ph.horizonSlots,
         capacityWh: BigInt(battery.capacityWh),
-        socMinBps: battery.socMinBps,
+        // One floor all day: the HEMS battery has a constant minimum (C3).
+        socMinProfileBps: Array(24).fill(battery.socMinBps),
         socMaxBps: battery.socMaxBps,
         chargePowerW: battery.powerW,
         dischargePowerW: battery.powerW,

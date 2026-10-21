@@ -12,6 +12,8 @@ import {MarketSession} from "../../contracts/market/MarketSession.sol";
 import {MarketTypes} from "../../contracts/market/MarketTypes.sol";
 import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
+import {WindowPolicy} from "../../contracts/policies/WindowPolicy.sol";
+import {WindowLib} from "../../contracts/policies/WindowLib.sol";
 
 /// The whole system: an agent trades for Alice on the ported P2P market, and
 /// can do so only through PolicyGate.
@@ -266,6 +268,47 @@ contract GatedMarketTest is MarketFixture {
         assertEq(p.clearedBuyWh, 1500);
         // The ledger and the market agree on what Alice bought.
         assertEq(aliceP.commitmentOf(firstSlot).boughtWh, 1500);
+    }
+
+    /// C5 (spec v0.2): the ported market charges no fee. A bid that fills
+    /// takes from Alice's payment balance the trade's value and nothing more,
+    /// and S1 has already counted at least that: the bid's value at its limit
+    /// price, gross. The deviation penalty at settlement is not order-time
+    /// spend: the sensor triggers it after delivery (S9 addresses its cause).
+    function test_C5_theMarketChargesNoFeeBeyondWhatS1Counts() public {
+        WindowPolicy s1 = new WindowPolicy(address(gate));
+        WindowLib.Config memory w;
+        w.kind = WindowLib.Kind.SLIDING;
+        w.step = 3600;
+        w.buckets = 24;
+        w.cap = 10_000_000;
+        vm.prank(aliceOwner);
+        aliceAccount.execute(
+            address(gate),
+            0,
+            abi.encodeCall(
+                gate.addPolicy,
+                (
+                    s1,
+                    keccak256("S1"),
+                    abi.encode(WindowPolicy.Config({quantity: WindowPolicy.Quantity.BUY_VALUE, soft: w.cap, window: w}))
+                )
+            )
+        );
+
+        uint256 before = token.balanceOf(address(aliceAccount), token.PAYMENT());
+        bytes32 bidId = _agentBid(0, 2000, 250_000);
+        (uint64 charged,) = s1.usedOf(address(aliceAccount), keccak256("S1"));
+        assertEq(charged, 500_000, "S1: 2,000 Wh at the 0.25 limit");
+
+        bytes32 offerId = _offer(0, 2000, 200_000);
+        _close();
+        _trade(bidId, offerId, 2000, 220_000);
+
+        uint256 spent = before - token.balanceOf(address(aliceAccount), token.PAYMENT());
+        assertEq(spent, 440_000, "the trade's value at 0.22, and no fee");
+        assertLe(spent, charged);
+        assertEq(token.lockedBalanceOf(address(aliceAccount)), 0, "the over-reserve came back");
     }
 
     function test_aFullyMatchedOrderClosesAsFilled() public {

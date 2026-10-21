@@ -13,7 +13,9 @@ import {
 ///
 ///   BUY_VALUE  S1, the owner's budget: the value of BUY orders at their
 ///              limit price, gross. A sale never refills it, or
-///              sell-and-rebuy would (audit finding F3)
+///              sell-and-rebuy would (audit finding F3). Fees would count
+///              too (spec v0.2, C5), but the ported market charges none;
+///              its settlement penalty follows delivery, not an order
 ///   SELL_WH    S2, the export cap: Wh offered
 ///   BUY_WH     S2, the import cap: Wh bid
 ///
