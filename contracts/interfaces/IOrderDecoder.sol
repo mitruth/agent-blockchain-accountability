@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
-import {Order, FillState} from "../gate/GateTypes.sol";
+import {Order, FillState, CallKind} from "../gate/GateTypes.sol";
 
 /// @title IOrderDecoder
 /// @notice The one adapter between this system and an approved market. It
@@ -17,7 +17,24 @@ import {Order, FillState} from "../gate/GateTypes.sol";
 /// order does not carry itself -- the remaining quantity of an order being
 /// cancelled, its fills, its gate time -- is read from the market, never taken
 /// from the agent.
+///
+/// A decoder also classifies every call it is registered for (spec v0.2
+/// section 11.2, A9): an order, a cancellation, a funds move with its
+/// recipient, or an approval with its spender. A call that can move funds is
+/// registered only if the decoder can expose who receives them.
 interface IOrderDecoder {
+    /// @notice What `selector` of `target` is. UNKNOWN and OPAQUE_FUNDS_MOVE
+    ///         calls are never registered.
+    function callKind(address target, bytes4 selector) external view returns (CallKind);
+
+    /// @notice For a FUNDS_MOVE, who receives the funds and how much; for an
+    ///         APPROVAL, the spender and the amount allowed. Called only for
+    ///         calls of those kinds.
+    function fundsMove(address target, bytes calldata callData)
+        external
+        view
+        returns (address counterparty, uint256 amount);
+
     /// @notice What the call does, as legs.
     ///
     ///   place    one PLACE leg per order placed; a batch is several. A

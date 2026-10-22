@@ -15,6 +15,28 @@ enum Side {
     SELL
 }
 
+/// @notice What a registered call is, as its decoder classifies it (spec v0.2
+///         section 11.2, A9). The gate stores the kind when the owner
+///         registers the call.
+///
+///   UNKNOWN            not a call the decoder vouches for: never registered
+///   ORDER              places or modifies orders: decoded into legs
+///   CANCEL             cancels an order: decoded into legs
+///   FUNDS_MOVE         moves funds; the decoder exposes the recipient, which
+///                      must be the account
+///   OPAQUE_FUNDS_MOVE  can move funds, but the decoder cannot expose to whom:
+///                      never registered
+///   APPROVAL           lets a spender move the account's funds; the spender
+///                      must be a market the account registered
+enum CallKind {
+    UNKNOWN,
+    ORDER,
+    CANCEL,
+    FUNDS_MOVE,
+    OPAQUE_FUNDS_MOVE,
+    APPROVAL
+}
+
 /// @notice What an agent's call means, as a decoder reads it from the calldata.
 ///         Policies see this and never the raw calldata.
 /// @param slot    Delivery slot index, as the market numbers it.

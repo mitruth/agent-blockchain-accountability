@@ -5,7 +5,8 @@ import {MarketFixture} from "./MarketFixture.sol";
 import {MiniAccount} from "../../contracts/harness/MiniAccount.sol";
 import {PolicyGate} from "../../contracts/gate/PolicyGate.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
-import {Order, OrderKind, Side, FillState} from "../../contracts/gate/GateTypes.sol";
+import {Order, OrderKind, Side, FillState, CallKind} from "../../contracts/gate/GateTypes.sol";
+import {DecoderRegistry} from "../../contracts/gate/DecoderRegistry.sol";
 import {ProsumerDecoder} from "../../contracts/market/ProsumerDecoder.sol";
 import {Prosumer} from "../../contracts/market/Prosumer.sol";
 import {MarketSession} from "../../contracts/market/MarketSession.sol";
@@ -14,6 +15,8 @@ import {SignedReading} from "../../contracts/oracle/OracleTypes.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 import {WindowPolicy} from "../../contracts/policies/WindowPolicy.sol";
 import {WindowLib} from "../../contracts/policies/WindowLib.sol";
+import {PaymentTokenDecoder} from "../../contracts/market/PaymentTokenDecoder.sol";
+import {LockableERC1155} from "../../contracts/market/LockableERC1155.sol";
 
 /// The whole system: an agent trades for Alice on the ported P2P market, and
 /// can do so only through PolicyGate.
@@ -275,6 +278,43 @@ contract GatedMarketTest is MarketFixture {
     /// and S1 has already counted at least that: the bid's value at its limit
     /// price, gross. The deviation penalty at settlement is not order-time
     /// spend: the sensor triggers it after delivery (S9 addresses its cause).
+    /// v0.2 A9 on the real market token: Alice's agent may let her own
+    /// prosumer contract, a market she registered, lock her payment tokens;
+    /// not Bob's prosumer contract, which is no market of hers.
+    function test_A9_anAllowanceOnlyForAMarketOfTheAccount() public {
+        PaymentTokenDecoder tokenDecoder = new PaymentTokenDecoder();
+        vm.prank(aliceOwner);
+        aliceAccount.execute(
+            address(gate),
+            0,
+            abi.encodeCall(gate.setDecoder, (address(token), LockableERC1155.setPaymentAllowance.selector, tokenDecoder))
+        );
+
+        _submitTo(address(token), abi.encodeCall(LockableERC1155.setPaymentAllowance, (address(bobP), 1_000_000)));
+        assertEq(token.paymentAllowance(address(aliceAccount), address(bobP)), 0, "Bob's contract: refused");
+
+        _submitTo(address(token), abi.encodeCall(LockableERC1155.setPaymentAllowance, (address(aliceP), 42)));
+        assertEq(token.paymentAllowance(address(aliceAccount), address(aliceP)), 42, "her own market: allowed");
+    }
+
+    /// v0.2 A9: the decoder vouches for the four order functions only. The
+    /// sensor's `settle`, or anything else of the prosumer contract, cannot be
+    /// approved for the agent.
+    function test_A9_onlyTheOrderFunctionsCanBeRegistered() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DecoderRegistry.DecoderRegistry_UnregistrableCall.selector,
+                address(aliceP),
+                Prosumer.settle.selector,
+                CallKind.UNKNOWN
+            )
+        );
+        vm.prank(aliceOwner);
+        aliceAccount.execute(address(gate), 0, abi.encodeCall(gate.setDecoder, (address(aliceP), Prosumer.settle.selector, decoder)));
+        assertEq(uint8(decoder.callKind(address(aliceP), Prosumer.cancelOrder.selector)), uint8(CallKind.CANCEL));
+        assertEq(uint8(decoder.callKind(address(aliceP), Prosumer.modifyOrder.selector)), uint8(CallKind.ORDER));
+    }
+
     function test_C5_theMarketChargesNoFeeBeyondWhatS1Counts() public {
         WindowPolicy s1 = new WindowPolicy(address(gate));
         WindowLib.Config memory w;

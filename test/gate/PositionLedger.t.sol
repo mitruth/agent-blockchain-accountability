@@ -4,7 +4,7 @@ pragma solidity ^0.8.23;
 import {Test} from "forge-std/Test.sol";
 import {PositionLedger} from "../../contracts/gate/PositionLedger.sol";
 import {IOrderDecoder} from "../../contracts/interfaces/IOrderDecoder.sol";
-import {Order, OrderKind, Side, FillState} from "../../contracts/gate/GateTypes.sol";
+import {Order, OrderKind, Side, FillState, CallKind} from "../../contracts/gate/GateTypes.sol";
 
 /// @notice A decoder whose reported fill the test sets directly, including
 ///         fills no honest market would report.
@@ -34,6 +34,13 @@ contract ScriptedDecoder is IOrderDecoder {
     function gateTime(address, uint32) external pure override returns (uint64) {
         return type(uint64).max;
     }
+
+    /// @dev Every call is an order here (spec v0.2 A9); none moves funds.
+    function callKind(address, bytes4) external pure override returns (CallKind) {
+        return CallKind.ORDER;
+    }
+
+    function fundsMove(address, bytes calldata) external pure override returns (address, uint256) {}
 
     function slotStart(address, uint32 slot) external pure override returns (uint64) {
         return uint64(slot) * 3600;

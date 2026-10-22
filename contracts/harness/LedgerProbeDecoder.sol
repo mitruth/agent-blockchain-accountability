@@ -2,7 +2,7 @@
 pragma solidity ^0.8.23;
 
 import {IOrderDecoder} from "../interfaces/IOrderDecoder.sol";
-import {Order, FillState} from "../gate/GateTypes.sol";
+import {Order, FillState, CallKind} from "../gate/GateTypes.sol";
 
 /// @title LedgerProbeDecoder
 /// @notice A decoder whose fills a script sets, so the off-chain verifier can
@@ -36,6 +36,13 @@ contract LedgerProbeDecoder is IOrderDecoder {
     function gateTime(address, uint32) external pure override returns (uint64) {
         return 0;
     }
+
+    /// @dev Every call is an order here (spec v0.2 A9); none moves funds.
+    function callKind(address, bytes4) external pure override returns (CallKind) {
+        return CallKind.ORDER;
+    }
+
+    function fundsMove(address, bytes calldata) external pure override returns (address, uint256) {}
 
     function slotStart(address, uint32 slot) external pure override returns (uint64) {
         return uint64(slot) * 1800;

@@ -5,7 +5,7 @@ import {IOrderDecoder} from "../../../contracts/interfaces/IOrderDecoder.sol";
 import {IPolicy} from "../../../contracts/interfaces/IPolicy.sol";
 import {PolicyGate} from "../../../contracts/gate/PolicyGate.sol";
 import {
-    Order, OrderKind, Side, ConfigChange, FillState, Verdict, CheckContext, CheckResult, Release
+    Order, OrderKind, Side, ConfigChange, FillState, Verdict, CheckContext, CheckResult, Release, CallKind
 } from "../../../contracts/gate/GateTypes.sol";
 
 /// @notice A stand-in market for the key-model tests: it records who called.
@@ -69,6 +69,13 @@ contract StubDecoder is IOrderDecoder {
     }
 
     /// @dev Hourly slots from 1970.
+    /// @dev Every call is an order here (spec v0.2 A9); none moves funds.
+    function callKind(address, bytes4) external pure override returns (CallKind) {
+        return CallKind.ORDER;
+    }
+
+    function fundsMove(address, bytes calldata) external pure override returns (address, uint256) {}
+
     function slotStart(address, uint32 slot) external pure override returns (uint64) {
         return uint64(slot) * 3600;
     }
@@ -105,6 +112,13 @@ contract LeglessDecoder is IOrderDecoder {
 
     /// @dev Hourly slots from 1970, the grid of the other stub decoders, so
     ///      that it can be registered beside them.
+    /// @dev Every call is an order here (spec v0.2 A9); none moves funds.
+    function callKind(address, bytes4) external pure override returns (CallKind) {
+        return CallKind.ORDER;
+    }
+
+    function fundsMove(address, bytes calldata) external pure override returns (address, uint256) {}
+
     function slotStart(address, uint32 slot) external pure override returns (uint64) {
         return uint64(slot) * 3600;
     }
@@ -142,6 +156,13 @@ contract NullDecoder is IOrderDecoder {
     }
 
     /// @dev Hourly slots from 1970.
+    /// @dev Every call is an order here (spec v0.2 A9); none moves funds.
+    function callKind(address, bytes4) external pure override returns (CallKind) {
+        return CallKind.ORDER;
+    }
+
+    function fundsMove(address, bytes calldata) external pure override returns (address, uint256) {}
+
     function slotStart(address, uint32 slot) external pure override returns (uint64) {
         return uint64(slot) * 3600;
     }

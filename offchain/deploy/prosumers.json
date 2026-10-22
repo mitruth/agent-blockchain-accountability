@@ -33,6 +33,15 @@
       "softCyclesPerDay": 1.5,
       "softStepWh": 2000,
       "maxStepWh": 3000
+    },
+    "breaker": {
+      "rejectsMinutes": 60,
+      "rejectsBucketMinutes": 5,
+      "maxRejects": 10,
+      "flagsHours": 24,
+      "flagsBucketHours": 1,
+      "maxFlags": 30,
+      "cooldownMinutes": 0
     }
   },
   "prosumers": [

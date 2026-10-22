@@ -3186,6 +3186,241 @@ and ledger code this step changed.
 
 ---
 
+## v0.2 Step 2. G1, the session circuit breaker; A9, the recipient lock
+
+Spec: `docs/spec/policy-spec-v0.2-gap-policies.md`, §5 G1 and §11.2 A9; build
+order 11.6 step 2. Branch `v0.2/2-breaker-recipient`, from `7b4c8d7`.
+
+### v0.2-2.1 — Dan's answers (21 and 22 October)
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | Cancel-only while suspended (D17): IPolicy has no "this only reduces" classification | **Pure cancellations**: a submission whose legs are all CANCEL, still judged by every policy. A smaller modification is refused. No interface change |
+| 2 | G1 on by default, or opt-in? | **Opt-in**, like every policy; tighten now, widen after 24 h |
+| 3 | A9's refusal: revert, or record? | **Non-reverting**: `RecipientRefused` and `Rejected`, and G1 counts it |
+| 4 | The settlement token has no `approve`: it has `setPaymentAllowance` and `setApprovalForAll` | **Both** are approvals under A9 |
+| 5 | How an honest arm's plan becomes orders (open since log 4.11) | **Day-ahead batches**: per slot, the net of planned import and export, as one BUY or SELL |
+| 6 | The honest replay under the full demo set rejects every submission (v0.2-2.7) | Run G1's acceptance **without S3 and S4**, with flows under A1's minimum merged into the next order; report both causes for step 8 |
+
+### v0.2-2.2 — G1: `SessionBreaker`, deployed by the gate
+
+- **Where.** A separate contract, which the gate deploys in its constructor and
+  alone may write. It holds G1's windows, state and timelocked configuration.
+  Only the gate's initcode grows (31,805 bytes, under EIP-3860's 49,152); no
+  fixture changed. PolicyGate's runtime is 21,147 bytes, SessionBreaker's 10,034.
+- **Whom it suspends.** The gate sees the account, never the agent (D1), so G1
+  suspends the account's `submit` path: the agent's and the owner's own
+  `submit` alike. The owner still acts directly.
+- **What it counts.** Two SLIDING `WindowLib` windows: submissions refused
+  without reverting (by a policy, or by A9), and submissions flagged by any
+  policy. After a counted submission, if either count exceeds its cap, the
+  account is suspended and `AgentSuspended(reason, rejectsUsed, flagsUsed, at)`
+  carries the inputs.
+- **Two choices where the spec is silent:**
+  - a clean submission is never judged, so it never suspends;
+  - nothing is counted while suspended, so refusals during a suspension do not
+    pile up and re-suspend the account at once after a cooldown.
+- **Reinstatement.**
+  - The owner's `reinstate` clears both windows; without that, the next
+    rejection would suspend again at once.
+  - With a cooldown set, the first submission from `suspendedAt + cooldown`
+    reinstates, and the windows are not cleared: they empty on their own.
+- **Configuration.**
+  - TIGHTEN: turning G1 on, a lower cap, a longer cooldown (0, owner only, is
+    the tightest).
+  - WIDEN: a higher cap, another window shape (structural, spec 5.6), a
+    cooldown that reinstates sooner, turning G1 off. A widening waits 24 h;
+    any later write drops it.
+  - Windows must be SLIDING with anchor, rate and initial zero, so a shape is
+    its step and buckets.
+  - Configuration events carry their author (§11.5).
+- **State per gate generation:** a reinstall starts with G1 off and nothing
+  counted. The breaker is a forbidden target.
+
+### v0.2-2.3 — A9: call kinds in the registry, the lock in the gate
+
+- **Call kinds.** `IOrderDecoder` gains `callKind(target, selector)` and
+  `fundsMove(target, callData)`. The registry keeps each call's kind with its
+  decoder:
+
+  | Kind | Registered? | At `submit` |
+  |---|---|---|
+  | ORDER, CANCEL | yes; the target joins the account's slot grid (C4) | legs, policies |
+  | FUNDS_MOVE | yes | the recipient must be the account |
+  | APPROVAL | yes | the spender must be a market of the account |
+  | UNKNOWN, OPAQUE_FUNDS_MOVE | **refused** | — |
+
+- **"A market of the account":** a target with at least one ORDER or CANCEL
+  call registered. The registry keeps the count per target; `removeDecoder` and
+  re-registration keep it right.
+- **Funds moves carry no legs,** so no policy judges them. `OrderSubmitted` is
+  still emitted, with no legs, so the verifier sees every submission. A refused
+  move is counted by G1, so a drain attempt also trips the breaker.
+- **The decoders.**
+  - `ProsumerDecoder` vouches for its four order functions only. The sensor's
+    `settle`, for one, cannot be registered.
+  - New `PaymentTokenDecoder` for `LockableERC1155`:
+    - `safeTransferFrom`, `safeBatchTransferFrom`, `unlock` and `unlockAll`
+      are funds moves to the recipient they name (`unlock` with no recipient,
+      and `unlockAll`, pay the lock's owner);
+    - `setPaymentAllowance` and `setApprovalForAll` are approvals;
+    - `lock` is **opaque**: it names an unlocker who may later pay the funds to
+      anyone, so it can never be registered;
+    - everything else (mint, burn, the roles) is UNKNOWN.
+  - The test stubs vouch for every call as an ORDER, which keeps the key-model
+    tests meaningful.
+- **Mock market:** `MockEnergyMarket.withdraw(to, amount)`, a funds move, for
+  the acceptance tests.
+
+### v0.2-2.4 — Tests
+
+- `test/gate/SessionBreaker.t.sol`, 22 tests:
+  - **Probing campaign** (spec §7): a binary search for S1's cap. Without G1 it
+    finds the cap to the Wh in 30 probes. With G1 at R_max 10, the 11th
+    rejection suspends, and the agent learns nothing more.
+  - **On-off agent:** two flagged bids, ten slots of rest. With F_max 5 it is
+    suspended in the third burst; the same bursts a day apart never are.
+  - **Cancel-only:** a cancellation passes; a placement and a smaller
+    modification are refused; S6 can still refuse a cancellation.
+  - **Reinstatement:** by the owner, which clears the windows; and after a
+    cooldown, to the second.
+  - **Configuration:** every tightening applies at once and every loosening
+    waits; the timelock; a later write drops the widening; malformed configs
+    refused; a reinstall clears the breaker.
+  - **Reach:** the agent cannot reach the breaker or its owner functions.
+  - **Gas.**
+- `test/gate/RecipientLock.t.sol`, 16 tests, the §11.2 acceptance:
+  - withdrawal to the agent and to a stranger refused, to the account made;
+  - a token transfer to the agent refused;
+  - an allowance or approval for anyone but a market refused, for a market
+    made;
+  - `lock`, `burnEnergy`, `mintPayment` and the market's `fill` cannot be
+    registered;
+  - the market count follows registration and removal;
+  - a refused move trips G1; every recipient the token decoder exposes;
+  - gas.
+- `GatedMarket.t.sol` on the ported market: Alice's agent may let her own
+  prosumer contract lock her payment, not Bob's; `settle` cannot be
+  registered.
+
+### v0.2-2.5 — The verifier recomputes G1
+
+- `offchain/verifier/breaker.js` keeps no ring of buckets. It keeps the time of
+  every counted submission and, at each one, counts afresh those in the
+  window's last n buckets. From that it derives every suspension and every
+  automatic reinstatement, and compares them, counts included, with the chain.
+- `npm run verify:breaker`:
+  - the harness `ProbeMarket`, `ProbeDecoder` and `ScriptedPolicy`
+    (`contracts/harness/`) make the gate reject, flag or execute at random;
+  - waits of seconds to hours, owner reinstatements and configuration changes
+    come in between;
+  - five tampered logs must be rejected.
+- **Found while building it:** viem simulates and estimates gas at the latest
+  block's time, not at the time set for the next block. A call whose path
+  depends on the time (a timelock, a cooldown) was judged a block early. The
+  fuzz therefore sends with a fixed gas limit.
+
+### v0.2-2.6 — Gas
+
+From `test_gas_G1` and `test_gas_A9`, on the mock market with S1; each figure
+is the second of two identical submissions.
+
+| Submission | G1 off | G1 on |
+|---|---:|---:|
+| A clean bid | 220,552 | 220,568 |
+| A flagged bid | 225,326 | 232,547 (+7,221) |
+| A rejected bid | 42,978 | 50,226 (+7,248) |
+| A bid refused while suspended | — | 27,000 |
+
+- The `admit` check that every submission now makes costs about 3,200 gas
+  against v0.1: one bid with no policy is 308,920, was 305,695.
+- A9: a withdrawal to the account costs 29,861; one refused, 24,882.
+
+### v0.2-2.7 — Honest arms: G1 against what an honest agent does
+
+`offchain/eval/honest-day-ahead.js`, 22 October. Command:
+`node offchain/eval/honest-day-ahead.js --arm <B0|B2> --report docs/reports/honest-g1-<arm>-2026-10-22.json`.
+
+**The setup.**
+- home_01, every data day of 2022 from 2 January: 363 market days per arm, on
+  an in-process chain.
+- Each day, Alice's agent places the arm's net grid flow per half-hour slot, a
+  BUY at 0.25 or a SELL at 0.10, in day-ahead batches of at most 24. Bob takes
+  the other side, so every order fills.
+- Policies: A1–A6, S1, S2 export and import, S6, S5, and G1 at the spec's
+  defaults (R_max 10 an hour, F_max 30 a day).
+
+**First, under the full demo set:** every submission of a 3-day trial was
+rejected. Two causes, both for step 8:
+- **S3's load model.** S3 counts every bought Wh beyond its constant reserve
+  load (500 Wh a slot, D4) as battery charge. The house imports up to 3,080 Wh
+  a slot for its own load, which S3 reads as charging past the battery's
+  1,500 Wh a slot. S3 needs a load forecast; S4 shares the projection.
+- **A1's minimum.** 2,253 of the arm's 17,469 trading slots in 2022 (13 %) are
+  below the demo's 50 Wh. The runner now carries such flows into the next
+  order, as an honest agent would.
+
+Dan's decision (v0.2-2.1, 6): G1's run leaves out S3 and S4.
+
+**Result.**
+
+| | B0 | B2 |
+|---|---:|---:|
+| Days | 363 | 363 |
+| Submissions | 868 | 951 |
+| Orders | 13,301 | 15,226 |
+| **Suspensions (G1)** | **0** | **0** |
+| Submissions rejected | 187 (21.5 %) | 239 (25.1 %) |
+| Submissions flagged | 240 | 330 |
+| Rejected by S5 ramp / S1 budget / S2 import / S2 export | 137 / 89 / 4 / 1 | 206 / 71 / 11 / 1 |
+| Flagged by S5 / S1 | 200 / 76 | 280 / 80 |
+| Slots merged into the next order; Wh left at day's end | 274; 27 | 2,153; 287 |
+
+**What it shows, and what it does not.**
+- G1 never suspended an honest arm, over a year, under every policy left in.
+  The acceptance holds.
+- But a day-ahead agent makes at most four submissions a day, within minutes.
+  It can never put eleven rejections in an hour, or thirty-one flags in a day,
+  whatever the policies do. So this run tests G1 weakly; a rolling intraday
+  agent would test it hard. Step 8.
+- The honest false positives are real, and they are not G1's: S5's ramp
+  (3 kWh between slots in the demo) and S1's budget (7 USD a day) are tighter
+  than this house's ordinary days, and S2's import cap (40 kWh a day) is
+  crossed in winter. They feed step 8's calibration, with S3's load model.
+
+### v0.2-2.8 — Checked
+
+**Mutation** (targeted, as in v0.2-1.9):
+- New catalogue `breaker`, 45 mutants: the caps and the cooldown boundary, what
+  is counted and when, the cancel-only test, reinstatement, every configuration
+  direction, the gate's hooks, the recipient and spender checks, the registry's
+  call kinds and market count, and both decoders' classification.
+- At first 44 caught. The survivor, **"G1 counts while suspended"**, was
+  reachable only by a cancellation a policy rejects while suspended (anything
+  else is refused before the policies). The S6 test now also asserts the
+  window does not move. Caught.
+- Patterns this step moved, re-run: `gate` (removeDecoder, market call),
+  `ledger` (ledger as target), `physical` (verifier as target), `policies` (a
+  rejection does not stop: now the second of two), and `oracle2 --only grid`
+  (13). All caught.
+- In all **64 of 64**. `npm run mutate -- --check`: every pattern found once in
+  all nine catalogues. `accounts` was re-pointed but not run (Docker
+  catalogue).
+
+**Runs, 22 October:**
+- `npm test`: **509 passing** (step 1: 469).
+- Foundry in Docker, the four real accounts included: **517 passed**.
+- `npm run test:offchain`: **41 passing**.
+- `npm run verify:breaker`: 462 submissions, 37 suspensions, 4 owner and 32
+  automatic reinstatements; 1,035 figures compared, no disagreement; 5 of 5
+  tamperings caught.
+- `npm run verify:ledger`: 1,280 totals, no disagreement.
+- `npm run verify:window`: 42 windows, 6,875 figures, no disagreement.
+- Sizes: PolicyGate 21,147 bytes runtime and 31,805 initcode; SessionBreaker
+  10,034; PaymentTokenDecoder 3,018.
+
+---
+
 ## Open decisions
 
 None left. Dan answered every item on 16 October (log 4.9); the table keeps the questions and records the answers.

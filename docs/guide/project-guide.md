@@ -1,11 +1,12 @@
 # Project guide
 
 What the project contains today, what every file does, what the tests prove,
-and how to run everything. Current as of 2026-10-21: v0.1 steps 1 to 5 are
+and how to run everything. Current as of 2026-10-22: v0.1 steps 1 to 5 are
 built, and v0.2 step 1 of 8 (`docs/spec/policy-spec-v0.2-gap-policies.md`,
 Section 11.6): A1's rated-power term and minimum order, S3's floor by hour of
 day, positions summed on one slot grid across markets, the tariff, meter,
-envelope and grid-state oracles, and distinct trust anchors.
+envelope and grid-state oracles, and distinct trust anchors. Step 2 adds the session circuit
+breaker G1 and the recipient lock A9, both in the gate.
 
 
 | For                                     | Read                                 |
@@ -51,8 +52,8 @@ v0.2 (Section 11.6 of its spec), one branch per step:
 
 | Step | Content | Status |
 | ---- | ------- | ------ |
-| 1 | C1–C5, the four new oracle kinds, signer distinctness | **Built and passing** (`v0.2/1-oracles-aggregation`) |
-| 2 | G1 session circuit breaker, A9 recipient lock | Not started |
+| 1 | C1–C5, the four new oracle kinds, signer distinctness | **Committed** `7b4c8d7` (`v0.2/1-oracles-aggregation`) |
+| 2 | G1 session circuit breaker, A9 recipient lock | **Built and passing** (`v0.2/2-breaker-recipient`) |
 | 3 | Tariff-relative price band A3T, dominated-trade budget S7 | Not started |
 | 4 | Same-slot round-trip quota S8 | Not started |
 | 5 | Delivery reconciliation S9, `poke`, calibration | Not started |
@@ -96,6 +97,14 @@ crossing is flagged and goes ahead; released volume is credited back.
   - `RampPolicy`, S5 (step 5.5): the net position may not jump by more than
   R_max from one slot to the next.
   Section 3 explains what each checks; section 6 shows four attacks blocked.
+- **The session circuit breaker G1** (v0.2 step 2, `SessionBreaker`): too many
+rejected or flagged submissions within a sliding window suspend the account's
+`submit` to cancel-only, until the owner reinstates it or a cooldown runs out.
+Opt-in; configured on the owner path, tighten now and widen after 24 hours.
+- **The recipient lock A9** (v0.2 step 2): every approved call has a kind. A
+call that moves funds must pay the account, an approval must name a market of
+the account, and a call that can move funds to someone the decoder cannot name
+(the token's `lock`) can never be approved.
 - **A position ledger:** every order the agent placed, and per delivery slot
 the account's committed and cleared volume, buy and sell, summed over every
 market (v0.2, C4). Each account has one slot grid, fixed by its first market; a
@@ -603,10 +612,11 @@ configuration.
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PolicyGate.sol`      | The executor module. `onInstall`, `onUninstall`; `submit`, the agent's one entry point; `reconcile`, open to anyone. Inherits the four parts below |
 | `GateBase.sol`        | Which accounts have the gate installed, the installation generation, the owner-path check (`onlyAccount`), the reentrancy lock                     |
-| `DecoderRegistry.sol` | `setDecoder`, `removeDecoder`, `decoderOf`, and the rule that the account and the gate are never targets                                           |
+| `DecoderRegistry.sol` | `setDecoder`, `removeDecoder`, `decoderOf`, `kindOf`, `isMarket`; the rule that the account and the gate are never targets; each call's kind (A9) and the slot-grid check (C4) |
+| `SessionBreaker.sol`  | G1: the rejected and flagged windows, suspension, reinstatement, and G1's timelocked configuration. Deployed by the gate; only the gate writes it |
 | `ConfigManager.sol`   | The policy list, proposals, and the tighten-now, widen-later rule                                                                                  |
 | `PositionLedger.sol`  | Every booked order and the per-slot positions. Written only by writers the account appointed                                                       |
-| `GateTypes.sol`       | The `Order` and `FillState` structs and the enums `OrderKind`, `Side`, `ConfigChange`                                                              |
+| `GateTypes.sol`       | The `Order` and `FillState` structs and the enums `OrderKind`, `Side`, `CallKind`, `ConfigChange`                                                  |
 
 
 
@@ -663,6 +673,8 @@ configuration.
 | File              | What it is                                                                                                                                                                                                                                                                                                                                            |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MiniAccount.sol` | The smallest account that behaves like an ERC-7579 account where the gate needs it, with sessions that stand in for Smart Sessions: a key may have the account call one function of one contract, until a time. For tests and the local system only: it stands in for a real account (Safe7579, Nexus, Kernel) and validates no signatures of its own |
+| `ProbeMarket.sol`, `ProbeDecoder.sol`, `ScriptedPolicy.sol` | For the G1 verifier: a market that takes any order, its decoder, and a policy whose verdict a script sets, so a script can make the gate reject, flag or execute at will |
+| `LedgerProbeDecoder.sol` | For the ledger verifier: a decoder whose fills a script sets |
 | `WindowProbe.sol` | `WindowLib` on its own, as the smallest possible policy: admits an amount if it fits, takes credits for earlier admissions, and emits an event for every call, so the verifier can rebuild each window from the log                                                                                                                                   |
 
 
@@ -899,6 +911,31 @@ fresh and shows enough stored energy.
 | The signer list is out of reach | 4   | The agent cannot have the gate call the verifier -- not to register a signer or a meter, nor to declare or withdraw an agent key -- and the owner cannot approve a decoder for it either. The agent's session cannot call the verifier directly                              |
 
 
+### `test/gate/SessionBreaker.t.sol`: 22 tests
+
+v0.2, G1, on the mock market under S1 (1 USD a day, flagged above 0.10).
+
+| Group | Tests | What it establishes |
+| ----- | ----- | ------------------- |
+| Probing and on-off | 5 | **The probing campaign** (spec §7): a binary search for S1's cap finds it to the Wh in 30 probes without G1, and is suspended at the 11th rejection with it, after which it learns nothing. **The on-off agent:** two flagged bids and ten slots of rest are suspended in the third burst at F_max 5; the same bursts a day apart never are. A clean submission never suspends |
+| Cancel-only | 4 | While suspended a cancellation passes; a placement and a smaller modification are refused; S6 still judges a cancellation; nothing is counted |
+| Reinstatement | 3 | The owner's reinstatement clears both windows; reinstating an active account reverts; a cooldown reinstates at its end, to the second |
+| Configuration | 7 | Unconfigured G1 never suspends. Every tightening applies at once; every loosening waits, and applies after the timelock only; a later write drops it; malformed configurations are refused; a reinstall clears the breaker |
+| Reach, gas | 3 | The agent cannot reach the breaker or its owner functions; only the gate writes it. Gas with G1 off and on |
+
+
+### `test/gate/RecipientLock.t.sol`: 16 tests
+
+v0.2, A9 (§11.2), on the mock market's `withdraw` and the market token.
+
+| Group | Tests | What it establishes |
+| ----- | ----- | ------------------- |
+| Funds moves | 6 | A withdrawal to the agent or a stranger is refused and not made; to the account it is made. The refusal names what was asked. A token transfer to the agent is refused. A refused move trips G1, and while suspended even a withdrawal to the account waits |
+| Approvals | 5 | An allowance or approval for a market of the account is made, for anyone else refused. A target stops being a market when its order calls are withdrawn; a call is counted once however often it is registered |
+| Registration | 3 | `lock` (a funds move with no decodable recipient), `burnEnergy`, `mintPayment` and the market's `fill` cannot be registered; each call keeps its kind |
+| Decoder, gas | 2 | Every recipient the token decoder exposes; gas of a withdrawal made and refused |
+
+
 ### `test/gate/MultiMarket.t.sol`: 13 tests
 
 v0.2, C4: one account on two mock markets.
@@ -982,7 +1019,7 @@ The market on its own, owners as plain addresses, phase by phase.
 
 
 
-### `test/market/GatedMarket.t.sol`: 13 tests
+### `test/market/GatedMarket.t.sol`: 15 tests
 
 The whole system: an agent trades for Alice through PolicyGate on the ported
 market; Bob is the counterparty. A day-ahead batch of 24 bids is 24 legs and 24
@@ -995,7 +1032,9 @@ token. A fuzz test, 256 runs of random trading and matching, checks after every
 step that the ledger's books balance, and at the end that the ledger and Alice's
 prosumer contract agree slot by slot on what she bought and sold. v0.2, C5: a
 filled bid takes from Alice the trade's value and nothing more, and S1 has
-counted at least that; the market charges no fee.
+counted at least that; the market charges no fee. v0.2, A9: Alice's agent may
+let her own prosumer contract lock her payment tokens, not Bob's; the sensor's
+`settle` cannot be approved for an agent.
 
 ### `test/market/ClassicSettlement.t.sol`: 6 tests
 
@@ -1327,12 +1366,12 @@ npm install
 
 ### The Hardhat suite
 
-Expect **469 passing** in about three minutes:
+Expect **509 passing** in about three minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
-  market, 8 ledger, 15 policy phases, 16 readings, 13 multi-market;
+  market, 8 ledger, 15 policy phases, 16 readings, 13 multi-market, 22 circuit breaker, 16 recipient lock;
 - the oracle verifier: 35, and 35 for the v0.2 kinds;
-- the market: 23 token, 41 market flow, 13 gated market, 6 settlement rule;
+- the market: 23 token, 41 market flow, 15 gated market, 6 settlement rule;
 - the windows and the policies: 32 `WindowLib`, 19 `StaticOrderPolicy`, 11
   `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
   `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 21 step 5 acceptance
@@ -1347,7 +1386,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **477 passed**: the 469 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 21 October, at the end of v0.2 step 1: 477 passed.
+Expect **517 passed**: the 509 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 21 October, at the end of v0.2 step 1: 477 passed (469 + 8).
 
 With Foundry installed and allowed to run:
 
@@ -1445,6 +1484,21 @@ disagreement":
 
 ```bash
 npm run verify:ledger
+```
+
+G1 (v0.2 step 2): the breaker's suspensions and reinstatements, against the
+verifier's replay of the event log; it must end "no disagreement":
+
+```bash
+npm run verify:breaker
+```
+
+The honest arm through the gate, every data day (v0.2 step 2: G1 must never
+suspend it). About two hours per arm; `--days` shortens it, `--full` keeps S3
+and S4:
+
+```bash
+node offchain/eval/honest-day-ahead.js --arm B2
 ```
 
 ```bash

@@ -31,7 +31,7 @@ export default {
       find: "} else if (change == ConfigChange.TIGHTEN) {",
       replace: "} else if (change == ConfigChange.TIGHTEN || change == ConfigChange.WIDEN) {" },
     { name: "market call skipped", file: "contracts/gate/PolicyGate.sol",
-      find: "bytes[] memory results =\n            IERC7579Execution(account).executeFromExecutor(MODE_SINGLE_CALL, abi.encodePacked(target, uint256(0), callData));",
+      find: "bytes[] memory results = _execute(account, target, callData);",
       replace: "bytes[] memory results = new bytes[](1);" },
     { name: "uninstall leaves installed", file: "contracts/gate/GateBase.sol",
       find: "installation.installed = false;",

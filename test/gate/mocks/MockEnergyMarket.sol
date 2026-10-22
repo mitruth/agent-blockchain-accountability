@@ -50,6 +50,10 @@ contract MockEnergyMarket {
 
     mapping(bytes32 orderId => MarketOrder) private _orders;
 
+    /// @notice Paid by `withdraw`, from whom to whom.
+    mapping(address from => mapping(address to => uint256)) public withdrawn;
+
+    event Withdrawn(address indexed from, address indexed to, uint256 amount);
     event OrderPlaced(
         bytes32 indexed orderId, address indexed owner, Side side, uint32 indexed slot, uint64 qtyWh, uint64 price
     );
@@ -98,6 +102,14 @@ contract MockEnergyMarket {
     // ------------------------------------------------------------------
     // Orders
     // ------------------------------------------------------------------
+
+    /// @notice A funds-moving function, for the recipient lock (spec v0.2 A9):
+    ///         pays `amount` of the caller's market balance to `to`. The mock
+    ///         keeps no balances; it records the payment.
+    function withdraw(address to, uint256 amount) external {
+        withdrawn[msg.sender][to] += amount;
+        emit Withdrawn(msg.sender, to, amount);
+    }
 
     /// @param price Limit price, settlement-token units per kWh.
     function placeOrder(Side side, uint32 slot, uint64 qtyWh, uint64 price) external returns (bytes32 orderId) {

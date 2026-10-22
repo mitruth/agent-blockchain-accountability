@@ -28,7 +28,7 @@ export default {
   ],
   mutants: withTests([
     // --- the gate's phases ---
-    { name: "a rejection does not stop the submission", file: G,
+    { name: "a rejection does not stop the submission", file: G, nth: 2,
       find: "            emit Rejected(account, orderHash);\n            return orderHash;",
       replace: "            emit Rejected(account, orderHash);" },
     { name: "a flag is taken for a rejection", file: G,

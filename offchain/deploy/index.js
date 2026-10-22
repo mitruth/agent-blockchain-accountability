@@ -12,6 +12,7 @@ import {
   ROOT, DEPLOYMENT_FILE, key, deploy, send, read, selector, calldata as encode, now, saveDeployment, price, USD, usd,
 } from "../chain/index.js";
 import { agentPolicyInstances } from "./policies.js";
+import { breakerConfigOf, encodeBreakerConfig } from "./breaker.js";
 
 export const DEFAULT_CONFIG = new URL("./prosumers.json", import.meta.url);
 
@@ -135,9 +136,19 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
       await asAccount(oracle, "OracleVerifier", "setDevice", [PV_FORECAST, key(PV_PROVIDER).address, PV_MAX_AGE]);
       entry.bms = { address: bms, keyIndex: bmsKeyOf(i) };
 
+      // Owner path: the session circuit breaker G1 (v0.2 step 2), when the
+      // configuration names one. It is opt-in, like every policy.
+      if (config.agentPolicies.breaker) {
+        const breaker = encodeBreakerConfig(breakerConfigOf(config.agentPolicies.breaker));
+        await asAccount(gate, "PolicyGate", "setBreakerConfig", [breaker]);
+      }
+
       // Owner path: the policies the agent trades under (step 4).
       entry.policies = [];
+      // "omit" names instances left out, for runs that study the others.
+      const omit = new Set(config.agentPolicies.omit ?? []);
       for (const instance of agentPolicyInstances(config.agentPolicies, { battery: p.battery, slotSeconds: config.slotSeconds })) {
+        if (omit.has(instance.name)) continue;
         const policy = policyContracts[instance.contract];
         await asAccount(gate, "PolicyGate", "addPolicy", [policy, instance.id, instance.config]);
         entry.policies.push({ name: instance.name, policy, id: instance.id });

@@ -458,8 +458,9 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 
 | Step | Branch | Status |
 |---|---|---|
-| 1. C1–C5, four oracle kinds, signer distinctness | `v0.2/1-oracles-aggregation` | Built; awaiting Dan's review |
-| 2–8 | | Not started |
+| 1. C1–C5, four oracle kinds, signer distinctness | `v0.2/1-oracles-aggregation` | Committed `7b4c8d7`, 21 October |
+| 2. G1 session circuit breaker, A9 recipient lock | `v0.2/2-breaker-recipient` | Built; awaiting Dan's review |
+| 3–8 | | Not started |
 
 **Decisions of 21 October 2026, before step 1** (log v0.2-1.1):
 - Agent keys for signer distinctness are declared by the owner in the OracleVerifier (at most 8): the gate has no agent registry since D1.
@@ -470,3 +471,11 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 - C4: the ledger already summed across markets (no market key per slot); the gap was the slot grid. One grid per account now lives in the ledger.
 - C5: the ported market charges no fee. The settlement deviation penalty is not order-time spend.
 - The independent verifier is JavaScript (v0.1 log 3.7), not Python.
+
+**Decisions of 21 and 22 October 2026, step 2** (log v0.2-2.1):
+- D17 cancel-only is pure cancellations, still judged by every policy; G1 is opt-in; A9 refuses without reverting and G1 counts the refusal; `setPaymentAllowance` and `setApprovalForAll` are A9 approvals.
+- An honest arm becomes day-ahead batches of net per-slot orders. G1's honest run leaves out S3 and S4 and merges flows below A1's minimum.
+
+**Findings of step 2:**
+- G1 suspends the account's `submit` path, the owner's own `submit` included: the gate sees no agent (D1).
+- S3 rejects honest household days: its constant reserve load (D4) reads grid imports for the house as battery charge. A1's 50 Wh demo minimum catches 13 % of honest slots. Both are for step 8.

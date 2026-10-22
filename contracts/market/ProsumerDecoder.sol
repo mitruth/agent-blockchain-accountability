@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IOrderDecoder} from "../interfaces/IOrderDecoder.sol";
-import {Order, OrderKind, Side, FillState} from "../gate/GateTypes.sol";
+import {Order, OrderKind, Side, FillState, CallKind} from "../gate/GateTypes.sol";
 import {MarketTypes} from "./MarketTypes.sol";
 import {MarketManager} from "./MarketManager.sol";
 import {MarketSession} from "./MarketSession.sol";
@@ -30,6 +30,25 @@ contract ProsumerDecoder is IOrderDecoder {
     error ProsumerDecoder_NoSession(MarketTypes.EnergyType energyType);
     error ProsumerDecoder_UnknownOrder(bytes32 id);
     error ProsumerDecoder_ValueOverflow(uint64 quantity, uint64 price);
+    error ProsumerDecoder_NoFundsMove();
+
+    /// @inheritdoc IOrderDecoder
+    /// @dev A prosumer contract moves funds only as collateral and payment for
+    ///      orders, through the token; it has no withdrawal. So its four order
+    ///      functions are its only registrable calls (A9).
+    function callKind(address, bytes4 selector) external pure override returns (CallKind) {
+        if (
+            selector == Prosumer.placeBids.selector || selector == Prosumer.placeOffers.selector
+                || selector == Prosumer.modifyOrder.selector
+        ) return CallKind.ORDER;
+        if (selector == Prosumer.cancelOrder.selector) return CallKind.CANCEL;
+        return CallKind.UNKNOWN;
+    }
+
+    /// @inheritdoc IOrderDecoder
+    function fundsMove(address, bytes calldata) external pure override returns (address, uint256) {
+        revert ProsumerDecoder_NoFundsMove();
+    }
 
     /// @inheritdoc IOrderDecoder
     function decode(address market, bytes calldata callData) external view override returns (Order[] memory legs) {

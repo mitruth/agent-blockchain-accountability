@@ -76,7 +76,7 @@ export default {
     { name: "any number of readings", file: G,
       find: "        if (readings.length > MAX_READINGS) revert PolicyGate_TooManyReadings(readings.length);\n", replace: "" },
     { name: "the verifier allowed as target", file: G,
-      find: "|| target == address(ledger) || target == address(oracle);", replace: "|| target == address(ledger);" },
+      find: "|| target == address(ledger) || target == address(oracle)\n", replace: "|| target == address(ledger)\n" },
     { name: "the ledger's batch view off by one slot", file: L,
       find: "_positions[account][uint32(firstSlot + i)]", replace: "_positions[account][uint32(firstSlot + i + 1)]" },
 

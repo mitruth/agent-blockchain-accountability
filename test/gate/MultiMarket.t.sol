@@ -11,7 +11,7 @@ import {RampPolicy} from "../../contracts/policies/RampPolicy.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 import {ReadingKind, SignedReading} from "../../contracts/oracle/OracleTypes.sol";
 import {MockEnergyMarket} from "./mocks/MockEnergyMarket.sol";
-import {Side, Order, FillState} from "../../contracts/gate/GateTypes.sol";
+import {Side, Order, FillState, CallKind} from "../../contracts/gate/GateTypes.sol";
 import {IOrderDecoder} from "../../contracts/interfaces/IOrderDecoder.sol";
 
 /// @notice C4 (spec v0.2): one account trading on two markets. Positions are
@@ -235,6 +235,13 @@ contract FlatDecoder is IOrderDecoder {
     function fillState(address, bytes32) external pure override returns (FillState memory) {}
 
     function gateTime(address, uint32) external pure override returns (uint64) {}
+
+    /// @dev Every call is an order here (spec v0.2 A9); none moves funds.
+    function callKind(address, bytes4) external pure override returns (CallKind) {
+        return CallKind.ORDER;
+    }
+
+    function fundsMove(address, bytes calldata) external pure override returns (address, uint256) {}
 
     function slotStart(address, uint32) external pure override returns (uint64) {
         return 1_000;

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.23;
 
 import {IOrderDecoder} from "../../../contracts/interfaces/IOrderDecoder.sol";
-import {Order, OrderKind, Side, FillState} from "../../../contracts/gate/GateTypes.sol";
+import {Order, OrderKind, Side, FillState, CallKind} from "../../../contracts/gate/GateTypes.sol";
 import {MockEnergyMarket} from "./MockEnergyMarket.sol";
 
 /// @title MockMarketDecoder
@@ -20,6 +20,26 @@ import {MockEnergyMarket} from "./MockEnergyMarket.sol";
 contract MockMarketDecoder is IOrderDecoder {
     error MockMarketDecoder_UnknownSelector(bytes4 selector);
     error MockMarketDecoder_ValueOverflow(uint64 qtyWh, uint64 price);
+
+    /// @inheritdoc IOrderDecoder
+    /// @dev The three order calls, and `withdraw`: a funds move whose recipient
+    ///      is its first argument (spec v0.2 A9).
+    function callKind(address, bytes4 selector) external pure override returns (CallKind) {
+        if (selector == MockEnergyMarket.placeOrder.selector || selector == MockEnergyMarket.modifyOrder.selector) {
+            return CallKind.ORDER;
+        }
+        if (selector == MockEnergyMarket.cancelOrder.selector) return CallKind.CANCEL;
+        if (selector == MockEnergyMarket.withdraw.selector) return CallKind.FUNDS_MOVE;
+        return CallKind.UNKNOWN;
+    }
+
+    /// @inheritdoc IOrderDecoder
+    function fundsMove(address, bytes calldata callData) external pure override returns (address to, uint256 amount) {
+        if (bytes4(callData[:4]) != MockEnergyMarket.withdraw.selector) {
+            revert MockMarketDecoder_UnknownSelector(bytes4(callData[:4]));
+        }
+        (to, amount) = abi.decode(callData[4:], (address, uint256));
+    }
 
     /// @inheritdoc IOrderDecoder
     function decode(address market, bytes calldata callData) external view override returns (Order[] memory legs) {

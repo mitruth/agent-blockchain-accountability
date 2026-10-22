@@ -7,9 +7,10 @@ import {DecoderRegistry} from "./DecoderRegistry.sol";
 import {ConfigManager} from "./ConfigManager.sol";
 import {PositionLedger} from "./PositionLedger.sol";
 import {IPolicy} from "../interfaces/IPolicy.sol";
-import {Order, OrderKind, Verdict, CheckContext, CheckResult, Release} from "./GateTypes.sol";
+import {Order, OrderKind, Verdict, CheckContext, CheckResult, Release, CallKind} from "./GateTypes.sol";
 import {OracleVerifier} from "../oracle/OracleVerifier.sol";
 import {SignedReading} from "../oracle/OracleTypes.sol";
+import {SessionBreaker} from "./SessionBreaker.sol";
 
 /// @title PolicyGate
 /// @notice ERC-7579 executor module through which an autonomous trading agent
@@ -41,10 +42,20 @@ import {SignedReading} from "../oracle/OracleTypes.sol";
 /// ERC-7562 forbids TIMESTAMP and restricts storage reads during validation, so
 /// no window and no oracle check could live in a validator.
 ///
+/// Two rules bind every call, whatever policies are installed, so they live
+/// here (spec v0.2 section 11):
+///
+///   G1  the session circuit breaker (`SessionBreaker`): too many rejected or
+///       flagged submissions suspend the account's `submit` to cancel-only
+///   A9  the recipient lock: a funds move must pay the account, and an
+///       approval must name a market of the account. Funds moves and
+///       approvals carry no order legs, so no policy judges them
+///
 /// Built so far: the key model, the registries, the booking of every order in
 /// the position ledger (steps 1 and 2), the session entry point (step 4.1),
-/// the policy check, commit and credit phases (step 4.2), and signed readings
-/// handed in with an order (step 5.1).
+/// the policy check, commit and credit phases (step 4.2), signed readings
+/// handed in with an order (step 5.1), one slot grid across markets (v0.2
+/// step 1), G1 and A9 (v0.2 step 2).
 contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     uint256 private constant MODULE_TYPE_EXECUTOR = 2;
 
@@ -59,6 +70,10 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     /// @notice Where signed readings are verified and kept. The policies read
     ///         the latest from it.
     OracleVerifier public immutable oracle;
+
+    /// @notice G1's counts and suspensions. Deployed by this gate, written only
+    ///         by it.
+    SessionBreaker public immutable breaker;
 
     /// @notice Most readings one submission may bring: one per kind, twice
     ///         over.
@@ -109,6 +124,32 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     ///         refusal stays in the log.
     event Rejected(address indexed account, bytes32 indexed orderHash);
 
+    /// @notice G1: the account is suspended and the submission is not all
+    ///         cancellations. Emitted with `Rejected`.
+    event SuspendedRefusal(address indexed account, bytes32 indexed orderHash);
+
+    /// @notice A9: a funds move to someone other than the account, or an
+    ///         approval of a spender that is not a market of the account.
+    ///         Emitted with `Rejected`.
+    event RecipientRefused(
+        address indexed account,
+        bytes32 indexed orderHash,
+        address indexed target,
+        CallKind kind,
+        address counterparty,
+        uint256 amount
+    );
+
+    /// @notice A9: a funds move or an approval that passed, and was made.
+    event FundsMoved(
+        address indexed account,
+        bytes32 indexed orderHash,
+        address indexed target,
+        CallKind kind,
+        address counterparty,
+        uint256 amount
+    );
+
     /// @notice A policy's credit for released volume failed. The policy keeps
     ///         the charge, which errs on the safe side; the release itself
     ///         stands.
@@ -138,6 +179,27 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
         ledger = ledger_;
         oracle = oracle_;
         maxLegs = maxLegs_;
+        breaker = new SessionBreaker(address(this));
+    }
+
+    // ------------------------------------------------------------------
+    // Owner path: G1
+    // ------------------------------------------------------------------
+
+    /// @notice Configure G1, or turn it off with an empty `config`. A change
+    ///         that only tightens applies at once; one that loosens anything
+    ///         waits WIDEN_DELAY and is applied with `applyBreakerConfig`.
+    function setBreakerConfig(bytes calldata config) external onlyAccount nonReentrant returns (bool applied) {
+        return breaker.setConfig(msg.sender, generationOf(msg.sender), config);
+    }
+
+    function applyBreakerConfig(bytes calldata config) external onlyAccount nonReentrant {
+        breaker.applyConfig(msg.sender, generationOf(msg.sender), config);
+    }
+
+    /// @notice Lift a G1 suspension; both of its windows start empty.
+    function reinstate() external onlyAccount nonReentrant {
+        breaker.reinstate(msg.sender, generationOf(msg.sender));
     }
 
     // ------------------------------------------------------------------
@@ -201,7 +263,18 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     /// No value is ever sent: the account's native balance is not the agent's
     /// to move.
     ///
-    /// @param target   The market contract.
+    /// G1 comes before the policies: while the account is suspended, only a
+    /// submission of cancellations goes on; anything else is refused
+    /// (`SuspendedRefusal`, `Rejected`). After the check phase, a rejected or
+    /// flagged submission is counted. A refusal never reverts, so it is counted
+    /// and recorded rather than lost.
+    ///
+    /// A funds move or an approval (A9) is decoded to its recipient or spender
+    /// instead of legs, emitted with no legs, and judged by A9 alone: refused
+    /// (`RecipientRefused`, `Rejected`, counted by G1) unless it pays the
+    /// account, or approves a market of the account.
+    ///
+    /// @param target   The market contract, or a token for a funds move.
     /// @param callData The call, selector included.
     /// @param readings Signed readings to hand in first, at most MAX_READINGS.
     ///                 May be empty.
@@ -213,7 +286,7 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
         returns (bytes32 orderHash)
     {
         address account = msg.sender;
-        (IOrderDecoder decoder, Order[] memory legs) = _decode(account, target, callData);
+        (IOrderDecoder decoder, CallKind kind, Order[] memory legs) = _decode(account, target, callData);
 
         orderHash = keccak256(
             abi.encode(block.chainid, address(this), account, submissionCount[account]++, target, keccak256(callData))
@@ -222,14 +295,25 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
 
         _acceptReadings(account, readings);
 
-        if (!_checkAndCommit(account, orderHash, target, decoder, legs)) {
+        if (!breaker.admit(account, generationOf(account), _onlyCancels(kind, legs))) {
+            emit SuspendedRefusal(account, orderHash);
             emit Rejected(account, orderHash);
             return orderHash;
         }
 
-        bytes[] memory results =
-            IERC7579Execution(account).executeFromExecutor(MODE_SINGLE_CALL, abi.encodePacked(target, uint256(0), callData));
+        if (!_isOrderCall(kind)) {
+            _moveFunds(account, orderHash, target, decoder, kind, callData);
+            return orderHash;
+        }
 
+        (bool accepted, bool flagged) = _checkAndCommit(account, orderHash, target, decoder, legs);
+        if (!accepted || flagged) breaker.record(account, generationOf(account), !accepted, flagged);
+        if (!accepted) {
+            emit Rejected(account, orderHash);
+            return orderHash;
+        }
+
+        bytes[] memory results = _execute(account, target, callData);
         _book(account, target, decoder, callData, legs, results);
 
         emit Executed(account, orderHash);
@@ -257,9 +341,50 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
 
     /// @dev The ledger trusts "the caller is the account" for its writer list,
     ///      and the oracle verifier for its signer list, so both are forbidden
-    ///      targets for the same reason the account and the gate are.
+    ///      targets for the same reason the account and the gate are. The
+    ///      breaker accepts only the gate, but is forbidden all the same.
     function _isForbiddenTarget(address account, address target) internal view override returns (bool) {
-        return super._isForbiddenTarget(account, target) || target == address(ledger) || target == address(oracle);
+        return super._isForbiddenTarget(account, target) || target == address(ledger) || target == address(oracle)
+            || target == address(breaker);
+    }
+
+    function _execute(address account, address target, bytes calldata callData) private returns (bytes[] memory) {
+        return IERC7579Execution(account).executeFromExecutor(
+            MODE_SINGLE_CALL, abi.encodePacked(target, uint256(0), callData)
+        );
+    }
+
+    /// @dev A9. A funds move must pay the account itself; an approval must
+    ///      name a market of the account. A refusal returns normally and
+    ///      counts as a rejection for G1.
+    function _moveFunds(
+        address account,
+        bytes32 orderHash,
+        address target,
+        IOrderDecoder decoder,
+        CallKind kind,
+        bytes calldata callData
+    ) private {
+        (address counterparty, uint256 amount) = decoder.fundsMove(target, callData);
+        bool allowed = kind == CallKind.FUNDS_MOVE ? counterparty == account : isMarket(account, counterparty);
+        if (!allowed) {
+            emit RecipientRefused(account, orderHash, target, kind, counterparty, amount);
+            emit Rejected(account, orderHash);
+            breaker.record(account, generationOf(account), true, false);
+            return;
+        }
+        _execute(account, target, callData);
+        emit FundsMoved(account, orderHash, target, kind, counterparty, amount);
+        emit Executed(account, orderHash);
+    }
+
+    /// @dev G1's cancel-only test: an order call whose every leg cancels.
+    function _onlyCancels(CallKind kind, Order[] memory legs) private pure returns (bool) {
+        if (!_isOrderCall(kind)) return false;
+        for (uint256 i = 0; i < legs.length; ++i) {
+            if (legs[i].kind != OrderKind.CANCEL) return false;
+        }
+        return true;
     }
 
     /// @dev The grid lives in the ledger, beside the positions numbered on it.
@@ -268,11 +393,12 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
         ledger.fixGrid(account, origin, slotSeconds);
     }
 
-    /// @dev The approved decoder for the call, and the legs it reads.
+    /// @dev The approved decoder for the call, its registered kind, and for an
+    ///      order call the legs it reads; a funds move or an approval has none.
     function _decode(address account, address target, bytes calldata callData)
         private
         view
-        returns (IOrderDecoder decoder, Order[] memory legs)
+        returns (IOrderDecoder decoder, CallKind kind, Order[] memory legs)
     {
         if (callData.length < 4) revert PolicyGate_CallDataTooShort();
 
@@ -283,20 +409,23 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
         bytes4 selector = bytes4(callData[:4]);
         decoder = decoderOf(account, target, selector);
         if (address(decoder) == address(0)) revert PolicyGate_UnknownCall(target, selector);
+        kind = kindOf(account, target, selector);
+        if (!_isOrderCall(kind)) return (decoder, kind, legs);
 
         legs = decoder.decode(target, callData);
         if (legs.length == 0 || legs.length > maxLegs) revert PolicyGate_NotAnOrder(target, selector);
     }
 
     /// @dev Check phase, then commit phase (spec 4.1, steps 4 to 6). Commits
-    ///      only when no instance rejects.
+    ///      only when no instance rejects. `flagged`: some instance crossed its
+    ///      soft bound.
     function _checkAndCommit(
         address account,
         bytes32 orderHash,
         address target,
         IOrderDecoder decoder,
         Order[] memory legs
-    ) private returns (bool accepted) {
+    ) private returns (bool accepted, bool flagged) {
         CheckContext memory ctx = CheckContext({
             market: target,
             decoder: address(decoder),
@@ -304,11 +433,11 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
             oracle: address(oracle)
         });
         (IPolicy[] memory policies, bytes32[] memory policyIds) = _policyList(account);
-        if (!_checkAll(account, orderHash, policies, policyIds, legs, ctx)) return false;
+        (accepted, flagged) = _checkAll(account, orderHash, policies, policyIds, legs, ctx);
+        if (!accepted) return (false, flagged);
         for (uint256 i = 0; i < policies.length; ++i) {
             policies[i].commit(account, policyIds[i], legs, ctx);
         }
-        return true;
     }
 
     /// @dev Every reading must be for the submitting account. A reading the
@@ -372,7 +501,7 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
         bytes32[] memory policyIds,
         Order[] memory legs,
         CheckContext memory ctx
-    ) private returns (bool accepted) {
+    ) private returns (bool accepted, bool flagged) {
         accepted = true;
         for (uint256 i = 0; i < policies.length; ++i) {
             CheckResult memory r = policies[i].check(account, policyIds[i], legs, ctx);
@@ -380,6 +509,7 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
             if (r.verdict == Verdict.REJECT) {
                 accepted = false;
             } else if (r.verdict == Verdict.FLAG) {
+                flagged = true;
                 emit PolicyFlag(account, orderHash, address(policies[i]), policyIds[i], r.valueAfter, r.soft);
             }
         }
