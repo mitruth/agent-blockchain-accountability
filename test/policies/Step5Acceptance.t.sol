@@ -16,7 +16,8 @@ import {CyclePolicy} from "../../contracts/policies/CyclePolicy.sol";
 import {RampPolicy} from "../../contracts/policies/RampPolicy.sol";
 import {WindowLib} from "../../contracts/policies/WindowLib.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
-import {ReadingKind, BmsReading, SignedReading} from "../../contracts/oracle/OracleTypes.sol";
+import {ReadingKind, BmsReading, SignedReading, TariffSchedule} from "../../contracts/oracle/OracleTypes.sol";
+import {DominatedTradePolicy} from "../../contracts/policies/DominatedTradePolicy.sol";
 import {OracleFixture} from "../oracle/OracleFixture.sol";
 
 /// Step 5's acceptance criteria (spec Section 9), on the ported P2P market
@@ -320,6 +321,59 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         uint256 batch = _gasOf(_offersCall(_slots24(), 10));
         assertEq(session.offerIds().length, 25, "the batch was placed");
         emit log_named_uint("gas, 24-offer batch, A1-A6 + S1 + S2 x2 + S3 + S4 + S5, k = 48", batch);
+    }
+
+    /// @dev v0.2 step 3: the same batch with A3T on and S7 added. Feed-in
+    ///      sits one unit above the offers' price, so every leg is dominated
+    ///      and S7 keeps an excess for each: the worst case.
+    function test_gas_dayAheadBatchWithPrices() public {
+        vm.prank(aliceOwner);
+        aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setDevice, (ReadingKind.TARIFF, tariffSigner, 1 days)));
+        uint64[] memory retail = new uint64[](96);
+        uint64[] memory feedIn = new uint64[](96);
+        for (uint256 i = 0; i < 96; ++i) {
+            retail[i] = 20;
+            feedIn[i] = 11;
+        }
+        oracle.accept(
+            _signTariff(
+                oracle,
+                TARIFF_KEY,
+                TariffSchedule({
+                    account: address(aliceAccount),
+                    issuedAt: uint64(block.timestamp),
+                    firstSlotStart: uint64(manager.slotStart(firstSlot)),
+                    slotSeconds: manager.slotSeconds(),
+                    retail: retail,
+                    feedIn: feedIn
+                })
+            )
+        );
+        StaticOrderPolicy.Config memory c;
+        c.maxQtyWh = 3_000;
+        c.maxValue = 10_000_000;
+        c.sellFloor = 0;
+        c.buyCeiling = 10_000_000;
+        c.horizonSeconds = uint32(3 * DAY);
+        c.ratedPowerW = type(uint32).max;
+        c.tariffBand = true;
+        c.buyMarkupBps = 1_000;
+        c.sellDiscountBps = 1_000;
+        _add(statics, keccak256("A"), abi.encode(c));
+        _addS1S2();
+        _addS3();
+        _addS4();
+        _addS5();
+        DominatedTradePolicy s7 = new DominatedTradePolicy(address(gate));
+        DominatedTradePolicy.Config memory d;
+        d.soft = type(uint64).max;
+        d.window = _sliding(type(uint64).max);
+        _add(s7, keccak256("S7"), abi.encode(d));
+        oracle.accept(_battery(2_500, 0)[0]);
+        _offers(_slot1(0), 10);
+        uint256 batch = _gasOf(_offersCall(_slots24(), 10));
+        assertEq(session.offerIds().length, 25, "the batch was placed");
+        emit log_named_uint("gas, 24-offer batch, A1-A6 with A3T + S1 + S2 x2 + S3 + S4 + S5 + S7, k = 48", batch);
     }
 
     function test_gas_dayAheadBatchNoPolicy() public {

@@ -30,9 +30,10 @@ import policies from "./catalogs/policies.js";
 import physical from "./catalogs/physical.js";
 import oracle2 from "./catalogs/oracle2.js";
 import breaker from "./catalogs/breaker.js";
+import price from "./catalogs/price.js";
 import pending from "./catalogs/pending.js";
 
-export const CATALOGS = { gate, ledger, market, window, policies, physical, oracle2, breaker, accounts };
+export const CATALOGS = { gate, ledger, market, window, policies, physical, oracle2, breaker, price, accounts };
 export { pending };
 
 const BACKUP = ".mutation-backup";
@@ -137,8 +138,14 @@ function locate(text, find, nth) {
  *
  * runCatalog turns NOT CAUGHT into "accepted" for a mutant that carries an
  * `accepted` reason in its catalogue.
+ *
+ * The tests run in Foundry's Docker image unless `runner` is "hardhat". On
+ * 24 October a mutant took 17-18 s there, failing tests or not, and 71-87 s
+ * under Hardhat 3, which spends about a minute on any run with a failing
+ * test (every caught mutant has one). A catalogue whose tests need Foundry
+ * (`runner: "forge-docker"`) always runs there.
  */
-export function runMutant(catalog, mutant, { verifierRuns = { seeds: 3, steps: 40 } } = {}) {
+export function runMutant(catalog, mutant, { verifierRuns = { seeds: 3, steps: 40 }, runner = "forge-docker" } = {}) {
   const file = path.join(ROOT, mutant.file);
   if (!fs.existsSync(file)) return { verdict: "bad pattern", detail: `no file ${mutant.file}` };
   const original = fs.readFileSync(file);
@@ -153,14 +160,14 @@ export function runMutant(catalog, mutant, { verifierRuns = { seeds: 3, steps: 4
   fs.writeFileSync(file + BACKUP, original);
   fs.writeFileSync(file, text.slice(0, index) + replace + text.slice(index + find.length));
   try {
-    if (catalog.runner === "forge-docker") return forgeInDocker(catalog);
-    const tests = run("npx", ["hardhat", "test", "solidity", ...(mutant.tests ?? catalog.tests)]);
-    const compiled = tests.out.includes("Running Solidity tests");
-    if (!compiled) return { verdict: "did not build", detail: tests.out.split(/\r?\n/).find((l) => /Error/.test(l)) ?? "" };
+    const files = mutant.tests ?? catalog.tests;
+    const forge = catalog.runner === "forge-docker" || runner === "forge-docker";
+    const tests = forge ? forgeInDocker(files) : hardhatTests(files);
+    if (!tests.compiled) return { verdict: "did not build", detail: tests.detail };
 
     const by = [];
-    const failing = failingTests(tests.out);
-    if (tests.code !== 0) by.push("tests");
+    const failing = tests.failing;
+    if (tests.failed) by.push("tests");
 
     if (catalog.verifier) {
       const build = run("npx", ["hardhat", "build", "--no-tests"]);
@@ -169,38 +176,63 @@ export function runMutant(catalog, mutant, { verifierRuns = { seeds: 3, steps: 4
         if (v.code !== 0) by.push("verifier");
       }
     }
-    return { verdict: by.length ? "caught" : "NOT CAUGHT", by, failing, detail: tests.timedOut ? "tests timed out" : "" };
+    return { verdict: by.length ? "caught" : "NOT CAUGHT", by, failing, detail: tests.detail };
   } finally {
     restoreCurrent();
   }
 }
 
+/** The test files under Hardhat. Returns { compiled, failed, failing, detail }. */
+function hardhatTests(files) {
+  const tests = run("npx", ["hardhat", "test", "solidity", ...files]);
+  if (!tests.out.includes("Running Solidity tests")) {
+    return { compiled: false, detail: tests.out.split(/\r?\n/).find((l) => /Error/.test(l)) ?? "" };
+  }
+  return { compiled: true, failed: tests.code !== 0, failing: failingTests(tests.out), detail: tests.timedOut ? "tests timed out" : "" };
+}
+
+/** Whether the Docker engine answers. The runner never starts it. */
+export function dockerUp() {
+  return spawnSync("docker", ["info", "--format", "{{.ServerVersion}}"], { encoding: "utf8", timeout: 30_000 }).status === 0;
+}
+
 /**
- * The Foundry-only tests, in the Foundry image (forge.exe is blocked on this
- * machine). Assumes Docker is running and the volume foundry-svm holds the
- * compilers; never starts Docker itself.
+ * The test files in the Foundry image (forge.exe is blocked on this machine).
+ * Assumes Docker is running and the volume foundry-svm holds the compilers;
+ * never starts Docker itself. Foundry takes one --match-path, so several
+ * files become one brace glob. Returns { compiled, failed, failing, detail }.
  *
  * Docker is called with an argument list and no host shell: on Windows a host
  * shell is cmd.exe, which does not take single quotes as quoting, and the
  * container's sh then received a broken command.
  */
-function forgeInDocker(catalog) {
+function forgeInDocker(files) {
   const repo = ROOT.replace(/\\/g, "/");
-  const match = catalog.tests.map((t) => `--match-path "${t}"`).join(" ");
+  const glob = files.length === 1 ? files[0] : `{${files.join(",")}}`;
   const p = spawnSync(
     "docker",
     [
       "run", "--rm", "-v", `${repo}:/repo`, "-v", "foundry-svm:/home/foundry/.svm", "-w", "/repo",
-      "--entrypoint", "sh", "ghcr.io/foundry-rs/foundry:v1.8.5", "-c", `forge test ${match} 2>&1`,
+      "--entrypoint", "sh", "ghcr.io/foundry-rs/foundry:v1.8.5", "-c", `forge test --match-path '${glob}' 2>&1`,
     ],
     { cwd: ROOT, encoding: "utf8", timeout: TEST_TIMEOUT, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, MSYS_NO_PATHCONV: "1" } },
   );
   const out = (p.stdout ?? "") + (p.stderr ?? "");
   if (out.includes("Compiler run failed") || !out.includes("Suite result")) {
-    return { verdict: "did not build", detail: out.split(/\r?\n/).find((l) => /Error|error/.test(l)) ?? "" };
+    return { compiled: false, detail: out.split(/\r?\n/).find((l) => /Error|error/.test(l)) ?? "" };
   }
-  const failing = out.split(/\r?\n/).filter((l) => l.startsWith("[FAIL")).map((l) => l.slice(0, 120));
-  return { verdict: failing.length ? "caught" : "NOT CAUGHT", by: failing.length ? ["forge tests"] : [], failing, detail: "" };
+  // "Ran 20 tests for test/x.t.sol:XTest", then "[FAIL: reason] test_name() (gas: 1)";
+  // the summary repeats each failure under "Encountered 1 failing test in test/x.t.sol:XTest".
+  const failing = [];
+  let suite = "";
+  for (const line of out.split(/\r?\n/)) {
+    const s = line.match(/^(?:Ran \d+ tests? for|Encountered \d+ failing tests? in) [^:]+:(\w+)/);
+    if (s) suite = s[1];
+    const f = line.match(/^\[FAIL[^\]]*\]\s+(\w+)\(/);
+    if (f && !failing.includes(`${suite}.${f[1]}`)) failing.push(`${suite}.${f[1]}`);
+  }
+  const failed = failing.length > 0 || /Suite result: FAILED/.test(out);
+  return { compiled: true, failed, failing, detail: p.error?.code === "ETIMEDOUT" ? "tests timed out" : "" };
 }
 
 /** Every mutant whose `find` is not where the catalogue says, without running anything. */

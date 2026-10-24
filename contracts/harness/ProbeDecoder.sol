@@ -5,26 +5,38 @@ import {IOrderDecoder} from "../interfaces/IOrderDecoder.sol";
 import {Order, OrderKind, Side, FillState, CallKind} from "../gate/GateTypes.sol";
 import {ProbeMarket} from "./ProbeMarket.sol";
 
-/// Stand-ins for the off-chain verifier of G1 (spec v0.2 section 5), with
-/// ProbeMarket, ProbeDecoder and ScriptedPolicy: a script can make the gate
-/// reject, flag or execute any submission it likes, and check the breaker's
-/// reaction from the event log alone. Not for deployment.
-/// @notice Reads `ProbeMarket.order` as one placement of 1 Wh. The order is
-///         reported closed at once, so a keeper's reconcile releases it and
-///         the ledger's open-order bound never binds.
+/// Stand-ins for the off-chain verifiers of G1 and of the price policies (spec
+/// v0.2 section 5); see ProbeMarket.
+/// @notice Reads `ProbeMarket.order` as one placement of 1 Wh, and
+///         `ProbeMarket.place` as the placement it names. Every order is
+///         reported closed at once, with what the script set as filled, so a
+///         keeper's reconcile releases the rest and the ledger's open-order
+///         bound never binds.
 contract ProbeDecoder is IOrderDecoder {
     function callKind(address, bytes4 selector) external pure override returns (CallKind) {
-        return selector == ProbeMarket.order.selector ? CallKind.ORDER : CallKind.UNKNOWN;
+        return selector == ProbeMarket.order.selector || selector == ProbeMarket.place.selector
+            ? CallKind.ORDER
+            : CallKind.UNKNOWN;
     }
 
     function fundsMove(address, bytes calldata) external pure override returns (address, uint256) {}
 
-    function decode(address, bytes calldata) external pure override returns (Order[] memory legs) {
+    function decode(address, bytes calldata callData) external pure override returns (Order[] memory legs) {
         legs = new Order[](1);
         legs[0].kind = OrderKind.PLACE;
-        legs[0].side = Side.BUY;
-        legs[0].slot = 1;
-        legs[0].qtyWh = 1;
+        if (bytes4(callData[:4]) == ProbeMarket.place.selector) {
+            (uint8 side, uint32 slot, uint64 qtyWh, uint64 price) =
+                abi.decode(callData[4:], (uint8, uint32, uint64, uint64));
+            legs[0].side = Side(side);
+            legs[0].slot = slot;
+            legs[0].qtyWh = qtyWh;
+            legs[0].price = price;
+            legs[0].value = uint64((uint256(qtyWh) * price + 999) / 1000);
+        } else {
+            legs[0].side = Side.BUY;
+            legs[0].slot = 1;
+            legs[0].qtyWh = 1;
+        }
     }
 
     function placedOrderIds(address, bytes calldata, bytes calldata result)
@@ -37,7 +49,9 @@ contract ProbeDecoder is IOrderDecoder {
         ids[0] = abi.decode(result, (bytes32));
     }
 
-    function fillState(address, bytes32) external pure override returns (FillState memory) {}
+    function fillState(address market, bytes32 orderId) external view override returns (FillState memory state) {
+        state.filledWh = ProbeMarket(market).filledOf(orderId);
+    }
 
     function gateTime(address, uint32) external pure override returns (uint64) {
         return type(uint64).max;

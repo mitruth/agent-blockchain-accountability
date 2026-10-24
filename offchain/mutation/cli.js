@@ -1,17 +1,19 @@
-// npm run mutate                          every catalogue (about two hours)
+// npm run mutate                          every catalogue (about 20 s a mutant)
 // npm run mutate -- window                one catalogue: gate, ledger, market, window
 // npm run mutate -- window --only stream  the mutants whose name contains "stream"
 // npm run mutate -- --list                the catalogues, their sizes, and what is pending
 // npm run mutate -- --check               every pattern still where its catalogue says
 // npm run mutate -- window --report docs/reports/mutation-window.md
-// npm run mutate -- accounts --docker    the real-account tests, in Foundry's Docker image
+// npm run mutate -- accounts              the real-account tests (Foundry only)
 // npm run mutate -- policies --all-tests  every mutant against the catalogue's whole list
+// npm run mutate -- price --hardhat       the tests under Hardhat instead (about 5x slower)
 //
-// Changes contract files in place while it runs (and restores them): do not
-// edit contracts or run other builds meanwhile.
+// The tests run in Foundry's Docker image: start Docker Desktop first; the
+// runner never starts it. Changes contract files in place while it runs (and
+// restores them): do not edit contracts or run other builds meanwhile.
 
 import fs from "node:fs";
-import { CATALOGS, pending, acquireLock, runCatalog, rebuild, stalePatterns } from "./index.js";
+import { CATALOGS, pending, acquireLock, runCatalog, rebuild, stalePatterns, dockerUp } from "./index.js";
 
 const args = process.argv.slice(2);
 const value = (flag) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
@@ -39,15 +41,21 @@ if (args.includes("--check")) {
   process.exit(bad ? 1 : 0);
 }
 
-// The accounts catalogue needs Docker, which the runner never starts on its
-// own: it runs only when named and given --docker.
+// Foundry in Docker by default; --hardhat runs the tests under Hardhat, where
+// a catalogue that needs Foundry (accounts) is skipped. (--docker, which
+// used to be needed for accounts, is accepted and changes nothing.)
 const allTests = args.includes("--all-tests");
+const runner = args.includes("--hardhat") ? "hardhat" : "forge-docker";
 
 let chosen = names.length ? names.map((n) => CATALOGS[n] ?? (console.error(`No catalogue ${n}`), process.exit(2))) : Object.values(CATALOGS);
-const docker = chosen.filter((c) => c.runner === "forge-docker");
-if (docker.length && !(names.length && args.includes("--docker"))) {
-  console.log(`Skipping ${docker.map((c) => c.name).join(", ")}: needs Foundry in Docker. Run: npm run mutate -- accounts --docker`);
+if (runner === "hardhat") {
+  const docker = chosen.filter((c) => c.runner === "forge-docker");
+  if (docker.length) console.log(`Skipping ${docker.map((c) => c.name).join(", ")}: needs Foundry in Docker`);
   chosen = chosen.filter((c) => c.runner !== "forge-docker");
+}
+if ((runner === "forge-docker" || chosen.some((c) => c.runner === "forge-docker")) && !dockerUp()) {
+  console.error("Docker is not running. Start Docker Desktop, or pass --hardhat to run the tests under Hardhat.");
+  process.exit(2);
 }
 try {
   const restored = acquireLock();
@@ -60,10 +68,12 @@ try {
 const all = [];
 const started = Date.now();
 for (const catalog of chosen) {
-  console.log(`\n${catalog.name}: ${catalog.mutants.length} mutants, tests ${catalog.tests.join(", ")}${catalog.verifier ? ", and the verifier" : ""}`);
+  const where = runner === "forge-docker" || catalog.runner === "forge-docker" ? "Foundry in Docker" : "Hardhat";
+  console.log(`\n${catalog.name}: ${catalog.mutants.length} mutants, tests ${catalog.tests.join(", ")}${catalog.verifier ? ", and the verifier" : ""}, under ${where}`);
   const run = allTests ? { ...catalog, mutants: catalog.mutants.map(({ tests, ...m }) => m) } : catalog;
   const rows = runCatalog(run, {
     only,
+    runner,
     log: (r) =>
       console.log(
         `  ${r.verdict.padEnd(13)} ${r.name}` +

@@ -3,9 +3,8 @@
 // committed in step 3.
 //
 // These tests build under Foundry only, and forge.exe is blocked on this
-// machine by Smart App Control, so they run in the Foundry Docker image. The
-// runner never starts Docker by itself: this catalogue runs only when named
-// and given --docker (npm run mutate -- accounts --docker), with Docker running.
+// machine by Smart App Control, so they run in the Foundry Docker image, as
+// every catalogue now does by default; under --hardhat this one is skipped.
 
 export default {
   name: "accounts",

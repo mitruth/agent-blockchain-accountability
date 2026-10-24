@@ -10,13 +10,19 @@
 //      12:00 the day before, as on the European day-ahead market. The clock
 //      first moves to 09:00 that day, if it is earlier
 //   2  the oracles report: the PV relay posts each agent's forecast, from the
-//      data's day; each house's BMS signs its battery's state
+//      data's day; each house's BMS signs its battery's state; the retailer
+//      signs a flat tariff, retail 0.28 and feed-in 0.16 per kWh, that A3T
+//      and S7 judge prices against (v0.2 step 3). It matches the demo's own
+//      prices; the HEMS tariff is for the honest replay and the evaluation
 //   3  every prosumer places an order for every half hour: Alice's and
 //      Carol's agents through the gate, the battery reading with the first
 //      order; Bob on his own, without an agent
 //   4  Alice's agent modifies one of her bids: past her soft budget, flagged
 //   5  Alice's agent tries to go past her hard budget: refused, by S1 and S3,
 //      and the refusal is in the log
+//   5b Alice's agent bids above the tariff band: refused by A3T. Carol's
+//      agent offers just under feed-in, inside the band: placed, and S7
+//      counts what it gives away
 //   6  Carol's agent offers more than her battery can deliver overnight:
 //      refused by S3; a smaller offer passes
 //   7  Carol's agent hands in an older, fuller battery reading: refused by
@@ -38,10 +44,15 @@ import { loadDeployment, send, read, calldata, events, now, warpTo, price, usd, 
 import { runMatcher } from "../matcher/index.js";
 import { expireUnmatched, reconcile } from "../keeper/index.js";
 import { commitmentOf, report } from "../sensor/index.js";
-import { postForecast, bmsReading, batteryOf, batteryAt, forecastAt } from "../oracle/index.js";
+import { postForecast, postTariff, bmsReading, batteryOf, batteryAt, forecastAt } from "../oracle/index.js";
 import { wallClock, nextDayAhead, brussels, addDays, label, hhmm } from "./calendar.js";
 
 const ELECTRICITY = 0;
+// The demo's tariff (v0.2 step 3), per kWh: what A3T's band and S7 are
+// measured against.
+const RETAIL = "0.28";
+const FEED_IN = "0.16";
+
 const step = (n, text) => console.log(`\n── ${n}. ${text} ${"─".repeat(Math.max(0, 66 - text.length))}`);
 
 const d = loadDeployment();
@@ -99,6 +110,7 @@ const VERDICT = ["execute", "FLAG", "REJECT"];
 /** One policy's result, in its own units. */
 function describe(r) {
   if (r.name.startsWith("S1")) return `${usd(r.valueBefore)} → ${usd(r.valueAfter)}, hard ${usd(r.hard)}`;
+  if (r.name.startsWith("S7")) return `given away ${usd(r.valueBefore)} → ${usd(r.valueAfter)} this week, cap ${usd(r.hard)}`;
   if (r.name.startsWith("A1")) return `bounds broken: ${r.valueAfter}`;
   if (r.valueAfter === 2n ** 256n - 1n) return "cannot judge it (no fresh reading, or beyond the horizon)";
   if (r.name.startsWith("S3")) return `undeliverable ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)}`;
@@ -162,6 +174,12 @@ async function main() {
     const state = batteryAt(P[name], d.dataDate, start, nowSlot);
     const pvWh = forecastAt(P[name], d.dataDate, start, nowSlot, horizon, SLOT);
     await postForecast(d, name, { firstSlotStart: nowSlot, pvWh, issuedAt: await now() });
+    await postTariff(d, name, {
+      firstSlotStart: nowSlot,
+      retail: Array(horizon).fill(price(RETAIL)),
+      feedIn: Array(horizon).fill(price(FEED_IN)),
+      issuedAt: await now(),
+    });
     readings[name] = [await bmsReading(d, name, nowSlot, state)];
     const tomorrow = pvWh.slice((start - nowSlot) / SLOT, (end - nowSlot) / SLOT).reduce((a, b) => a + b, 0);
     console.log(
@@ -227,6 +245,20 @@ async function main() {
     console.log(`    ${r.name.padEnd(18)} ${VERDICT[r.verdict].padEnd(8)} ${describe(r)}`);
   }
   console.log("  The call did not revert: the refusal and every policy's view of it are on chain.");
+
+  // ── 5b ──────────────────────────────────────────────────────────────────
+  step("5b", "Prices against the tariff: A3T and S7");
+  // A3's absolute ceiling is 2.50: only the band, 10 % above retail, stops it.
+  const above = await viaAgent("alice", "placeBids", [ELECTRICITY, [req(14, 300, "0.32")]]);
+  console.log(`  a bid at 0.32, retail ${RETAIL} + 10 % = 0.308 — ${above.rejected ? "refused" : "!! executed"}`);
+  for (const r of policyResults("alice", above.receipt).filter((x) => x.verdict === 2)) {
+    console.log(`    ${r.name.padEnd(20)} ${VERDICT[r.verdict].padEnd(8)} ${describe(r)}`);
+  }
+  // Inside the band, below feed-in: the 0.01 per kWh given away is S7's.
+  const under = await viaAgent("carol", "placeOffers", [ELECTRICITY, [req(26, 500, "0.15")]]);
+  const s7 = policyResults("carol", under.receipt).find((r) => r.name === "S7 dominated trades");
+  console.log(`  Carol offers 0.5 kWh at 0.15, feed-in ${FEED_IN} — ${under.rejected ? "!! refused: " + refusedBy("carol", under.receipt) : "placed"}`);
+  if (s7) console.log(`    S7 dominated trades  ${VERDICT[s7.verdict].padEnd(8)} ${describe(s7)}`);
 
   // ── 6 ───────────────────────────────────────────────────────────────────
   step(6, "Carol's agent offers more than her battery can deliver");

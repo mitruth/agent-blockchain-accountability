@@ -459,8 +459,9 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 | Step | Branch | Status |
 |---|---|---|
 | 1. C1–C5, four oracle kinds, signer distinctness | `v0.2/1-oracles-aggregation` | Committed `7b4c8d7`, 21 October |
-| 2. G1 session circuit breaker, A9 recipient lock | `v0.2/2-breaker-recipient` | Built; awaiting Dan's review |
-| 3–8 | | Not started |
+| 2. G1 session circuit breaker, A9 recipient lock | `v0.2/2-breaker-recipient` | Committed `9bc3c52`, 22 October |
+| 3. A3T tariff band, S7 dominated-trade budget | `v0.2/3-tariff-band` | Built; awaiting Dan's review |
+| 4–8 | | Not started |
 
 **Decisions of 21 October 2026, before step 1** (log v0.2-1.1):
 - Agent keys for signer distinctness are declared by the owner in the OracleVerifier (at most 8): the gate has no agent registry since D1.
@@ -479,3 +480,11 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 **Findings of step 2:**
 - G1 suspends the account's `submit` path, the owner's own `submit` included: the gate sees no agent (D1).
 - S3 rejects honest household days: its constant reserve load (D4) reads grid imports for the house as battery charge. A1's 50 Wh demo minimum catches 13 % of honest slots. Both are for step 8.
+
+**Decisions of 22 October 2026, step 3** (log v0.2-3.1):
+- The honest agent prices at the tariff (BUY at retail, SELL at feed-in; 1 unit where it is zero). The demo's absolute A3 bounds widen to 0.001–2.50. The demo runs with A3T and S7, on a synthetic flat tariff (retail 0.28, feed-in 0.16); the HEMS tariff is for the honest replay and step 8.
+
+**Findings of step 3:**
+- The HEMS tariff of 2022 is real-time: retail median 0.067 USD/kWh, from 0 to 2.00, and 0 in 467 of 17,520 slots. A3T refuses every BUY where retail is 0, since the band above 0 is 0. A3's absolute sell floor (0.001) refuses every SELL where feed-in is below it: 0 in the same 467 slots, above 0 but under 0.001 in 153 more. Over the year, the honest arms had 95 (B0) and 116 (B2) A3 or A3T refusals. Open for Dan (log v0.2-3.8).
+- S7 counted nothing for either honest arm over the year: priced at the tariff, nothing is given away.
+- S7 keeps the excess it charged per placement, so a credit never depends on a later tariff.

@@ -3,6 +3,7 @@ pragma solidity ^0.8.23;
 
 import {PolicyBase} from "./PolicyBase.sol";
 import {IOrderDecoder} from "../interfaces/IOrderDecoder.sol";
+import {OracleVerifier} from "../oracle/OracleVerifier.sol";
 import {
     Order, OrderKind, Side, ConfigChange, Verdict, CheckContext, CheckResult, Release
 } from "../gate/GateTypes.sol";
@@ -17,6 +18,13 @@ import {
 ///                     ledger's open-order bound (C2)
 ///   A2  value         value <= maxValue, at the limit price, rounded up (D12)
 ///   A3  price         SELL: price >= sellFloor; BUY: price <= buyCeiling
+///   A3T tariff band   when the owner turns it on (spec v0.2, A3T), against
+///                     the signed tariff of the order's slot, retail r and
+///                     feed-in f: BUY: price <= r x (1 + buyMarkup);
+///                     SELL: price >= f x (1 - sellDiscount); each bound
+///                     rounded towards the stricter side. With no usable
+///                     tariff for the slot the order cannot be judged and is
+///                     rejected. A3 still applies alongside
 ///   A4  time of day   the slot does not start in a blocked UTC hour for that
 ///                     side
 ///   A6  horizon       the slot starts after now and no later than
@@ -32,6 +40,10 @@ import {
 /// The result's `valueAfter` says which bounds were broken, as a bitmask of
 /// the constants below, across all the legs; zero when none was.
 ///
+/// Why A3T cannot walk: its anchor is the retailer's signed tariff, not the
+/// agent's own last price, so a sequence of bids can climb at most to the
+/// band's edge.
+///
 /// Stateless towards orders: `commit` and `credit` do nothing.
 contract StaticOrderPolicy is PolicyBase {
     uint256 public constant A1_QUANTITY = 1;
@@ -40,6 +52,9 @@ contract StaticOrderPolicy is PolicyBase {
     uint256 public constant A4_TIME_OF_DAY = 8;
     uint256 public constant A6_HORIZON = 16;
     uint256 public constant A1_MIN_QUANTITY = 32;
+    uint256 public constant A3T_TARIFF_BAND = 64;
+
+    uint256 private constant BPS = 10_000;
 
     /// @param maxQtyWh         A1, Wh per order.
     /// @param maxValue         A2, token units per order.
@@ -52,6 +67,10 @@ contract StaticOrderPolicy is PolicyBase {
     /// @param minQtyWh         A1, the smallest order, Wh.
     /// @param ratedPowerW      A1, P_rated: the most the house can deliver or
     ///                         take, W. Never zero.
+    /// @param tariffBand       A3T on.
+    /// @param buyMarkupBps     A3T, beta_b: how far above retail a BUY may go.
+    /// @param sellDiscountBps  A3T, beta_s: how far below feed-in a SELL may go;
+    ///                         at most 10,000.
     struct Config {
         uint64 maxQtyWh;
         uint64 maxValue;
@@ -62,9 +81,12 @@ contract StaticOrderPolicy is PolicyBase {
         uint32 horizonSeconds;
         uint64 minQtyWh;
         uint32 ratedPowerW;
+        bool tariffBand;
+        uint16 buyMarkupBps;
+        uint16 sellDiscountBps;
     }
 
-    uint256 private constant CONFIG_LENGTH = 9 * 32;
+    uint256 private constant CONFIG_LENGTH = 12 * 32;
 
     mapping(address account => mapping(bytes32 policyId => Config)) private _configs;
     mapping(address account => mapping(bytes32 policyId => bool)) public isConfigured;
@@ -81,8 +103,10 @@ contract StaticOrderPolicy is PolicyBase {
 
     /// @notice Tighter is: a lower maxQtyWh, maxValue, buyCeiling or
     ///         ratedPowerW; a higher sellFloor or minQtyWh; more blocked hours;
-    ///         a shorter horizon. A change that loosens any of them is a WIDEN.
-    ///         INVALID: a zero ratedPowerW, or minQtyWh above maxQtyWh.
+    ///         a shorter horizon; turning the tariff band on, or a lower
+    ///         markup or discount. A change that loosens any of them is a
+    ///         WIDEN. INVALID: a zero ratedPowerW, minQtyWh above maxQtyWh, a
+    ///         sell discount above 100 %.
     function classifyConfig(address account, bytes32 policyId, bytes calldata config)
         external
         view
@@ -91,7 +115,9 @@ contract StaticOrderPolicy is PolicyBase {
     {
         if (config.length != CONFIG_LENGTH) return ConfigChange.INVALID;
         Config memory next = abi.decode(config, (Config));
-        if (next.ratedPowerW == 0 || next.minQtyWh > next.maxQtyWh) return ConfigChange.INVALID;
+        if (next.ratedPowerW == 0 || next.minQtyWh > next.maxQtyWh || next.sellDiscountBps > BPS) {
+            return ConfigChange.INVALID;
+        }
         if (!isConfigured[account][policyId]) return ConfigChange.TIGHTEN;
 
         Config memory current = _configs[account][policyId];
@@ -100,7 +126,8 @@ contract StaticOrderPolicy is PolicyBase {
             || (current.buyBlockedHours & ~next.buyBlockedHours) != 0
             || (current.sellBlockedHours & ~next.sellBlockedHours) != 0
             || next.horizonSeconds > current.horizonSeconds || next.minQtyWh < current.minQtyWh
-            || next.ratedPowerW > current.ratedPowerW;
+            || next.ratedPowerW > current.ratedPowerW || (current.tariffBand && !next.tariffBand)
+            || next.buyMarkupBps > current.buyMarkupBps || next.sellDiscountBps > current.sellDiscountBps;
         return wider ? ConfigChange.WIDEN : ConfigChange.TIGHTEN;
     }
 
@@ -128,7 +155,7 @@ contract StaticOrderPolicy is PolicyBase {
         uint256 broken;
         for (uint256 i = 0; i < legs.length; ++i) {
             if (legs[i].kind != OrderKind.PLACE) continue;
-            broken |= _broken(c, legs[i], ctx);
+            broken |= _broken(account, c, legs[i], ctx);
         }
         r.valueAfter = broken;
         r.verdict = broken == 0 ? Verdict.EXECUTE : Verdict.REJECT;
@@ -139,7 +166,7 @@ contract StaticOrderPolicy is PolicyBase {
     function credit(address, bytes32, Release calldata) external override onlyGate {}
 
     /// @dev The bounds one placement breaks, as a bitmask.
-    function _broken(Config memory c, Order calldata leg, CheckContext calldata ctx)
+    function _broken(address account, Config memory c, Order calldata leg, CheckContext calldata ctx)
         private
         view
         returns (uint256 broken)
@@ -158,5 +185,20 @@ contract StaticOrderPolicy is PolicyBase {
         if ((uint256(blocked) >> hour) & 1 == 1) broken |= A4_TIME_OF_DAY;
 
         if (start <= ctx.time || start > uint256(ctx.time) + c.horizonSeconds) broken |= A6_HORIZON;
+        if (c.tariffBand && _outsideBand(account, c, leg, start, ctx.oracle)) broken |= A3T_TARIFF_BAND;
+    }
+
+    /// @dev A3T. Outside the band, or not judgeable: no usable tariff for the
+    ///      slot. The BUY bound rounds down and the SELL bound up, so neither
+    ///      lets in a unit the exact band would not.
+    function _outsideBand(address account, Config memory c, Order calldata leg, uint64 start, address oracle)
+        private
+        view
+        returns (bool)
+    {
+        (uint64 retail, uint64 feedIn, bool usable) = OracleVerifier(oracle).tariffAt(account, start);
+        if (!usable) return true;
+        if (leg.side == Side.BUY) return leg.price > uint256(retail) * (BPS + c.buyMarkupBps) / BPS;
+        return leg.price < (uint256(feedIn) * (BPS - c.sellDiscountBps) + BPS - 1) / BPS;
     }
 }

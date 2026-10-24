@@ -24,13 +24,18 @@ const KEEPER = 2;
 // each prosumer's BMS only sign, so their keys are past the funded twenty.
 const RELAY = 18;
 const PV_PROVIDER = 19;
+// The retailer that signs the tariff (v0.2 step 3); it only signs.
+const TARIFF_PROVIDER = 21;
 const bmsKeyOf = (i) => 40 + i;
 // `ReadingKind` in OracleVerifier.
 const BMS = 0;
 const PV_FORECAST = 1;
+const TARIFF = 2;
 // How old a reading may be when accepted: the BMS one slot (spec 5.4,
 // tau_soc), the forecast one hour (tau_pv).
 const PV_MAX_AGE = 3600;
+// A day-ahead tariff holds for a day (spec v0.2 section 4).
+const TARIFF_MAX_AGE = 86_400;
 const EXECUTOR_MODULE = 2n;
 const MAX_UINT = 2n ** 256n - 1n;
 
@@ -70,6 +75,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     deliverability: await deploy(OPERATOR, "DeliverabilityPolicy", [gate]),
     cycles: await deploy(OPERATOR, "CyclePolicy", [gate]),
     ramp: await deploy(OPERATOR, "RampPolicy", [gate]),
+    dominated: await deploy(OPERATOR, "DominatedTradePolicy", [gate]),
   };
   log(`gate        ${gate}  (ledger ${ledger}, oracle ${oracle}, decoder ${decoder})`);
   log(`policies    per-action ${policyContracts.statics}, windows ${policyContracts.windows}, quota ${policyContracts.quota}`);
@@ -134,6 +140,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
       const bms = key(bmsKeyOf(i)).address;
       await asAccount(oracle, "OracleVerifier", "setDevice", [BMS, bms, config.slotSeconds]);
       await asAccount(oracle, "OracleVerifier", "setDevice", [PV_FORECAST, key(PV_PROVIDER).address, PV_MAX_AGE]);
+      await asAccount(oracle, "OracleVerifier", "setDevice", [TARIFF, key(TARIFF_PROVIDER).address, TARIFF_MAX_AGE]);
       entry.bms = { address: bms, keyIndex: bmsKeyOf(i) };
 
       // Owner path: the session circuit breaker G1 (v0.2 step 2), when the
@@ -180,6 +187,8 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     oracles: {
       relay: { address: key(RELAY).address, keyIndex: RELAY },
       pvProvider: { address: key(PV_PROVIDER).address, keyIndex: PV_PROVIDER },
+      tariffProvider: { address: key(TARIFF_PROVIDER).address, keyIndex: TARIFF_PROVIDER },
+      tariffMaxAge: TARIFF_MAX_AGE,
       bmsMaxAge: config.slotSeconds,
       pvMaxAge: PV_MAX_AGE,
       // The forecast covers the physical policies' horizon.

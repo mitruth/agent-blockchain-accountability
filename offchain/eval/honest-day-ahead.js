@@ -8,10 +8,13 @@
 // export becomes one order, a BUY for a net import and a SELL for a net
 // export. A net flow below A1's minimum order is carried into the next
 // slot's, until the sum reaches the minimum: an honest agent does not place
-// dust. The orders go in day-ahead batches of at most 24, before the
-// session closes, with the battery reading (the arm replayed) and the PV
-// forecast the policies need. Bob, the counterparty, places the mirror of
-// every order at the same price, so every order fills in full. Then the
+// dust. Each order is priced at the slot's tariff, the outside option (v0.2
+// step 3, decision of 22 October 2026): a BUY at retail, a SELL at feed-in; a
+// slot whose tariff is zero at 1 unit, the market's least price. The orders go
+// in day-ahead batches of at most 24, before the session closes, with the
+// battery reading (the arm replayed), the PV forecast and the tariff the
+// policies need. Bob, the counterparty, places the mirror of every order at
+// the same price, so every order fills in full. Then the
 // matcher finalises the session and a keeper reconciles the ledger.
 //
 // Alice trades under the demo's policies (offchain/deploy/prosumers.json)
@@ -37,14 +40,13 @@ const { useInProcessChain, send, read, calldata, events, now, warpTo, price } = 
 const { deploySystem, loadConfig } = await import("../deploy/index.js");
 const { runMatcher } = await import("../matcher/index.js");
 const { expireUnmatched, reconcile } = await import("../keeper/index.js");
-const { postForecast, bmsReading, batteryAt, forecastAt, armSlots, indexOfDate } = await import("../oracle/index.js");
+const { postForecast, postTariff, bmsReading, batteryAt, forecastAt, tariffAt, armSlots, indexOfDate } = await import("../oracle/index.js");
 const { nextDayAhead, brussels, addDays, wallClock } = await import("../scenarios/calendar.js");
 
 const ELECTRICITY = 0;
 const BATCH = 24;
-// Inside A3's bounds of the demo (sell floor 0.05, buy ceiling 0.50).
-const BUY_PRICE = "0.25";
-const SELL_PRICE = "0.10";
+// StaticOrderPolicy's bits, as its constants name them.
+const STATIC_BITS = { 1: "A1 quantity", 2: "A2 value", 4: "A3 price", 8: "A4 time of day", 16: "A6 horizon", 32: "A1 minimum", 64: "A3T tariff band" };
 
 function option(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
@@ -69,7 +71,8 @@ function honestConfig() {
   return { ...config, agentValidityDays, agentPolicies: { ...config.agentPolicies, omit }, prosumers: [alice, bob] };
 }
 
-const req = (slot, wh, usdPerKWh) => ({ slot, quantity: BigInt(wh), price: price(usdPerKWh) });
+/** An order request at `unitsPerKWh`, at least the market's least price, 1. */
+const req = (slot, wh, unitsPerKWh) => ({ slot, quantity: BigInt(wh), price: BigInt(Math.max(1, unitsPerKWh)) });
 
 async function main() {
   const connection = await useInProcessChain();
@@ -86,7 +89,7 @@ async function main() {
   const MIN_WH = Number(loadConfig().agentPolicies.perAction.minQtyWh ?? 0);
   const tally = {
     policies: alice.policies.map((p) => p.name), days: 0, submissions: 0, orders: 0, rejected: 0, flagged: 0,
-    suspensions: 0, mergedSlots: 0, droppedWh: 0, byPolicy: {},
+    suspensions: 0, mergedSlots: 0, droppedWh: 0, byPolicy: {}, staticBounds: {},
   };
   const count = (policyId, what) => {
     const name = names[policyId.toLowerCase()] ?? policyId;
@@ -116,6 +119,9 @@ async function main() {
     const nowSlot = Math.floor(t / SLOT) * SLOT;
     const horizon = d.oracles.horizonSlots;
     await postForecast(d, "alice", { firstSlotStart: nowSlot, pvWh: forecastAt(alice, dataDate, start, nowSlot, horizon, SLOT), issuedAt: t });
+    const tariff = tariffAt(alice, dataDate, start, nowSlot, horizon, SLOT);
+    await postTariff(d, "alice", { firstSlotStart: nowSlot, ...tariff, issuedAt: t });
+    const ahead = (start - nowSlot) / SLOT; // the delivery day's first slot in the schedule
     let reading = [await bmsReading(d, "alice", nowSlot, batteryAt(alice, dataDate, start, nowSlot))];
 
     // The arm's day, slot by slot, as net orders; Bob mirrors each.
@@ -133,8 +139,8 @@ async function main() {
         continue;
       }
       carry = 0;
-      if (net > 0) bids.push(req(i, net, BUY_PRICE));
-      else if (net < 0) offers.push(req(i, -net, SELL_PRICE));
+      if (net > 0) bids.push(req(i, net, tariff.retail[ahead + i]));
+      else if (net < 0) offers.push(req(i, -net, tariff.feedIn[ahead + i]));
     }
     tally.droppedWh += Math.abs(carry);
 
@@ -153,6 +159,12 @@ async function main() {
       for (const e of events(receipt, "PolicyGate", "PolicyResult")) {
         if (e.args.result.verdict === 2) count(e.args.policyId, "rejected");
         if (e.args.result.verdict === 1) count(e.args.policyId, "flagged");
+        // A1-A6 report which bounds broke, as a bitmask: count each.
+        if (e.args.result.verdict === 2 && names[e.args.policyId.toLowerCase()] === "A1-A6 per action") {
+          for (const [bit, bound] of Object.entries(STATIC_BITS)) {
+            if ((e.args.result.valueAfter & BigInt(bit)) !== 0n) tally.staticBounds[bound] = (tally.staticBounds[bound] ?? 0) + 1;
+          }
+        }
       }
       tally.suspensions += events(receipt, "SessionBreaker", "AgentSuspended").length;
     }

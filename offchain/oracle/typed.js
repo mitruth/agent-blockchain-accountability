@@ -6,7 +6,7 @@ import { encodeAbiParameters } from "viem";
 import { key } from "../chain/index.js";
 
 /** `ReadingKind` in the contract. */
-export const KIND = { BMS: 0, PV_FORECAST: 1 };
+export const KIND = { BMS: 0, PV_FORECAST: 1, TARIFF: 2 };
 
 export const TYPES = {
   BmsReading: [
@@ -21,6 +21,14 @@ export const TYPES = {
     { name: "firstSlotStart", type: "uint64" },
     { name: "slotSeconds", type: "uint32" },
     { name: "pvWh", type: "uint64[]" },
+  ],
+  TariffSchedule: [
+    { name: "account", type: "address" },
+    { name: "issuedAt", type: "uint64" },
+    { name: "firstSlotStart", type: "uint64" },
+    { name: "slotSeconds", type: "uint32" },
+    { name: "retail", type: "uint64[]" },
+    { name: "feedIn", type: "uint64[]" },
   ],
 };
 
@@ -65,4 +73,24 @@ export async function signForecast(keyIndex, chainId, verifier, forecast) {
     domain: domain(chainId, verifier), types: { PvForecast: TYPES.PvForecast }, primaryType: "PvForecast", message,
   });
   return { kind: KIND.PV_FORECAST, data: encodeAbiParameters([asTuple(TYPES.PvForecast)], [message]), signature };
+}
+
+/**
+ * A tariff schedule signed with the test key at `keyIndex` (spec v0.2
+ * section 4): retail and feed-in per slot, token units per kWh.
+ * @param schedule { account, issuedAt, firstSlotStart, slotSeconds, retail: [], feedIn: [] }, integers
+ */
+export async function signTariff(keyIndex, chainId, verifier, schedule) {
+  const message = {
+    account: schedule.account,
+    issuedAt: BigInt(schedule.issuedAt),
+    firstSlotStart: BigInt(schedule.firstSlotStart),
+    slotSeconds: Number(schedule.slotSeconds),
+    retail: schedule.retail.map(BigInt),
+    feedIn: schedule.feedIn.map(BigInt),
+  };
+  const signature = await key(keyIndex).signTypedData({
+    domain: domain(chainId, verifier), types: { TariffSchedule: TYPES.TariffSchedule }, primaryType: "TariffSchedule", message,
+  });
+  return { kind: KIND.TARIFF, data: encodeAbiParameters([asTuple(TYPES.TariffSchedule)], [message]), signature };
 }

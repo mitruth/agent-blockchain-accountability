@@ -6,7 +6,8 @@ built, and v0.2 step 1 of 8 (`docs/spec/policy-spec-v0.2-gap-policies.md`,
 Section 11.6): A1's rated-power term and minimum order, S3's floor by hour of
 day, positions summed on one slot grid across markets, the tariff, meter,
 envelope and grid-state oracles, and distinct trust anchors. Step 2 adds the session circuit
-breaker G1 and the recipient lock A9, both in the gate.
+breaker G1 and the recipient lock A9, both in the gate. Step 3 adds the
+tariff-relative price band A3T and the dominated-trade budget S7.
 
 
 | For                                     | Read                                 |
@@ -53,8 +54,8 @@ v0.2 (Section 11.6 of its spec), one branch per step:
 | Step | Content | Status |
 | ---- | ------- | ------ |
 | 1 | C1–C5, the four new oracle kinds, signer distinctness | **Committed** `7b4c8d7` (`v0.2/1-oracles-aggregation`) |
-| 2 | G1 session circuit breaker, A9 recipient lock | **Built and passing** (`v0.2/2-breaker-recipient`) |
-| 3 | Tariff-relative price band A3T, dominated-trade budget S7 | Not started |
+| 2 | G1 session circuit breaker, A9 recipient lock | **Committed** `9bc3c52` (`v0.2/2-breaker-recipient`) |
+| 3 | Tariff-relative price band A3T, dominated-trade budget S7 | **Built and passing** (`v0.2/3-tariff-band`) |
 | 4 | Same-slot round-trip quota S8 | Not started |
 | 5 | Delivery reconciliation S9, `poke`, calibration | Not started |
 | 6 | Operating envelope S10 | Not started |
@@ -82,7 +83,11 @@ crossing is flagged and goes ahead; released volume is credited back.
 - **The policies of step 4**, in `contracts/policies/`:
   - `StaticOrderPolicy`, the per-action bounds A1 to A4 and A6: quantity
   (at most min(maxQtyWh, rated power × slot length), at least minQtyWh),
-  value, price floor and ceiling, blocked hours, horizon.
+  value, price floor and ceiling, blocked hours, horizon; and, when the owner
+  turns it on, A3T, a band around the signed tariff of the order's slot (v0.2
+  step 3).
+  - `DominatedTradePolicy`, S7 (v0.2 step 3): over a sliding week, the value
+  given away by buying above retail or selling below feed-in.
   - `WindowPolicy`, S1 (the owner's budget, BUY value) and S2 (the export and
   import caps, Wh), on `WindowLib`.
   - `CancelQuotaPolicy`, S6: cancelled volume weighted near the gate, the
@@ -657,6 +662,7 @@ configuration.
 | `WindowLib.sol`         | A quantity counted over time, in five classes behind one interface: `used`, `limit`, `fits`, `add`, `credit`. Sliding windows are a ring of 64-bit buckets packed four to a storage word, with a running total and an O(1) reset after a long idle gap |
 | `PolicyBase.sol`        | What every policy shares: the gate's address and the "only the gate" check                                                                                                                                                                             |
 | `StaticOrderPolicy.sol` | A1 to A4 and A6, each order on its own; the result reports the bounds broken as a bitmask                                                                                                                                                              |
+| `DominatedTradePolicy.sol` | S7: the value given away against the tariff, per placement at its limit price, on a `WindowLib` window; keeps each placement's excess for its credit |
 | `WindowPolicy.sol`      | S1, the budget (BUY value), and S2, the export and import caps (Wh), on a `WindowLib` window per instance                                                                                                                                              |
 | `CancelQuotaPolicy.sol` | S6: cancelled Wh weighted near the gate, the cancel-to-place ratio, the message count                                                                                                                                                                  |
 | `DeliverabilityPolicy.sol` | S3: the battery projected over the horizon from its signed reading, against the floor, the ceiling and the power limits                                                                                                                             |
@@ -1080,6 +1086,28 @@ the gate.
 
 
 
+### `test/policies/TariffBand.t.sol`: 13 tests
+
+v0.2, A3T, on the mock market against a signed tariff (retail 0.20, feed-in
+0.08): each bound at its edge and its rounding (β 3.33 %), a β per side, A3
+alongside, no tariff, a stale one to the second, a slot beyond the schedule, a
+cancellation never checked, and every configuration direction. **The price
+walk** (spec §7): twelve bids each 3 % above the last; the band stops the
+fifth, and under A3 alone all twelve pass.
+
+
+### `test/policies/DominatedTradePolicy.t.sol`: 21 tests
+
+v0.2, S7, against the same tariff, a 1 USD week: the amount per side, rounded
+up, zero inside the corridor; the soft bound (at it, unflagged; above it,
+flagged) and the cap; D10; credits on
+cancel, partial fill and expiry, to the placement's bucket, unchanged by a new
+tariff, kept apart for two orders in one block; the week sliding; no tariff
+refused; configuration; gas. **The collusive transfer** (spec §7): sales just
+inside A3T's band but under feed-in; S7 stops the 26th, and with S7 removed
+all 30 pass.
+
+
 ### `test/policies/WindowPolicy.t.sol`: 10 tests
 
 S1 and S2 through the gate, on sliding windows of 24 one-hour buckets.
@@ -1366,15 +1394,15 @@ npm install
 
 ### The Hardhat suite
 
-Expect **509 passing** in about three minutes:
+Expect **544 passing** in about three minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
   market, 8 ledger, 15 policy phases, 16 readings, 13 multi-market, 22 circuit breaker, 16 recipient lock;
 - the oracle verifier: 35, and 35 for the v0.2 kinds;
 - the market: 23 token, 41 market flow, 15 gated market, 6 settlement rule;
-- the windows and the policies: 32 `WindowLib`, 19 `StaticOrderPolicy`, 11
-  `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
-  `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 21 step 5 acceptance
+- the windows and the policies: 32 `WindowLib`, 19 `StaticOrderPolicy`, 13
+  tariff band, 21 `DominatedTradePolicy`, 11 `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
+  `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 22 step 5 acceptance
   (attacks and gas).
 
 ```bash
@@ -1386,7 +1414,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **517 passed**: the 509 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 21 October, at the end of v0.2 step 1: 477 passed (469 + 8).
+Expect **552 passed**: the 544 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 24 October, at the end of v0.2 step 3: 552 passed.
 
 With Foundry installed and allowed to run:
 
@@ -1430,7 +1458,7 @@ and `test_gateIsNeverATargetWhateverTheCall`. Put the line back.
 
 ### The JavaScript tests
 
-Expect **33 passing** in a few seconds, after a build:
+Expect **45 passing** in a few seconds, after a build:
 
 - the verifier's definitions, the matcher's rule and the dataset's decimal
   reading, with no chain;
@@ -1493,6 +1521,13 @@ verifier's replay of the event log; it must end "no disagreement":
 npm run verify:breaker
 ```
 
+A3T and S7 (v0.2 step 3): the band, the dominated amounts and every credit,
+against the verifier's own arithmetic; it must end "no disagreement":
+
+```bash
+npm run verify:price
+```
+
 The honest arm through the gate, every data day (v0.2 step 2: G1 must never
 suspend it). About two hours per arm; `--days` shortens it, `--full` keeps S3
 and S4:
@@ -1514,31 +1549,37 @@ the contract back. Every defect must make a test fail. While it runs, the
 contract files change on disk: do not edit contracts or run other builds
 until it ends. Only one run can be alive at a time.
 
-First, check that every defect still points at real code (instant):
+The tests run in Foundry's Docker image, so Docker Desktop must be running;
+the runner never starts it, and stops with a message if it is down. About 20
+seconds a defect, against 70 to 90 under Hardhat 3, which spends about a
+minute on any run with a failing test, and every caught defect has one
+(measured on 24 October 2026).
+
+First, check that every defect still points at real code (instant, no
+Docker):
 
 ```bash
 npm run mutate -- --check
 ```
 
-One catalogue: `gate`, `ledger`, `market` or `window`. The window catalogue
-is also run against the verifier, about 30 seconds a defect:
+One catalogue, for example `price`; `--only` takes the defects whose name
+contains a string. The window catalogue is also run against the verifier:
 
 ```bash
-npm run mutate -- window
+npm run mutate -- price --only "S7 "
 ```
 
-Every catalogue that runs under Hardhat, with a written report. About three
-hours:
+Every catalogue, including the real accounts, with a written report:
 
 ```bash
 npm run mutate -- --report docs/reports/mutation.md
 ```
 
-The real-account catalogue needs Foundry, so Docker Desktop must be running.
-It runs only when asked for by name:
+Without Docker, `--hardhat` runs the tests under Hardhat instead, about five
+times slower; the real-account catalogue needs Foundry and is then skipped:
 
 ```bash
-npm run mutate -- accounts --docker
+npm run mutate -- price --hardhat
 ```
 
 `npm run mutate -- --list` shows the catalogues, and the spec's defects that

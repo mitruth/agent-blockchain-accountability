@@ -9,6 +9,7 @@
 //               names one (Alice: "replay": "B2"), otherwise the home's
 //               battery from its initial charge
 //   forecastAt  the PV forecast from t, summed to the market's slot length
+//   tariffAt    the HEMS tariff from t, retail and feed-in per market slot
 
 import { Battery, replayArm } from "./battery.js";
 import { pvForecast } from "./forecast.js";
@@ -34,6 +35,30 @@ export function batteryAt(p, dataDate, dayStart, t) {
     return { ...states[i], source: `arm ${p.replay} of ${p.home}, replayed` };
   }
   return { ...new Battery(homeParams(p.home), DATA_SLOT_SECONDS).state(), source: `${p.home}, initial charge` };
+}
+
+/**
+ * `count` market slots of tariff for prosumer `p` from market time `t`, as the
+ * honest arms saw it (data/arms/, B2's log: every arm ran on the same prices),
+ * in token units per kWh. A market slot longer than the data's takes the mean,
+ * rounded up. { retail: [], feedIn: [] }.
+ */
+export function tariffAt(p, dataDate, dayStart, t, count, slotSeconds) {
+  const i = dataIndexAt(p.home, dataDate, dayStart, t);
+  const perSlot = slotSeconds / DATA_SLOT_SECONDS;
+  const slots = once(`replay ${p.home} prices`, () => armSlots("B2", p.home));
+  const mean = (field, k) => {
+    let sum = 0;
+    for (let j = 0; j < perSlot; j++) sum += Number(slots[Math.min(i + k * perSlot + j, slots.length - 1)][field]);
+    return Math.ceil(sum / perSlot);
+  };
+  const retail = [];
+  const feedIn = [];
+  for (let k = 0; k < count; k++) {
+    retail.push(mean("importPriceMicroUsdPerKwh", k));
+    feedIn.push(mean("exportPriceMicroUsdPerKwh", k));
+  }
+  return { retail, feedIn };
 }
 
 /** `count` market slots of PV forecast for prosumer `p` from market time `t`, in `mode`. */

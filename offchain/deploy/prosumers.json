@@ -8,13 +8,15 @@
     "perAction": {
       "maxQtyWh": 5000,
       "maxValueUSD": "5",
-      "sellFloorUSD": "0.05",
-      "buyCeilingUSD": "0.50",
+      "sellFloorUSD": "0.001",
+      "buyCeilingUSD": "2.50",
       "horizonHours": 72,
       "minQtyWh": 50,
-      "ratedPowerW": 10000
+      "ratedPowerW": 10000,
+      "tariffBand": { "buyMarkupPercent": 10, "sellDiscountPercent": 10 }
     },
     "budget": { "softUSD": "5.6", "capUSD": "7", "hours": 24 },
+    "dominated": { "softUSD": "0.5", "capUSD": "1", "days": 7, "bucketHours": 1 },
     "exportImport": { "exportWh": 30000, "importWh": 40000, "hours": 24 },
     "cancelQuota": {
       "minutes": 60,

@@ -1,0 +1,46 @@
+{
+  "arm": "B0",
+  "firstDay": "2022-01-02",
+  "full": false,
+  "minQtyWh": 50,
+  "policies": [
+    "A1-A6 per action",
+    "S7 dominated trades",
+    "S1 budget",
+    "S2 export",
+    "S2 import",
+    "S6 cancel quota",
+    "S5 ramp"
+  ],
+  "days": 363,
+  "submissions": 868,
+  "orders": 13303,
+  "rejected": 235,
+  "flagged": 207,
+  "suspensions": 0,
+  "mergedSlots": 274,
+  "droppedWh": 27,
+  "byPolicy": {
+    "S5 ramp": {
+      "rejected": 139,
+      "flagged": 200
+    },
+    "S2 import": {
+      "rejected": 7,
+      "flagged": 0
+    },
+    "A1-A6 per action": {
+      "rejected": 98,
+      "flagged": 0
+    },
+    "S1 budget": {
+      "rejected": 24,
+      "flagged": 8
+    }
+  },
+  "staticBounds": {
+    "A3T tariff band": 10,
+    "A3 price": 85,
+    "A2 value": 3
+  }
+}

@@ -3421,6 +3421,224 @@ Dan's decision (v0.2-2.1, 6): G1's run leaves out S3 and S4.
 
 ---
 
+## v0.2 Step 3. A3T, the tariff-relative price band; S7, the dominated-trade budget
+
+Spec: `docs/spec/policy-spec-v0.2-gap-policies.md`, §5 A3T and S7; build
+order 11.6 step 3. Branch `v0.2/3-tariff-band`, from `9bc3c52`.
+
+### v0.2-3.1 — Dan's answers (22 October)
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | How the honest agent prices, now that prices are judged against the tariff | **At the tariff**: a BUY at retail, a SELL at feed-in, the outside options; a zero tariff at 1 unit, the market's least price |
+| 2 | The demo's absolute A3 bounds (0.05 to 0.50) do not fit the HEMS tariff (feed-in mostly below 0.05, retail up to 2.00) | **Widened** to a backstop, 0.001 to 2.50; A3T does the real check |
+| 3 | A3T and S7 in the demo? | **On** |
+| 4 | The demo's data day has seven midday slots with a zero retail tariff, and its S1 steps are tuned to prices near 0.25 | The demo posts a **synthetic flat tariff**, retail 0.28 and feed-in 0.16, matching its prices; the HEMS tariff is for the honest replay and step 8 |
+
+### v0.2-3.2 — A3T in `StaticOrderPolicy`
+
+- **Config** gains `tariffBand`, `buyMarkupBps` (β_b) and `sellDiscountBps`
+  (β_s, at most 10,000), at the end of the struct.
+- **Per PLACE leg, with the band on,** against the tariff of the leg's slot
+  (`OracleVerifier.tariffAt`):
+  - BUY: price ≤ floor(r × (10,000 + β_b) / 10,000);
+  - SELL: price ≥ ceil(f × (10,000 − β_s) / 10,000).
+  - Each bound rounds toward the stricter side.
+- **A new bit, `A3T_TARIFF_BAND = 64`,** marks a broken band, or a slot with no
+  usable tariff (no schedule, a stale one, a slot outside it): unjudgeable,
+  so the leg is rejected.
+- A3's absolute bounds still apply; cancellations are never checked (D10).
+- **Direction:**
+  - TIGHTEN: the band turned on, a lower β.
+  - WIDEN: the band turned off, a higher β.
+  - INVALID: β_s above 10,000.
+
+### v0.2-3.3 — S7: `DominatedTradePolicy`
+
+- **What it counts,** per PLACE leg at its limit price, rounded up:
+  - BUY: max(0, price − r) × qty / 1000;
+  - SELL: max(0, f − price) × qty / 1000.
+- **The window** is a `WindowLib` window: SLIDING, a week of hourly buckets,
+  cap L 1 USD, soft S 0.50. Verdicts are as for `WindowPolicy`. With no usable
+  tariff the submission is rejected (`valueAfter` = 2^256 − 1).
+- **Credits (D2).** The tariff may change between placement and release, so S7
+  keeps the excess per kWh it charged, keyed by (market, slot, side, price,
+  placedAt), which the release carries. The credit is
+  ceil(excess × qty / 1000) − ceil(excess × filled / 1000), to the placement's
+  bucket.
+  - Two orders with the same key were judged against the same tariff, so one
+    entry serves both.
+  - An entry is never deleted (one storage word per distinct placement),
+    where the plan said deleted on close. A shared entry would otherwise need
+    a reference count.
+- **Events.** `Charged` (the excess and amount, at commit) and `Credited`, so
+  the verifier can replay both.
+- **Stated limitation:** a transfer to a colluder at prices inside the
+  corridor [f, r] looks like any bargain. S7 bounds the transfer outside it.
+
+### v0.2-3.4 — Off-chain
+
+- **Tariff signing and relay.** `typed.js` gains `signTariff`; `relay.js`,
+  `postTariff`; `play.js`, `tariffAt`, which reads the HEMS series (B2's log:
+  every arm ran on the same prices).
+- **Deploy.**
+  - A tariff signer at key 21, registered for every agent account with a 24 h
+    maximum age.
+  - `DominatedTradePolicy`; `perAction.tariffBand` (10 % each side); the
+    "S7 dominated trades" instance.
+  - The absolute bounds widened to 0.001 and 2.50.
+- **Demo.** Step 2 posts the synthetic tariff. New step 5b:
+  - Alice's bid at 0.32 is refused by A3T (retail + 10 % = 0.308; A3 alone
+    would allow it);
+  - Carol's offer at 0.15, under feed-in 0.16 but inside the band, is placed,
+    and S7 counts 0.005 given away.
+- **Honest runner:** prices at the tariff, and posts it daily.
+
+### v0.2-3.5 — Tests
+
+- `test/policies/TariffBand.t.sol`, 13 tests:
+  - each bound at its edge, with odd β (3.33 %) so the rounding direction
+    shows;
+  - a β per side;
+  - A3 alongside;
+  - no tariff, a stale one (to the second), a slot beyond the schedule;
+  - a cancellation never checked;
+  - configuration.
+  - **The price walk** (spec §7): twelve bids, each 3 % above the last. The
+    band stops the fifth (1.03⁴ = 1.126 > 1.10); under A3 alone all twelve
+    pass.
+- `test/policies/DominatedTradePolicy.t.sol`, 21 tests:
+  - the amount per side, rounded up, and zero inside the corridor;
+  - the soft bound (at it, unflagged; above it, flagged); the cap, inclusive;
+  - D10;
+  - credits on cancel, partial fill and expiry, to the placement's bucket two
+    hours on, and unchanged by a new tariff;
+  - two orders in one block keep their own excess;
+  - the week slides; no tariff is a refusal; configuration; gas.
+  - **The collusive transfer** (spec §7): 5 kWh sold again and again at 0.0721,
+    inside A3T's band (0.072) but under feed-in. S7 stops the 26th sale, at
+    987,500 given away; with S7 removed all 30 pass.
+
+### v0.2-3.6 — The verifier recomputes A3T and S7
+
+- `offchain/verifier/price.js` rebuilds each placement's band and dominated
+  amount from the accepted tariffs and the decoded legs.
+  - **A3T** is compared exactly, by cross-multiplication, not with the
+    contract's rounded bounds.
+  - **S7's window** is counted by brute force over every placement
+    (`windows.js`), and each credit is recomputed from the placement's own
+    excess.
+- `npm run verify:price` runs random tariffs (some going stale, some short),
+  prices from 70 % to 130 % of the reference, partial fills and releases, and
+  waits up to 30 hours. Five tampered logs must be rejected.
+- Harness: `ProbeMarket` and `ProbeDecoder` gain `place(side, slot, qty,
+  price)` and a scripted fill.
+
+### v0.2-3.7 — Gas
+
+`docs/reports/gas-v0.2-step3-2026-10-23.md`.
+- **One bid:** S7 adds about 32,000 to a dominated bid (the window write and
+  the stored excess), and nothing to a bid at the tariff.
+- **A3T's warm cost** in a test is 102 gas. A Solidity test is one
+  transaction, so the tariff is already warm; a real, cold lookup costs
+  several thousand more. The report says so.
+- **The day-ahead batch** of 24 offers at k = 48 under every policy, with A3T
+  on and S7 counting every leg (the worst case): 11,365,148, +5.3 % over the
+  same batch without them. Under EIP-7825's cap.
+- **Sizes:** StaticOrderPolicy 6,528 bytes; DominatedTradePolicy 10,820;
+  PolicyGate unchanged.
+
+**The demo, on an in-process chain** (deploy and `day-ahead.js`, 23 October):
+- step 5's bid at 0.40 is refused by A3T as well as S1, S3 and S5;
+- step 5b refuses a bid at 0.32 by A3T alone, and places Carol's offer at
+  0.15, which S7 counts as 0.005 given away;
+- a 24-leg agent batch under every policy costs 10.8 M gas;
+- the ledger and the market agree in every slot; settlement and balances are
+  as before.
+
+### v0.2-3.8 — Honest arms at the tariff
+
+`offchain/eval/honest-day-ahead.js`, run 24 October. Command:
+`node offchain/eval/honest-day-ahead.js --arm <B0|B2> --report docs/reports/honest-price-<arm>-2026-10-22.json`.
+
+**The setup** is as in v0.2-2.7: home_01, 363 market days of 2022 per arm, the
+arm's net grid flow per slot in day-ahead batches, flows under A1's 50 Wh
+carried into the next order. Two changes:
+- **The prices.** Each order is priced at the slot's HEMS tariff (BUY at
+  retail, SELL at feed-in, 1 unit where it is 0). The tariff is posted, signed,
+  every day.
+- **The policies:** A1–A6 with A3T on (10 % each side), S7, S1, S2 export and
+  import, S6, S5. S3 and S4 are left out, as before.
+
+**Result.**
+
+| | B0 | B2 |
+|---|---:|---:|
+| Submissions | 868 | 951 |
+| Orders | 13,303 | 15,226 |
+| Suspensions (G1) | 0 | 0 |
+| Submissions rejected | 235 (27.1 %) | 304 (32.0 %) |
+| Submissions flagged | 207 | 269 |
+| Rejected by S5 / A1–A6 / S1 / S2 import | 139 / 98 / 24 / 7 | 196 / 117 / 23 / 11 |
+| A1–A6's refusals by bound: A3 price / A3T band / A2 value | 85 / 10 / 3 | 51 / 65 / 1 |
+| **Counted by S7** | **0** | **0** |
+
+Against step 2 (BUY at 0.25, SELL at 0.10): S1 refuses far less (B0 89 → 24),
+as the tariff's median retail price is 0.067. A1–A6 now refuse (B0 0 → 98).
+
+**What it shows.**
+- **S7 counts nothing for an honest agent.** Priced at the tariff, it gives
+  nothing away. The acceptance holds.
+- **The price policies refuse an honest agent at the bottom of the tariff.**
+  The 2022 tariff is 0 in 467 of 17,520 half-hours, and feed-in is above 0 but
+  under 0.001 in 153 more.
+  - A3T: where retail is 0, the band above it is 0, and the least price is 1
+    unit. Every BUY there is refused.
+  - A3: the absolute sell floor of 0.001 (v0.2-3.1) is above feed-in in those
+    620 half-hours, and the agent offers at feed-in. A3's 2.50 ceiling is above
+    every retail price, so these are A3's only refusals.
+  - **Open, for Dan:** either a band with a floor of its own (for example,
+    the band never below one unit, or a small absolute allowance beside β),
+    or the agent not trading in such slots. The spec is silent; the code is
+    left as specified.
+- S5 and S1 remain the honest arms' main refusals, as at step 2 (step 8's
+  calibration).
+
+### v0.2-3.9 — Checked
+
+**Mutation** (targeted, as in v0.2-1.9):
+- New catalogue `price`, 30 mutants: each A3T bound at its edge and its
+  rounding, the β per side, an unjudgeable slot, the band off and on, every
+  configuration direction; S7's amount per side and its rounding, no tariff,
+  the soft bound and the cap, the window, the stored excess and its key, the
+  credit's size and bucket, configuration.
+- At first 29 caught. The survivor, **"S7 flags at the soft bound"** (`>=` for
+  `>`): no test placed exactly 500,000. `test_atTheSoftBoundIsNotFlagged`
+  added. Caught: **30 of 30**.
+- Two `policies` mutants whose patterns this step moved (A1's rated power,
+  A1's minimum above the maximum), re-pointed and re-run: caught.
+- `npm run mutate -- --check`: every pattern found once in all ten catalogues.
+
+**The runner now uses Foundry.** A Hardhat 3 run with a failing test costs
+about a minute more than a passing one (71–87 s against 17 s for the S7
+tests), and every caught mutant has a failing test. In Foundry's Docker image
+a mutant takes 17–22 s, failing or not, and the failure counts match
+Hardhat's. Dan agreed on 24 October. `npm run mutate` now runs every
+catalogue in Docker (the runner never starts it); `--hardhat` keeps the old
+way.
+
+**Runs, 24 October:**
+- `npm test`: **544 passing** (step 2: 509).
+- Foundry in Docker, the four real accounts included: **552 passed**.
+- `npm run test:offchain`: **45 passing**.
+- `npm run verify:price`: 204 submissions, 89 tariffs, 21 credits; 1,111
+  figures compared, no disagreement; 5 of 5 tamperings caught.
+- `npm run verify:breaker`: 1,035 figures, 37 suspensions, no disagreement.
+- `npm run verify:ledger`: 1,280 totals, no disagreement.
+- `npm run verify:window`: 42 windows, 6,875 figures, no disagreement.
+
+---
+
 ## Open decisions
 
 None left. Dan answered every item on 16 October (log 4.9); the table keeps the questions and records the answers.

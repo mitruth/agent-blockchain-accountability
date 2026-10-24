@@ -36,7 +36,15 @@ const STATIC_CONFIG = {
     { name: "horizonSeconds", type: "uint32" },
     { name: "minQtyWh", type: "uint64" },
     { name: "ratedPowerW", type: "uint32" },
+    { name: "tariffBand", type: "bool" },
+    { name: "buyMarkupBps", type: "uint16" },
+    { name: "sellDiscountBps", type: "uint16" },
   ],
+};
+
+const DOMINATED_CONFIG = {
+  type: "tuple",
+  components: [{ name: "soft", type: "uint64" }, { ...WINDOW, name: "window" }],
 };
 
 const WINDOW_CONFIG = {
@@ -102,8 +110,8 @@ function sliding(hours, cap, bucketSeconds = 3600) {
 
 /**
  * The instances to add for one agent: [{ contract, id, name, config }], where
- * `contract` is "statics", "windows", "quota", "deliverability", "cycles" or
- * "ramp", and `config` the encoded bytes. `battery` is the prosumer's, from
+ * `contract` is "statics", "windows", "quota", "dominated", "deliverability",
+ * "cycles" or "ramp", and `config` the encoded bytes. `battery` is the prosumer's, from
  * prosumers.json; without one, the physical policies are left out.
  */
 export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
@@ -122,8 +130,25 @@ export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
       horizonSeconds: a.horizonHours * 3600,
       minQtyWh: BigInt(a.minQtyWh),
       ratedPowerW: a.ratedPowerW,
+      // A3T (v0.2 step 3), against the signed tariff, when "tariffBand" names it.
+      tariffBand: Boolean(a.tariffBand),
+      buyMarkupBps: Math.round((a.tariffBand?.buyMarkupPercent ?? 0) * 100),
+      sellDiscountBps: Math.round((a.tariffBand?.sellDiscountPercent ?? 0) * 100),
     }]),
   });
+
+  // S7 (v0.2 step 3): the value given away against the tariff, over a sliding
+  // window, when "dominated" names it.
+  const dt = p.dominated;
+  if (dt) {
+    out.push({
+      contract: "dominated",
+      name: "S7 dominated trades",
+      config: encodeAbiParameters([DOMINATED_CONFIG], [{
+        soft: price(dt.softUSD), window: sliding(dt.days * 24, price(dt.capUSD), (dt.bucketHours ?? 1) * 3600),
+      }]),
+    });
+  }
 
   const b = p.budget;
   out.push({
