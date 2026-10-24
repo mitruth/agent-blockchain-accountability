@@ -663,6 +663,7 @@ configuration.
 | `PolicyBase.sol`        | What every policy shares: the gate's address and the "only the gate" check                                                                                                                                                                             |
 | `StaticOrderPolicy.sol` | A1 to A4 and A6, each order on its own; the result reports the bounds broken as a bitmask                                                                                                                                                              |
 | `DominatedTradePolicy.sol` | S7: the value given away against the tariff, per placement at its limit price, on a `WindowLib` window; keeps each placement's excess for its credit |
+| `RoundTripPolicy.sol` | S8: Wh bought and sold in the same slot, min(committed buy, committed sell) from the ledger across every market, counted when created on a `WindowLib` window; no credits |
 | `WindowPolicy.sol`      | S1, the budget (BUY value), and S2, the export and import caps (Wh), on a `WindowLib` window per instance                                                                                                                                              |
 | `CancelQuotaPolicy.sol` | S6: cancelled Wh weighted near the gate, the cancel-to-place ratio, the message count                                                                                                                                                                  |
 | `DeliverabilityPolicy.sol` | S3: the battery projected over the horizon from its signed reading, against the floor, the ceiling and the power limits                                                                                                                             |
@@ -1108,6 +1109,18 @@ inside A3T's band but under feed-in; S7 stops the 26th, and with S7 removed
 all 30 pass.
 
 
+### `test/policies/RoundTripPolicy.t.sol`: 16 tests
+
+v0.2, S8, a 1 kWh day of half-hour buckets, flagged above 0.5 kWh: the
+overlap per slot, only the smaller side, nothing across slots; a modification
+counts only what it adds; the soft bound and the cap; D10; no credit, and the
+same volume traded again counts again; the day sliding; configuration; gas.
+**Churn split across two markets** (spec §7): buy on one, sell the same slot
+on the other, cancel, repeat; S8 stops the sixth round, and with S8 removed
+all ten pass. **A single correction passes** (spec §11.6): 400 Wh sold back
+into a slot that bought 3 kWh.
+
+
 ### `test/policies/WindowPolicy.t.sol`: 10 tests
 
 S1 and S2 through the gate, on sliding windows of 24 one-hour buckets.
@@ -1394,15 +1407,15 @@ npm install
 
 ### The Hardhat suite
 
-Expect **544 passing** in about three minutes:
+Expect **562 passing** in about three minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
   market, 8 ledger, 15 policy phases, 16 readings, 13 multi-market, 22 circuit breaker, 16 recipient lock;
 - the oracle verifier: 35, and 35 for the v0.2 kinds;
 - the market: 23 token, 41 market flow, 15 gated market, 6 settlement rule;
 - the windows and the policies: 32 `WindowLib`, 19 `StaticOrderPolicy`, 13
-  tariff band, 21 `DominatedTradePolicy`, 11 `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
-  `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 22 step 5 acceptance
+  tariff band, 21 `DominatedTradePolicy`, 16 `RoundTripPolicy`, 11 `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
+  `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 24 step 5 acceptance
   (attacks and gas).
 
 ```bash
@@ -1414,7 +1427,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **552 passed**: the 544 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 24 October, at the end of v0.2 step 3: 552 passed.
+Expect **570 passed**: the 562 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 24 October, at the end of v0.2 step 4: 570 passed.
 
 With Foundry installed and allowed to run:
 
@@ -1458,7 +1471,7 @@ and `test_gateIsNeverATargetWhateverTheCall`. Put the line back.
 
 ### The JavaScript tests
 
-Expect **45 passing** in a few seconds, after a build:
+Expect **48 passing** in a few seconds, after a build:
 
 - the verifier's definitions, the matcher's rule and the dataset's decimal
   reading, with no chain;
@@ -1526,6 +1539,13 @@ against the verifier's own arithmetic; it must end "no disagreement":
 
 ```bash
 npm run verify:price
+```
+
+S8 (v0.2 step 4): the round trips, from the ledger's own events, on two
+markets; it must end "no disagreement", with six of six tamperings caught:
+
+```bash
+npm run verify:roundtrip
 ```
 
 The honest arm through the gate, every data day (v0.2 step 2: G1 must never

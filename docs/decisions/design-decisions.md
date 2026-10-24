@@ -3544,7 +3544,9 @@ order 11.6 step 3. Branch `v0.2/3-tariff-band`, from `9bc3c52`.
   several thousand more. The report says so.
 - **The day-ahead batch** of 24 offers at k = 48 under every policy, with A3T
   on and S7 counting every leg (the worst case): 11,365,148, +5.3 % over the
-  same batch without them. Under EIP-7825's cap.
+  same batch without them. Under EIP-7825's cap. **Corrected in v0.2-4.6:**
+  the test's tariff left every offer above feed-in, so S7 counted nothing;
+  the worst case is 12,001,954, +11.2 %.
 - **Sizes:** StaticOrderPolicy 6,528 bytes; DominatedTradePolicy 10,820;
   PolicyGate unchanged.
 
@@ -3633,6 +3635,175 @@ way.
 - `npm run test:offchain`: **45 passing**.
 - `npm run verify:price`: 204 submissions, 89 tariffs, 21 credits; 1,111
   figures compared, no disagreement; 5 of 5 tamperings caught.
+- `npm run verify:breaker`: 1,035 figures, 37 suspensions, no disagreement.
+- `npm run verify:ledger`: 1,280 totals, no disagreement.
+- `npm run verify:window`: 42 windows, 6,875 figures, no disagreement.
+
+---
+
+## v0.2 Step 4. S8, the same-slot round-trip quota
+
+Spec: `docs/spec/policy-spec-v0.2-gap-policies.md`, §5 S8; build order 11.6
+step 4. Branch `v0.2/4-round-trip`, from `2afdd4e`.
+
+### v0.2-4.1 — The plan
+
+No new questions: the spec fixes S8's quantity, verdicts and credits, and D21
+its defaults. The plan Dan approved: a new `RoundTripPolicy` reading the
+ledger's committed positions, a SLIDING window of one-slot buckets, no
+credits; the two acceptance tests of 11.6; deploy, verifier, honest replay,
+mutants and gas as for step 3.
+
+### v0.2-4.2 — S8: `RoundTripPolicy`
+
+- **The amount of a submission.** For each slot its legs touch, from the
+  ledger's `positionOf` (summed over every market of the account, C4):
+  - before = min(committed buy, committed sell);
+  - after = the same with the submission's PLACE legs added and its CANCEL
+    legs taken away. A modification is both, as every decoder reports it.
+    A CANCEL leg carries the market's unfilled rest, which is what the ledger
+    releases;
+  - the amount is Σ max(0, after − before), over the distinct slots.
+- **Verdicts,** as `WindowPolicy`: EXECUTE when the amount is 0 (D10: a
+  cancellation or reduction always passes, unflagged); REJECT when it does not
+  fit the cap H; FLAG above the soft bound S. `PolicyResult` carries before,
+  after, S and H.
+- **Commit** runs before the gate books the legs, so it reads the same ledger
+  `check` read, and counts the amount at the submission's time (D9).
+- **No credits.** A round trip counts when it is created, even if released
+  later (as S6). Releasing one and trading it again counts it again.
+- **Config** `{ soft, window }`. A higher cap or soft bound, a higher rate or
+  initial amount, or another shape is a widening; S above H is invalid.
+- **Defaults** (D21): H 1,000 Wh, S 500 Wh, W 24 h in buckets of one slot.
+  `prosumers.json`: `roundTrip { softWh 500, capWh 1000, hours 24 }`; the
+  bucket is the deployment's slot length.
+
+### v0.2-4.3 — The probe harness
+
+`ProbeMarket` keeps each placement's side, slot and quantity, and gains
+`cancel(orderId)` and `replace(orderId, side, slot, qty, price)`.
+`ProbeDecoder` reads `cancel` as a CANCEL leg of the unfilled rest (from the
+market, as a real decoder does) and `replace` as a CANCEL followed by a PLACE.
+`decode` becomes `view`. The price and breaker verifiers use the same harness
+and still agree (v0.2-4.8).
+
+### v0.2-4.4 — Tests
+
+`test/policies/RoundTripPolicy.t.sol`, 16 tests, on the mock market with a
+second market on the same grid:
+- the overlap counted, per slot; different slots count nothing; only the
+  smaller side counts;
+- a modification counts only what it adds (a binding buy grown from 300 to
+  400 adds 100; a sell moved out of the slot adds nothing);
+- the soft bound (at it, unflagged; above it, flagged); the cap, inclusive,
+  with the logged figures;
+- D10: with the quota spent, a cancellation and a one-sided order pass,
+  unflagged;
+- no credit: a released round trip still counts, and the same volume traded
+  again counts again;
+- the day slides; configuration; only the gate writes; gas.
+- **Spec §7, churn split across two markets:** buy 200 Wh on market A, sell
+  200 Wh of the same slot on market B, cancel both, ten times. Each venue
+  holds one side only. S8 stops the sixth round, at 1,000 Wh; with S8 removed
+  all ten pass.
+- **Spec §11.6, a single correction passes:** 3 kWh bought for a slot, then
+  400 Wh sold back into it: placed, unflagged.
+
+### v0.2-4.5 — The verifier recomputes S8
+
+- `offchain/verifier/roundtrip.js` rebuilds every order from the ledger's
+  events before each submission (`ledger.js`'s replay), sums the slot's
+  committed buy and sell afresh, and works out what the decoded legs add. The
+  window is counted by brute force over every counted submission
+  (`windows.js`). It compares before, after, S, H, the verdict, and that a
+  refusal was not executed.
+- `npm run verify:roundtrip`: two `ProbeMarket`s on one grid, placements on
+  both sides of a few slots, cancellations, modifications (half of them
+  resizing an order in place), partial fills and keeper releases, waits up to
+  30 hours; 3 seeds of 400 steps.
+- **Six tampered logs** must be rejected: a round trip under-reported, an
+  earlier order of the slot shrunk, a refusal turned into a flag, a flag
+  hidden, a resize's cancellation leg dropped, a release made smaller.
+  - The first draft also dropped a cancellation from any modification, and a
+    release anywhere, and missed both: a modification that moves an order to
+    another slot, or a release on a slot nothing touches again, changes no
+    figure. The verifier was right to accept them. The tamperings now pick a
+    resize whose side still binds (found from `ledger.js`, not from S8's
+    arithmetic), and a release made smaller, which the ledger replay refuses.
+  - At 150 steps no qualifying resize occurred, so the default is 400 steps;
+    the CLI says when it could not build all six.
+- `offchain/verifier/roundtrip.test.js`, 3 tests without a chain.
+
+### v0.2-4.6 — Gas
+
+`docs/reports/gas-v0.2-step4-2026-10-24.md`.
+- **One bid, S8 alone:** 160,952 into a slot with no sell; 167,986 when it
+  adds a round trip (the window write).
+- **The day-ahead batch** of 24 offers at k = 48, every policy with A3T and
+  S7, against a bid in each of the 24 slots, so every offer adds a round
+  trip (S8's worst case): 11,979,956, against 11,542,278 without S8:
+  **+437,678, +3.8 %**, about 18,000 a leg. Under EIP-7825's cap.
+- **Step 3's figure corrected.** `test_gas_dayAheadBatchWithPrices` used a
+  tariff of retail 20 and feed-in 11 against offers at 200,000: no offer was
+  under feed-in, so S7 counted nothing, and 11,365,148 was not its worst case.
+  The tariff is now feed-in = price + 1, retail 300,000, and the test asserts
+  that S7 counted all 25 offers: **12,001,954, +11.2 %**. The step 3 report
+  carries the correction.
+- **Size:** RoundTripPolicy 9,322 bytes runtime.
+
+**The demo, on an in-process chain** (deploy and `day-ahead.js`): every step
+as at step 3; S8 shows 0 Wh counted (the demo never trades both sides of a
+slot); a 24-leg agent batch costs 11.3 M gas; the ledger and the market agree
+in every slot.
+
+### v0.2-4.7 — Honest arms with S8
+
+The step 3 replay (v0.2-3.8), with S8 added at its defaults, 24 October.
+Reports: `docs/reports/honest-roundtrip-<arm>-2026-10-24.json`.
+
+| | B0 | B2 |
+|---|---:|---:|
+| Submissions | 868 | 951 |
+| Suspensions (G1) | 0 | 0 |
+| Submissions rejected | 236 | 304 |
+| **Refused or flagged by S8** | **0** | **0** |
+| Rejected by S5 / A1–A6 / S1 / S2 import | 139 / 98 / 24 / 9 | 196 / 117 / 23 / 11 |
+
+- **S8 never acts on an honest day-ahead agent:** it nets each slot, so it
+  never holds both sides of one. The acceptance holds.
+- B2 is identical to step 3. B0 has one more rejected submission, from S2
+  import (9 refusals against 7). S8 refused nothing and changes no other
+  policy's state. The likely cause is timing: the in-process chain is
+  Hardhat's default network, whose block timestamps advance with the wall
+  clock between warps, so a run's speed can move a submission across one of
+  S2's hourly buckets. Not proven (it would take a third B0 run). For step 8:
+  fix the replays' block times so they reproduce exactly.
+
+### v0.2-4.8 — Checked
+
+**Mutation**, in Foundry's Docker image (v0.2-3.9):
+- New catalogue `roundtrip`, 20 mutants: min swapped for max before and
+  after, before and after swapped, a decrease counted, the whole position
+  counted instead of the change, CANCEL legs not subtracted or added, every
+  leg on one side, the legs of one slot not merged, the first slot skipped,
+  `>=` for `>` at the soft bound, never flagging, never rejecting, a reduction
+  judged, nothing added to the window, a credit given back, and four
+  configuration directions.
+- **20 of 20 caught at the first run**, in 8.5 minutes. The D10 test was
+  tightened while drafting, before the run: it now asserts the cancellation
+  is not even flagged, which "a reduction judged" needs.
+- No other catalogue's code changed. `npm run mutate -- --check`: every
+  pattern found once in all eleven catalogues.
+
+**Runs, 24 October:**
+- `npm test`: **562 passing** (step 3: 544; +16 S8, +2 gas).
+- Foundry in Docker, the four real accounts included: **570 passed**.
+- `npm run test:offchain`: **48 passing**.
+- `npm run verify:roundtrip`: 960 submissions (229 modifications, 240
+  cancellations, 20 flagged, 5 refused), 49 round trips counted; 4,805
+  figures compared, no disagreement; 6 of 6 tamperings caught.
+- `npm run verify:price`: 1,111 figures, no disagreement, 5 of 5 tamperings
+  caught (on the extended probe harness).
 - `npm run verify:breaker`: 1,035 figures, 37 suspensions, no disagreement.
 - `npm run verify:ledger`: 1,280 totals, no disagreement.
 - `npm run verify:window`: 42 windows, 6,875 figures, no disagreement.

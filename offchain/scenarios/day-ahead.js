@@ -111,6 +111,7 @@ const VERDICT = ["execute", "FLAG", "REJECT"];
 function describe(r) {
   if (r.name.startsWith("S1")) return `${usd(r.valueBefore)} → ${usd(r.valueAfter)}, hard ${usd(r.hard)}`;
   if (r.name.startsWith("S7")) return `given away ${usd(r.valueBefore)} → ${usd(r.valueAfter)} this week, cap ${usd(r.hard)}`;
+  if (r.name.startsWith("S8")) return `bought and sold in one slot ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)} today, cap ${kWh(r.hard)}`;
   if (r.name.startsWith("A1")) return `bounds broken: ${r.valueAfter}`;
   if (r.valueAfter === 2n ** 256n - 1n) return "cannot judge it (no fresh reading, or beyond the horizon)";
   if (r.name.startsWith("S3")) return `undeliverable ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)}`;

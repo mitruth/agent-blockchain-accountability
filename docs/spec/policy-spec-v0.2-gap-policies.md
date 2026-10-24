@@ -460,8 +460,9 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 |---|---|---|
 | 1. C1–C5, four oracle kinds, signer distinctness | `v0.2/1-oracles-aggregation` | Committed `7b4c8d7`, 21 October |
 | 2. G1 session circuit breaker, A9 recipient lock | `v0.2/2-breaker-recipient` | Committed `9bc3c52`, 22 October |
-| 3. A3T tariff band, S7 dominated-trade budget | `v0.2/3-tariff-band` | Built; awaiting Dan's review |
-| 4–8 | | Not started |
+| 3. A3T tariff band, S7 dominated-trade budget | `v0.2/3-tariff-band` | Committed `2afdd4e`, 24 October |
+| 4. S8 same-slot round-trip quota | `v0.2/4-round-trip` | Built; awaiting Dan's review |
+| 5–8 | | Not started |
 
 **Decisions of 21 October 2026, before step 1** (log v0.2-1.1):
 - Agent keys for signer distinctness are declared by the owner in the OracleVerifier (at most 8): the gate has no agent registry since D1.
@@ -488,3 +489,8 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 - The HEMS tariff of 2022 is real-time: retail median 0.067 USD/kWh, from 0 to 2.00, and 0 in 467 of 17,520 slots. A3T refuses every BUY where retail is 0, since the band above 0 is 0. A3's absolute sell floor (0.001) refuses every SELL where feed-in is below it: 0 in the same 467 slots, above 0 but under 0.001 in 153 more. Over the year, the honest arms had 95 (B0) and 116 (B2) A3 or A3T refusals. Open for Dan (log v0.2-3.8).
 - S7 counted nothing for either honest arm over the year: priced at the tariff, nothing is given away.
 - S7 keeps the excess it charged per placement, so a credit never depends on a later tariff.
+
+**Findings of step 4** (log v0.2 Step 4):
+- S8 reads the ledger's committed positions, already summed across markets (C4), so churn split between two venues is one round trip. A modification is a cancellation and a placement, so S8 counts only what it adds.
+- S8 counted nothing for either honest arm over the year: a day-ahead agent nets each slot.
+- The step 3 gas figure for A3T and S7 was not the worst case it claimed (S7 counted nothing in that test). Corrected: 12,001,954 gas for the 24-offer batch, +11.2 %.

@@ -43,9 +43,12 @@ market.
 | A1–A6, S1, S2 export and import, S3, S4, S5 | 10,788,611 |
 | The same with A3T on, and S7 | **11,365,148** (+576,537, +5.3 %) |
 
-- In the last row every leg is dominated: feed-in is one unit above the
-  offers' price, so S7 stores an excess for each of the 24 legs. That is the
-  worst case.
+- **Corrected on 24 October** (`gas-v0.2-step4-2026-10-24.md`): the last row
+  is not the worst case. The test's tariff (retail 20, feed-in 11) left every
+  offer above feed-in, so S7 counted nothing. With every leg dominated, the
+  batch costs 12,001,954 (+11.2 %). The original claim, kept for the record:
+  "every leg is dominated: feed-in is one unit above the offers' price, so S7
+  stores an excess for each of the 24 legs. That is the worst case."
 - It stays under the per-transaction cap of 16,777,216 (EIP-7825).
 
 ## Sizes

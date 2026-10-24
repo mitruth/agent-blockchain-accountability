@@ -18,6 +18,7 @@ import {WindowLib} from "../../contracts/policies/WindowLib.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 import {ReadingKind, BmsReading, SignedReading, TariffSchedule} from "../../contracts/oracle/OracleTypes.sol";
 import {DominatedTradePolicy} from "../../contracts/policies/DominatedTradePolicy.sol";
+import {RoundTripPolicy} from "../../contracts/policies/RoundTripPolicy.sol";
 import {OracleFixture} from "../oracle/OracleFixture.sol";
 
 /// Step 5's acceptance criteria (spec Section 9), on the ported P2P market
@@ -325,15 +326,66 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
 
     /// @dev v0.2 step 3: the same batch with A3T on and S7 added. Feed-in
     ///      sits one unit above the offers' price, so every leg is dominated
-    ///      and S7 keeps an excess for each: the worst case.
+    ///      and S7 keeps an excess for each: the worst case. (Corrected in
+    ///      step 4: the step 3 tariff, retail 20 and feed-in 11, left every
+    ///      offer above feed-in, and S7 counted nothing.)
     function test_gas_dayAheadBatchWithPrices() public {
+        DominatedTradePolicy s7 = _addEveryPolicyWithPrices();
+        oracle.accept(_battery(2_500, 0)[0]);
+        _offers(_slot1(0), 10);
+        uint256 batch = _gasOf(_offersCall(_slots24(), 10));
+        assertEq(session.offerIds().length, 25, "the batch was placed");
+        assertEq(_s7Used(s7), 25, "S7 counted every offer");
+        emit log_named_uint("gas, 24-offer batch, A1-A6 with A3T + S1 + S2 x2 + S3 + S4 + S5 + S7, k = 48", batch);
+    }
+
+    /// @dev v0.2 step 4: the same, with S8 added, and a bid already in each
+    ///      of the 24 slots, so every offer of the batch adds a round trip and
+    ///      S8 reads and counts all 24 slots: its worst case.
+    function test_gas_dayAheadBatchWithRoundTrip() public {
+        DominatedTradePolicy s7 = _addEveryPolicyWithPrices();
+        RoundTripPolicy s8 = new RoundTripPolicy(address(gate));
+        RoundTripPolicy.Config memory r;
+        r.soft = type(uint64).max;
+        r.window = _sliding(type(uint64).max);
+        _add(s8, keccak256("S8"), abi.encode(r));
+        uint256 batch = _batchAgainstBids();
+        (uint64 used,) = s8.usedOf(address(aliceAccount), keccak256("S8"));
+        assertEq(used, 25 * 10, "S8 counted every offer");
+        assertEq(_s7Used(s7), 25, "S7 counted every offer, and no bid");
+        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7 and S8, k = 48", batch);
+    }
+
+    /// @dev The baseline for S8: the same bids and batch without it.
+    function test_gas_dayAheadBatchAgainstBids() public {
+        _addEveryPolicyWithPrices();
+        uint256 batch = _batchAgainstBids();
+        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T and S7, k = 48", batch);
+    }
+
+    /// @dev A bid in each of the 24 slots (20 Wh: room for the steady-state
+    ///      offer in slot 0 and the batch's), then the measured 24-offer batch.
+    function _batchAgainstBids() internal returns (uint256 batch) {
+        oracle.accept(_battery(2_500, 0)[0]);
+        _submit(_bidsCall(_slots24(), 20, PRICE));
+        assertEq(session.bidIds().length, 24, "a bid in every slot");
+        _offers(_slot1(0), 10);
+        batch = _gasOf(_offersCall(_slots24(), 10));
+        assertEq(session.offerIds().length, 25, "the batch was placed");
+    }
+
+    /// @dev A1-A6 with A3T on, S1, S2, S3, S4, S5 and S7, against a tariff
+    ///      where feed-in sits one unit above the orders' price (so every
+    ///      offer is dominated, inside A3T's band) and retail well above it
+    ///      (so a bid is inside the band and not dominated).
+    function _addEveryPolicyWithPrices() internal returns (DominatedTradePolicy s7) {
         vm.prank(aliceOwner);
         aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setDevice, (ReadingKind.TARIFF, tariffSigner, 1 days)));
         uint64[] memory retail = new uint64[](96);
         uint64[] memory feedIn = new uint64[](96);
         for (uint256 i = 0; i < 96; ++i) {
-            retail[i] = 20;
-            feedIn[i] = 11;
+            retail[i] = 300_000;
+            feedIn[i] = PRICE + 1;
         }
         oracle.accept(
             _signTariff(
@@ -364,16 +416,17 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         _addS3();
         _addS4();
         _addS5();
-        DominatedTradePolicy s7 = new DominatedTradePolicy(address(gate));
+        s7 = new DominatedTradePolicy(address(gate));
         DominatedTradePolicy.Config memory d;
         d.soft = type(uint64).max;
         d.window = _sliding(type(uint64).max);
         _add(s7, keccak256("S7"), abi.encode(d));
-        oracle.accept(_battery(2_500, 0)[0]);
-        _offers(_slot1(0), 10);
-        uint256 batch = _gasOf(_offersCall(_slots24(), 10));
-        assertEq(session.offerIds().length, 25, "the batch was placed");
-        emit log_named_uint("gas, 24-offer batch, A1-A6 with A3T + S1 + S2 x2 + S3 + S4 + S5 + S7, k = 48", batch);
+    }
+
+    /// @dev What S7 has counted: 1 unit for each 10 Wh offer one unit under
+    ///      feed-in (rounded up, D12).
+    function _s7Used(DominatedTradePolicy s7) internal view returns (uint64 used) {
+        (used,) = s7.usedOf(address(aliceAccount), keccak256("S7"));
     }
 
     function test_gas_dayAheadBatchNoPolicy() public {

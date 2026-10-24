@@ -76,6 +76,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     cycles: await deploy(OPERATOR, "CyclePolicy", [gate]),
     ramp: await deploy(OPERATOR, "RampPolicy", [gate]),
     dominated: await deploy(OPERATOR, "DominatedTradePolicy", [gate]),
+    roundTrip: await deploy(OPERATOR, "RoundTripPolicy", [gate]),
   };
   log(`gate        ${gate}  (ledger ${ledger}, oracle ${oracle}, decoder ${decoder})`);
   log(`policies    per-action ${policyContracts.statics}, windows ${policyContracts.windows}, quota ${policyContracts.quota}`);

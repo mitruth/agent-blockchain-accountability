@@ -47,6 +47,8 @@ const DOMINATED_CONFIG = {
   components: [{ name: "soft", type: "uint64" }, { ...WINDOW, name: "window" }],
 };
 
+const ROUND_TRIP_CONFIG = DOMINATED_CONFIG; // { soft, window }, the same shape
+
 const WINDOW_CONFIG = {
   type: "tuple",
   components: [{ name: "quantity", type: "uint8" }, { name: "soft", type: "uint64" }, { ...WINDOW, name: "window" }],
@@ -110,8 +112,8 @@ function sliding(hours, cap, bucketSeconds = 3600) {
 
 /**
  * The instances to add for one agent: [{ contract, id, name, config }], where
- * `contract` is "statics", "windows", "quota", "dominated", "deliverability",
- * "cycles" or "ramp", and `config` the encoded bytes. `battery` is the prosumer's, from
+ * `contract` is "statics", "windows", "quota", "dominated", "roundTrip",
+ * "deliverability", "cycles" or "ramp", and `config` the encoded bytes. `battery` is the prosumer's, from
  * prosumers.json; without one, the physical policies are left out.
  */
 export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
@@ -146,6 +148,19 @@ export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
       name: "S7 dominated trades",
       config: encodeAbiParameters([DOMINATED_CONFIG], [{
         soft: price(dt.softUSD), window: sliding(dt.days * 24, price(dt.capUSD), (dt.bucketHours ?? 1) * 3600),
+      }]),
+    });
+  }
+
+  // S8 (v0.2 step 4): Wh bought and sold in the same slot, over a sliding
+  // window of one-slot buckets, when "roundTrip" names it.
+  const rt = p.roundTrip;
+  if (rt) {
+    out.push({
+      contract: "roundTrip",
+      name: "S8 round trip",
+      config: encodeAbiParameters([ROUND_TRIP_CONFIG], [{
+        soft: BigInt(rt.softWh), window: sliding(rt.hours, rt.capWh, slotSeconds),
       }]),
     });
   }

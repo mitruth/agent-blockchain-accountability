@@ -17,6 +17,7 @@
     },
     "budget": { "softUSD": "5.6", "capUSD": "7", "hours": 24 },
     "dominated": { "softUSD": "0.5", "capUSD": "1", "days": 7, "bucketHours": 1 },
+    "roundTrip": { "softWh": 500, "capWh": 1000, "hours": 24 },
     "exportImport": { "exportWh": 30000, "importWh": 40000, "hours": 24 },
     "cancelQuota": {
       "minutes": 60,
