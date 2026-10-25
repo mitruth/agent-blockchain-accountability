@@ -109,7 +109,8 @@ const VERDICT = ["execute", "FLAG", "REJECT"];
 
 /** One policy's result, in its own units. */
 function describe(r) {
-  if (r.name.startsWith("S1")) return `${usd(r.valueBefore)} → ${usd(r.valueAfter)}, hard ${usd(r.hard)}`;
+  if (r.name.startsWith("S10")) return `largest use of the envelope ${(Number(r.valueBefore) / 100).toFixed(0)} % → ${r.valueAfter >= 2n ** 255n ? "unbounded" : (Number(r.valueAfter) / 100).toFixed(0) + " %"}`;
+  if (r.name.startsWith("S1 ")) return `${usd(r.valueBefore)} → ${usd(r.valueAfter)}, hard ${usd(r.hard)}`;
   if (r.name.startsWith("S7")) return `given away ${usd(r.valueBefore)} → ${usd(r.valueAfter)} this week, cap ${usd(r.hard)}`;
   if (r.name.startsWith("S9")) return `delivery shortfall, CUSUM ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)}, alarm above ${kWh(r.hard)}`;
   if (r.name.startsWith("S8")) return `bought and sold in one slot ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)} today, cap ${kWh(r.hard)}`;

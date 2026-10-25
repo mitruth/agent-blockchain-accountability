@@ -8,7 +8,7 @@
 // chooses them and records them in deployments/local.json.
 
 import { send, read, events } from "../chain/index.js";
-import { signBms, signForecast, signTariff, signMeter } from "./typed.js";
+import { signBms, signForecast, signTariff, signMeter, signEnvelope } from "./typed.js";
 
 /**
  * Sign and post a PV forecast for prosumer `name`: Wh per market slot from
@@ -47,6 +47,20 @@ export async function postMeter(deployment, name, { slotStart, importWh, exportW
   const p = deployment.prosumers[name];
   const signed = await signMeter(p.meter.keyIndex, deployment.chainId, deployment.contracts.oracle, {
     account: p.account, slotStart, importWh, exportWh,
+  });
+  const receipt = await handIn(deployment, signed);
+  return { signed, isNew: events(receipt, "OracleVerifier", "ReadingAccepted").length > 0 };
+}
+
+/**
+ * Sign and post the DSO's operating envelope for prosumer `name`'s
+ * connection (v0.2 step 6, for S10): export and import limits per market slot
+ * from `firstSlotStart`. An envelope posted again is a no-op.
+ */
+export async function postEnvelope(deployment, name, { firstSlotStart, exportLimitWh, importLimitWh, issuedAt }) {
+  const p = deployment.prosumers[name];
+  const signed = await signEnvelope(deployment.oracles.dso.keyIndex, deployment.chainId, deployment.contracts.oracle, {
+    account: p.account, issuedAt, firstSlotStart, slotSeconds: deployment.slotSeconds, exportLimitWh, importLimitWh,
   });
   const receipt = await handIn(deployment, signed);
   return { signed, isNew: events(receipt, "OracleVerifier", "ReadingAccepted").length > 0 };

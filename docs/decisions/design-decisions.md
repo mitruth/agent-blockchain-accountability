@@ -4056,6 +4056,149 @@ before). Reports `docs/reports/honest-delivery-<arm>-2026-10-25.json`.
 
 ---
 
+## v0.2 Step 6. S10, operating-envelope compliance
+
+Spec: `docs/spec/policy-spec-v0.2-gap-policies.md`, §5 S10, §7; build order
+11.6 step 6. Branch `v0.2/6-envelope`, from `aec1ef7`. No new questions: the
+spec fixes the check, the verdicts, the fallback and the defaults.
+
+### v0.2-6.1 — S10: `OperatingEnvelopePolicy`
+
+Per slot a submission touches, before and after its legs (PLACE added,
+CANCEL taken away; a modification's two legs as one change to the slot):
+- ne = committedSell − committedBuy from the ledger, across every market
+  (C4);
+- the limits: the signed envelope's for the slot (`OracleVerifier.envelopeAt`),
+  or, with none usable (none posted, stale, or not covering the slot), the
+  owner's static P_conn × slot length both ways. **Fail open, declared:** the
+  connection's rating is always known, so a missing envelope never refuses;
+- excess = max(0, ne − E_exp) + max(0, −ne − E_imp); use = |ne| over the
+  limit it faces, in bps, rounded up, unbounded against a zero limit.
+- **REJECT** when the submission makes some slot's excess larger; **FLAG**
+  when it moves some slot's use above σ (90 %) and higher than before. A
+  reduction does neither (D10); after a tightening update, worsening orders
+  are refused and cancellations pass.
+- **Stated limitation** (NatSpec and here): the envelope bounds physical flow
+  at the connection, uncontracted PV and load included; the committed net
+  position is a proxy. S10 does not claim physical compliance.
+- Stateless: no commit, no credit. `CheckResult`: the largest use before and
+  after over the touched slots; soft σ; hard 10,000.
+- Config {P_conn W, σ bps}: higher is a widening; σ above 10,000 invalid.
+  `prosumers.json`: `envelope { connectionW 9000, softPercent 90 }` (home_01's
+  9 kW connection).
+
+### v0.2-6.2 — Off-chain
+
+- `typed.js` `signEnvelope`, `relay.js` `postEnvelope`; a DSO key (22),
+  registered for every agent account with a day's maximum age.
+- **The synthetic envelope** (spec §7), `offchain/eval/envelope-feed.js`: the
+  connection's rating both ways in every slot; every fifth day of the year,
+  from 11:00 to 15:00 local, export cut to 40 % (1,800 Wh a half-hour).
+  Fixed days and hours, so every run sees the same envelope. The honest
+  agent does not read it: what it is refused on a cut day is the cost of a
+  cut to an agent that ignores the envelope.
+- The honest replay posts the envelope each morning beside the tariff.
+
+### v0.2-6.3 — Tests
+
+`test/policies/OperatingEnvelopePolicy.t.sol`, 16 tests, on two markets on
+one grid: the static limit both ways, inclusive (and flagged at it); the
+envelope's limits each way; σ to the unit; the net position; a stale
+envelope and a slot beyond it fall back to static; a tightening update (a
+further sale refused, a reducing buy and a cancellation pass, unflagged);
+crossing to the other limit; a modification judged as one change; use
+rounded up and a zero limit unbounded; configuration; only the gate writes;
+gas.
+- **Spec §7, an envelope breach split across orders and two markets:**
+  export limit 2,000; 1,000 sold on each market, each venue at half the
+  limit; a third sale of 500, on either, refused. Without S10 all four pass,
+  3,000 Wh against 2,000.
+
+### v0.2-6.4 — The verifier recomputes S10
+
+- `offchain/verifier/envelope.js`: before each submission the orders from
+  the ledger's events (`ledger.js`), the slot's committed net position
+  summed afresh, the envelope in force from the accepted envelopes (the
+  latest, if fresh and covering the slot) or the static limit, and each
+  touched slot's use and excess before and after; it compares the verdict,
+  use before and after, σ and the hard bound.
+- `npm run verify:envelope`: two `ProbeMarket`s; placements on both sides,
+  cancellations, modifications, partial fills and releases; envelopes posted
+  at random (full or short, a quarter of the slots with a zero export limit),
+  some left to go stale; waits up to two days.
+- **Five tampered logs** must be rejected: a refusal reported as an
+  execution, a flag hidden, a use under-reported, the envelope in force at a
+  refusal with its limits raised, and an earlier order of a refused slot
+  changed (picked at the first refusal that has one).
+- `offchain/verifier/envelope.test.js`, 4 tests without a chain, the
+  synthetic feed among them.
+
+### v0.2-6.5 — Mutation
+
+New catalogue `envelope`, 18 mutants: an equal excess as a worsening; never
+rejecting; flagging at σ, a reduction, or never; the envelope ignored; the
+static limit not per slot; use against the other limit; export excess
+against the import limit; use rounded down; a zero limit as no use; the
+position gross; CANCEL legs added; a slot's legs not merged; the first slot
+not judged; three configuration directions. Two tests were added while
+writing it (a modification judged as one; use rounding and a zero limit).
+**18 of 18 at the first run**, 7.6 minutes.
+
+### v0.2-6.6 — Gas
+
+`docs/reports/gas-v0.2-step6-2026-10-25.md`.
+- **One bid, S10 alone:** 159,430 on the static limit, 161,622 on the
+  envelope.
+- **The day-ahead batch** against 24 bids, every policy with A3T, S7, S8,
+  S9 and S10: 12,496,159 (+424,649, +3.5 %, about 17,700 a leg). With S9
+  taking in 8 slots too, about 12.73 M. Under EIP-7825's cap.
+- **Size:** OperatingEnvelopePolicy 5,109 bytes.
+
+### v0.2-6.7 — Honest arms with S10
+
+The step 5 replay (`--delivery`), with S10 and the synthetic envelope added,
+25 October. Reports `docs/reports/honest-envelope-<arm>-2026-10-25.json`.
+
+| | B0 | B2 |
+|---|---:|---:|
+| Submissions | 989 | 831 |
+| Suspensions (G1) | 0 | 0 |
+| Submissions rejected | 152 | 146 |
+| **Refused / flagged by S10** | **0 / 16** | **3 / 16** |
+| S9 alarms; ARL₀ | 16; 22.7 days | 9; 40.3 days |
+| Rejected by A1–A6 / S1 / S2 import / S9 / S5 | 107 / 28 / 13 / 8 / 7 | 110 / 21 / 0 / 4 / 9 |
+
+- **S10 against an honest agent:** it refuses only on the cut days (73 of
+  them), and only where the plan sells more than 1,800 Wh in a half-hour at
+  midday: 3 submissions in B2's year, none in B0's. It flags 16 in each:
+  sales above 90 % of a cut.
+- The connection's rating (9 kW) never binds: the house's plan never comes
+  near 4,500 Wh in a half-hour.
+- S9 is little changed: one alarm fewer for B2 (S10's 3 refusals removed a
+  few sales).
+
+### v0.2-6.8 — Checked
+
+**Runs, 25 October:**
+- `npm test`: **609 passing** (step 5: 592; +16 S10, +1 gas).
+- Foundry in Docker, the four real accounts included: **617 passed**.
+- `npm run test:offchain`: **63 passing** (+4).
+- `npm run verify:envelope`: 388 submissions (42 refused, 31 flagged), 80
+  envelopes; 1,982 figures compared, no disagreement; 5 of 5 tamperings
+  caught.
+- `verify:delivery` 3,321, `verify:roundtrip` 4,820, `verify:price` 1,111,
+  `verify:breaker` 1,035, `verify:ledger` 1,280, `verify:window` 6,875
+  figures: no disagreement.
+- `npm run mutate -- --check`: every pattern found once in all thirteen
+  catalogues.
+- **The demo, on an in-process chain:** it posts no envelope, so the 9 kW
+  static limit applies (4,500 Wh a half-hour). Step 5's 5 kWh bid is now
+  refused by S10 too, beside A3T, S1, S3 and S5. Every other step as before;
+  the ledger and the market agree in every slot. The demo printed S10's
+  figures as USD (its description matched "S1" as a prefix): fixed.
+
+---
+
 ## Open decisions
 
 None left. Dan answered every item on 16 October (log 4.9); the table keeps the questions and records the answers.

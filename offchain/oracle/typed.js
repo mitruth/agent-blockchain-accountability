@@ -36,6 +36,14 @@ export const TYPES = {
     { name: "importWh", type: "uint64" },
     { name: "exportWh", type: "uint64" },
   ],
+  Envelope: [
+    { name: "account", type: "address" },
+    { name: "issuedAt", type: "uint64" },
+    { name: "firstSlotStart", type: "uint64" },
+    { name: "slotSeconds", type: "uint32" },
+    { name: "exportLimitWh", type: "uint64[]" },
+    { name: "importLimitWh", type: "uint64[]" },
+  ],
 };
 
 const asTuple = (fields) => ({ type: "tuple", components: fields });
@@ -118,4 +126,25 @@ export async function signMeter(keyIndex, chainId, verifier, reading) {
     domain: domain(chainId, verifier), types: { MeterReading: TYPES.MeterReading }, primaryType: "MeterReading", message,
   });
   return { kind: KIND.METER, data: encodeAbiParameters([asTuple(TYPES.MeterReading)], [message]), signature };
+}
+
+/**
+ * The DSO's operating envelope for the account's connection, signed with the
+ * test key at `keyIndex` (spec v0.2 section 4): the most it may export and
+ * import in each slot from `firstSlotStart`, in Wh. S10 reads it.
+ * @param envelope { account, issuedAt, firstSlotStart, slotSeconds, exportLimitWh: [], importLimitWh: [] }
+ */
+export async function signEnvelope(keyIndex, chainId, verifier, envelope) {
+  const message = {
+    account: envelope.account,
+    issuedAt: BigInt(envelope.issuedAt),
+    firstSlotStart: BigInt(envelope.firstSlotStart),
+    slotSeconds: Number(envelope.slotSeconds),
+    exportLimitWh: envelope.exportLimitWh.map(BigInt),
+    importLimitWh: envelope.importLimitWh.map(BigInt),
+  };
+  const signature = await key(keyIndex).signTypedData({
+    domain: domain(chainId, verifier), types: { Envelope: TYPES.Envelope }, primaryType: "Envelope", message,
+  });
+  return { kind: KIND.ENVELOPE, data: encodeAbiParameters([asTuple(TYPES.Envelope)], [message]), signature };
 }

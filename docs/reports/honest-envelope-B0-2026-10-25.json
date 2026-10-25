@@ -1,0 +1,144 @@
+{
+  "arm": "B0",
+  "firstDay": "2022-01-02",
+  "full": false,
+  "minQtyWh": 50,
+  "policies": [
+    "A1-A6 per action",
+    "S7 dominated trades",
+    "S8 round trip",
+    "S9 delivery",
+    "S10 envelope",
+    "S1 budget",
+    "S2 export",
+    "S2 import",
+    "S6 cancel quota",
+    "S5 ramp"
+  ],
+  "delivery": true,
+  "days": 363,
+  "submissions": 989,
+  "orders": 16230,
+  "rejected": 152,
+  "flagged": 151,
+  "suspensions": 0,
+  "mergedSlots": 1171,
+  "droppedWh": 246,
+  "byPolicy": {
+    "S10 envelope": {
+      "rejected": 0,
+      "flagged": 16
+    },
+    "S2 import": {
+      "rejected": 13,
+      "flagged": 0
+    },
+    "S5 ramp": {
+      "rejected": 7,
+      "flagged": 127
+    },
+    "A1-A6 per action": {
+      "rejected": 107,
+      "flagged": 0
+    },
+    "S9 delivery": {
+      "rejected": 8,
+      "flagged": 0
+    },
+    "S1 budget": {
+      "rejected": 28,
+      "flagged": 17
+    }
+  },
+  "staticBounds": {
+    "A3 price": 85,
+    "A3T tariff band": 22
+  },
+  "meterReadings": 17344,
+  "pokes": 2540,
+  "s9Alarms": [
+    {
+      "at": 6616,
+      "slot": 998807,
+      "level": 1
+    },
+    {
+      "at": 7431,
+      "slot": 999137,
+      "level": 2
+    },
+    {
+      "at": 9049,
+      "slot": 999811,
+      "level": 1
+    },
+    {
+      "at": 12050,
+      "slot": 1001065,
+      "level": 1
+    },
+    {
+      "at": 19577,
+      "slot": 1004286,
+      "level": 1
+    },
+    {
+      "at": 22508,
+      "slot": 1005578,
+      "level": 1
+    },
+    {
+      "at": 23960,
+      "slot": 1006205,
+      "level": 1
+    },
+    {
+      "at": 24070,
+      "slot": 1006247,
+      "level": 2
+    },
+    {
+      "at": 24070,
+      "slot": 1006250,
+      "level": 2
+    },
+    {
+      "at": 25994,
+      "slot": 1007060,
+      "level": 1
+    },
+    {
+      "at": 25995,
+      "slot": 1007064,
+      "level": 2
+    },
+    {
+      "at": 26445,
+      "slot": 1007256,
+      "level": 2
+    },
+    {
+      "at": 26445,
+      "slot": 1007257,
+      "level": 2
+    },
+    {
+      "at": 28037,
+      "slot": 1007930,
+      "level": 1
+    },
+    {
+      "at": 34885,
+      "slot": 1010904,
+      "level": 1
+    },
+    {
+      "at": 38915,
+      "slot": 1012582,
+      "level": 1
+    }
+  ],
+  "contractedSaleWh": 5028701,
+  "shortfallWh": 467956,
+  "s9Arl0Days": 22.7
+}

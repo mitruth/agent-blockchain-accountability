@@ -16,10 +16,11 @@ import {CyclePolicy} from "../../contracts/policies/CyclePolicy.sol";
 import {RampPolicy} from "../../contracts/policies/RampPolicy.sol";
 import {WindowLib} from "../../contracts/policies/WindowLib.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
-import {ReadingKind, BmsReading, SignedReading, TariffSchedule} from "../../contracts/oracle/OracleTypes.sol";
+import {ReadingKind, BmsReading, SignedReading, TariffSchedule, Envelope} from "../../contracts/oracle/OracleTypes.sol";
 import {DominatedTradePolicy} from "../../contracts/policies/DominatedTradePolicy.sol";
 import {RoundTripPolicy} from "../../contracts/policies/RoundTripPolicy.sol";
 import {DeliveryReconciliationPolicy} from "../../contracts/policies/DeliveryReconciliationPolicy.sol";
+import {OperatingEnvelopePolicy} from "../../contracts/policies/OperatingEnvelopePolicy.sol";
 import {OracleFixture} from "../oracle/OracleFixture.sol";
 
 /// Step 5's acceptance criteria (spec Section 9), on the ported P2P market
@@ -364,6 +365,42 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
     ///      (DeliveryReconciliationPolicy.t.sol, test_gas_processing).
     function test_gas_dayAheadBatchWithDelivery() public {
         _addEveryPolicyWithPrices();
+        _addRoundTripAndDelivery();
+        uint256 batch = _batchAgainstBids();
+        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7, S8 and S9, k = 48", batch);
+    }
+
+    /// @dev v0.2 step 6: the same, with S10 added, on the DSO's envelope (the
+    ///      connection's rating, 9 kW, both ways in every slot).
+    function test_gas_dayAheadBatchWithEnvelope() public {
+        _addEveryPolicyWithPrices();
+        _addRoundTripAndDelivery();
+        vm.prank(aliceOwner);
+        aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setDevice, (ReadingKind.ENVELOPE, envelopeSigner, 1 days)));
+        uint64[] memory limits = new uint64[](96);
+        for (uint256 i = 0; i < 96; ++i) limits[i] = 4_500;
+        oracle.accept(
+            _signEnvelope(
+                oracle,
+                ENVELOPE_KEY,
+                Envelope({
+                    account: address(aliceAccount),
+                    issuedAt: uint64(block.timestamp),
+                    firstSlotStart: uint64(manager.slotStart(firstSlot)),
+                    slotSeconds: manager.slotSeconds(),
+                    exportLimitWh: limits,
+                    importLimitWh: limits
+                })
+            )
+        );
+        OperatingEnvelopePolicy s10 = new OperatingEnvelopePolicy(address(gate));
+        _add(s10, keccak256("S10"), abi.encode(OperatingEnvelopePolicy.Config({connectionW: 9_000, softBps: 9_000})));
+        uint256 batch = _batchAgainstBids();
+        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7, S8, S9 and S10, k = 48", batch);
+    }
+
+    /// @dev S8 and S9 as in the two tests above.
+    function _addRoundTripAndDelivery() internal {
         RoundTripPolicy s8 = new RoundTripPolicy(address(gate));
         RoundTripPolicy.Config memory r;
         r.soft = type(uint64).max;
@@ -383,8 +420,6 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         d.maxProcess = 8;
         d.window = _sliding(15_000);
         _add(s9, keccak256("S9"), abi.encode(d));
-        uint256 batch = _batchAgainstBids();
-        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7, S8 and S9, k = 48", batch);
     }
 
     /// @dev The baseline for S8: the same bids and batch without it.

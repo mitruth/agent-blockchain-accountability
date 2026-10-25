@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "hardhat test solidity test/gate/KeyModel.t.sol test/gate/ConfigManager.t.sol test/gate/OrderLifecycle.t.sol test/gate/PositionLedger.t.sol test/gate/PolicyPhases.t.sol test/gate/GateReadings.t.sol test/gate/MultiMarket.t.sol test/gate/SessionBreaker.t.sol test/gate/RecipientLock.t.sol test/oracle/OracleVerifier.t.sol test/oracle/OracleVerifierV2.t.sol test/market/LockableERC1155.t.sol test/market/MarketFlow.t.sol test/market/GatedMarket.t.sol test/market/ClassicSettlement.t.sol test/policies/WindowLib.t.sol test/policies/StaticOrderPolicy.t.sol test/policies/WindowPolicy.t.sol test/policies/TariffBand.t.sol test/policies/DominatedTradePolicy.t.sol test/policies/RoundTripPolicy.t.sol test/policies/DeliveryReconciliationPolicy.t.sol test/policies/CancelQuotaPolicy.t.sol test/policies/DeliverabilityPolicy.t.sol test/policies/CyclePolicy.t.sol test/policies/RampPolicy.t.sol test/policies/Step4Acceptance.t.sol test/policies/Step5Acceptance.t.sol",
+    "test": "hardhat test solidity test/gate/KeyModel.t.sol test/gate/ConfigManager.t.sol test/gate/OrderLifecycle.t.sol test/gate/PositionLedger.t.sol test/gate/PolicyPhases.t.sol test/gate/GateReadings.t.sol test/gate/MultiMarket.t.sol test/gate/SessionBreaker.t.sol test/gate/RecipientLock.t.sol test/oracle/OracleVerifier.t.sol test/oracle/OracleVerifierV2.t.sol test/market/LockableERC1155.t.sol test/market/MarketFlow.t.sol test/market/GatedMarket.t.sol test/market/ClassicSettlement.t.sol test/policies/WindowLib.t.sol test/policies/StaticOrderPolicy.t.sol test/policies/WindowPolicy.t.sol test/policies/TariffBand.t.sol test/policies/DominatedTradePolicy.t.sol test/policies/RoundTripPolicy.t.sol test/policies/DeliveryReconciliationPolicy.t.sol test/policies/OperatingEnvelopePolicy.t.sol test/policies/CancelQuotaPolicy.t.sol test/policies/DeliverabilityPolicy.t.sol test/policies/CyclePolicy.t.sol test/policies/RampPolicy.t.sol test/policies/Step4Acceptance.t.sol test/policies/Step5Acceptance.t.sol",
     "test:sol": "npm test",
     "test:forge": "forge test",
     "test:accounts": "forge test --match-path \"test/accounts/*\"",
@@ -20,6 +20,7 @@
     "verify:price": "hardhat build --no-tests && node offchain/verifier/price-cli.js",
     "verify:roundtrip": "hardhat build --no-tests && node offchain/verifier/roundtrip-cli.js",
     "verify:delivery": "hardhat build --no-tests && node offchain/verifier/reconciliation-cli.js",
+    "verify:envelope": "hardhat build --no-tests && node offchain/verifier/envelope-cli.js",
     "test:offchain": "hardhat build --no-tests && node --test \"offchain/**/*.test.js\"",
     "mutate": "node offchain/mutation/cli.js",
     "data:extract": "node offchain/dataset/cli.js",

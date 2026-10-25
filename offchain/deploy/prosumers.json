@@ -29,6 +29,7 @@
       "windowHours": 24,
       "penaltyCapShareOfExport": 0.5
     },
+    "envelope": { "connectionW": 9000, "softPercent": 90 },
     "exportImport": { "exportWh": 30000, "importWh": 40000, "hours": 24 },
     "cancelQuota": {
       "minutes": 60,

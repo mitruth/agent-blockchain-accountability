@@ -63,6 +63,11 @@ const DELIVERY_CONFIG = {
   ],
 };
 
+const ENVELOPE_CONFIG = {
+  type: "tuple",
+  components: [{ name: "connectionW", type: "uint32" }, { name: "softBps", type: "uint16" }],
+};
+
 const WINDOW_CONFIG = {
   type: "tuple",
   components: [{ name: "quantity", type: "uint8" }, { name: "soft", type: "uint64" }, { ...WINDOW, name: "window" }],
@@ -127,8 +132,8 @@ function sliding(hours, cap, bucketSeconds = 3600) {
 /**
  * The instances to add for one agent: [{ contract, id, name, config }], where
  * `contract` is "statics", "windows", "quota", "dominated", "roundTrip",
- * "delivery", "deliverability", "cycles" or "ramp", and `config` the encoded
- * bytes. `battery` is the prosumer's, from
+ * "delivery", "envelope", "deliverability", "cycles" or "ramp", and `config`
+ * the encoded bytes. `battery` is the prosumer's, from
  * prosumers.json; without one, the physical policies are left out.
  */
 export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
@@ -198,6 +203,17 @@ export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
         maxProcess: dl.maxProcess,
         window: sliding(dl.windowHours, Math.round(p.exportImport.exportWh * dl.penaltyCapShareOfExport), slotSeconds),
       }]),
+    });
+  }
+
+  // S10 (v0.2 step 6): the net position per slot within the DSO's envelope,
+  // or the connection's rating when none applies, when "envelope" names it.
+  const ev = p.envelope;
+  if (ev) {
+    out.push({
+      contract: "envelope",
+      name: "S10 envelope",
+      config: encodeAbiParameters([ENVELOPE_CONFIG], [{ connectionW: ev.connectionW, softBps: Math.round(ev.softPercent * 100) }]),
     });
   }
 

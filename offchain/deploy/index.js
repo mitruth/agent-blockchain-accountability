@@ -26,6 +26,8 @@ const RELAY = 18;
 const PV_PROVIDER = 19;
 // The retailer that signs the tariff (v0.2 step 3); it only signs.
 const TARIFF_PROVIDER = 21;
+// The DSO that signs the operating envelope (v0.2 step 6); it only signs.
+const DSO = 22;
 const bmsKeyOf = (i) => 40 + i;
 // Each agent house's meter (v0.2 step 5, for S9): a signer of its own,
 // distinct from the BMS, the forecast and the agent (spec v0.2 section 4).
@@ -34,11 +36,14 @@ const meterKeyOf = (i) => 50 + i;
 const BMS = 0;
 const PV_FORECAST = 1;
 const TARIFF = 2;
+const ENVELOPE = 4;
 // How old a reading may be when accepted: the BMS one slot (spec 5.4,
 // tau_soc), the forecast one hour (tau_pv).
 const PV_MAX_AGE = 3600;
-// A day-ahead tariff holds for a day (spec v0.2 section 4).
+// A day-ahead tariff holds for a day (spec v0.2 section 4); so does the DSO's
+// envelope.
 const TARIFF_MAX_AGE = 86_400;
+const ENVELOPE_MAX_AGE = 86_400;
 const EXECUTOR_MODULE = 2n;
 const MAX_UINT = 2n ** 256n - 1n;
 
@@ -81,6 +86,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     dominated: await deploy(OPERATOR, "DominatedTradePolicy", [gate]),
     roundTrip: await deploy(OPERATOR, "RoundTripPolicy", [gate]),
     delivery: await deploy(OPERATOR, "DeliveryReconciliationPolicy", [gate]),
+    envelope: await deploy(OPERATOR, "OperatingEnvelopePolicy", [gate]),
   };
   log(`gate        ${gate}  (ledger ${ledger}, oracle ${oracle}, decoder ${decoder})`);
   log(`policies    per-action ${policyContracts.statics}, windows ${policyContracts.windows}, quota ${policyContracts.quota}`);
@@ -146,6 +152,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
       await asAccount(oracle, "OracleVerifier", "setDevice", [BMS, bms, config.slotSeconds]);
       await asAccount(oracle, "OracleVerifier", "setDevice", [PV_FORECAST, key(PV_PROVIDER).address, PV_MAX_AGE]);
       await asAccount(oracle, "OracleVerifier", "setDevice", [TARIFF, key(TARIFF_PROVIDER).address, TARIFF_MAX_AGE]);
+      await asAccount(oracle, "OracleVerifier", "setDevice", [ENVELOPE, key(DSO).address, ENVELOPE_MAX_AGE]);
       entry.bms = { address: bms, keyIndex: bmsKeyOf(i) };
       // The house's meter, on the market's slot grid, for S9 (v0.2 step 5).
       const meter = key(meterKeyOf(i)).address;
@@ -198,6 +205,8 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
       pvProvider: { address: key(PV_PROVIDER).address, keyIndex: PV_PROVIDER },
       tariffProvider: { address: key(TARIFF_PROVIDER).address, keyIndex: TARIFF_PROVIDER },
       tariffMaxAge: TARIFF_MAX_AGE,
+      dso: { address: key(DSO).address, keyIndex: DSO },
+      envelopeMaxAge: ENVELOPE_MAX_AGE,
       bmsMaxAge: config.slotSeconds,
       pvMaxAge: PV_MAX_AGE,
       // The forecast covers the physical policies' horizon.

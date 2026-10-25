@@ -48,9 +48,12 @@ const { useInProcessChain, send, read, calldata, events, now, warpTo, price } = 
 const { deploySystem, loadConfig } = await import("../deploy/index.js");
 const { runMatcher } = await import("../matcher/index.js");
 const { expireUnmatched, reconcile } = await import("../keeper/index.js");
-const { postForecast, postTariff, postMeter, bmsReading, batteryAt, forecastAt, tariffAt, armSlots, armSettings, indexOfDate } =
-  await import("../oracle/index.js");
+const {
+  postForecast, postTariff, postMeter, postEnvelope, bmsReading, batteryAt, forecastAt, tariffAt, dataIndexAt, homeSlots, armSlots,
+  armSettings, indexOfDate,
+} = await import("../oracle/index.js");
 const { simulateDelivery } = await import("./delivery.js");
+const { envelopeOf } = await import("./envelope-feed.js");
 const { nextDayAhead, brussels, addDays, wallClock } = await import("../scenarios/calendar.js");
 
 const ELECTRICITY = 0;
@@ -120,6 +123,11 @@ async function main() {
   const meterOf = (k) =>
     sim ? { importWh: sim[k].importWh, exportWh: sim[k].exportWh } : { importWh: Number(slots[k].importWh), exportWh: Number(slots[k].exportWh) };
 
+  // S10's connection rating, for the DSO's synthetic envelope; the house's
+  // data slots, for the envelope's local times and cut days.
+  const envelopeW = loadConfig().agentPolicies.envelope?.connectionW ?? 0;
+  const houseSlots = homeSlots(alice.home);
+
   // S9's instance, for the keeper's pokes; the meter readings still to post.
   const s9 = alice.policies.find((p) => p.name === "S9 delivery");
   const pendingMeter = [];
@@ -165,6 +173,17 @@ async function main() {
     await postForecast(d, "alice", { firstSlotStart: nowSlot, pvWh: forecastAt(alice, dataDate, start, nowSlot, horizon, SLOT), issuedAt: t });
     const tariff = tariffAt(alice, dataDate, start, nowSlot, horizon, SLOT);
     await postTariff(d, "alice", { firstSlotStart: nowSlot, ...tariff, issuedAt: t });
+    // The DSO's envelope over the same slots (v0.2 step 6, envelope-feed.js).
+    if (envelopeW) {
+      const limits = [];
+      for (let k = 0; k < horizon; k++) {
+        limits.push(envelopeOf(houseSlots[dataIndexAt(alice.home, dataDate, start, nowSlot + k * SLOT)], envelopeW, SLOT));
+      }
+      await postEnvelope(d, "alice", {
+        firstSlotStart: nowSlot, issuedAt: t,
+        exportLimitWh: limits.map((l) => l.exportLimitWh), importLimitWh: limits.map((l) => l.importLimitWh),
+      });
+    }
     const ahead = (start - nowSlot) / SLOT; // the delivery day's first slot in the schedule
     let reading = [await bmsReading(d, "alice", nowSlot, batteryAt(alice, dataDate, start, nowSlot))];
     // The meter of the delivery so far, taken in by S9 before the agent acts.

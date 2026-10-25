@@ -33,9 +33,10 @@ import breaker from "./catalogs/breaker.js";
 import price from "./catalogs/price.js";
 import roundtrip from "./catalogs/roundtrip.js";
 import delivery from "./catalogs/delivery.js";
+import envelope from "./catalogs/envelope.js";
 import pending from "./catalogs/pending.js";
 
-export const CATALOGS = { gate, ledger, market, window, policies, physical, oracle2, breaker, price, roundtrip, delivery, accounts };
+export const CATALOGS = { gate, ledger, market, window, policies, physical, oracle2, breaker, price, roundtrip, delivery, envelope, accounts };
 export { pending };
 
 const BACKUP = ".mutation-backup";
