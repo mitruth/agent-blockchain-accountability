@@ -6,7 +6,7 @@ import { encodeAbiParameters } from "viem";
 import { key } from "../chain/index.js";
 
 /** `ReadingKind` in the contract. */
-export const KIND = { BMS: 0, PV_FORECAST: 1, TARIFF: 2 };
+export const KIND = { BMS: 0, PV_FORECAST: 1, TARIFF: 2, METER: 3, ENVELOPE: 4, GRID_STATE: 5 };
 
 export const TYPES = {
   BmsReading: [
@@ -29,6 +29,12 @@ export const TYPES = {
     { name: "slotSeconds", type: "uint32" },
     { name: "retail", type: "uint64[]" },
     { name: "feedIn", type: "uint64[]" },
+  ],
+  MeterReading: [
+    { name: "account", type: "address" },
+    { name: "slotStart", type: "uint64" },
+    { name: "importWh", type: "uint64" },
+    { name: "exportWh", type: "uint64" },
   ],
 };
 
@@ -93,4 +99,23 @@ export async function signTariff(keyIndex, chainId, verifier, schedule) {
     domain: domain(chainId, verifier), types: { TariffSchedule: TYPES.TariffSchedule }, primaryType: "TariffSchedule", message,
   });
   return { kind: KIND.TARIFF, data: encodeAbiParameters([asTuple(TYPES.TariffSchedule)], [message]), signature };
+}
+
+/**
+ * A meter reading signed with the test key at `keyIndex` (spec v0.2 section
+ * 4): what the account imported and exported over the slot starting at
+ * `slotStart`, in Wh. S9 reads it.
+ * @param reading { account, slotStart, importWh, exportWh }, integers
+ */
+export async function signMeter(keyIndex, chainId, verifier, reading) {
+  const message = {
+    account: reading.account,
+    slotStart: BigInt(reading.slotStart),
+    importWh: BigInt(reading.importWh),
+    exportWh: BigInt(reading.exportWh),
+  };
+  const signature = await key(keyIndex).signTypedData({
+    domain: domain(chainId, verifier), types: { MeterReading: TYPES.MeterReading }, primaryType: "MeterReading", message,
+  });
+  return { kind: KIND.METER, data: encodeAbiParameters([asTuple(TYPES.MeterReading)], [message]), signature };
 }

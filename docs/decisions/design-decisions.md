@@ -3810,6 +3810,252 @@ Reports: `docs/reports/honest-roundtrip-<arm>-2026-10-24.json`.
 
 ---
 
+## v0.2 Step 5. S9, delivery reconciliation; `poke`; the delivery simulator; calibration
+
+Spec: `docs/spec/policy-spec-v0.2-gap-policies.md`, §5 S9, §7, D16, D19;
+build order 11.6 step 5. Branch `v0.2/5-delivery`, from `ad2d0f4`.
+
+### v0.2-5.1 — Dan's answers (25 October)
+
+Dan asked to finish the rest of v0.2 (steps 5 to 8). Answers:
+1. **The honest data for S9:** build the delivery simulator of spec §7. The
+   arms record only what happened, so an agent selling their flows never
+   falls short.
+2. **Calibration** in JavaScript in this repo, not `calibrate_policy.py`
+   (which lives in the sibling project).
+3. **Run mode:** each step on its own branch, checked as usual; I commit it
+   under Dan's name, write the hand-over here, and go on; I stop when the
+   spec is silent or a check fails.
+4. **A3T at zero tariff** (v0.2-3.8): left as specified; step 8 reports it.
+5. **Regret vs B2** (step 8): refused volume settled at the real-time price
+   (0.30 USD/kWh) instead of the tariff.
+6. **S9's slack k** (D19), asked when the calibration showed it: under B2
+   only 3.8 % of half-hours fall short at all, so the literal p95 of s(t)
+   is 0. Decision: the p95 over the slots where the agent sold.
+
+### v0.2-5.2 — S9: `DeliveryReconciliationPolicy`
+
+As spec §5 S9, per settled slot t of the account's grid:
+cn = max(0, clearedSell − clearedBuy) from the ledger, dn = export − import
+from `OracleVerifier.meterAt`, s = min(cn, max(0, cn − dn)),
+C = max(0, C + s − k); C > h is an alarm (C back to 0, the level rises, the
+penalty runs T_pen from now).
+- **Penalty, SELL legs only.** Level 1: a SELL_WH window (24 h, one-slot
+  buckets) capped at H_pen, counting every placed sell with S2's credits,
+  judged only while the penalty runs. Level 2 (an alarm while the level is
+  at least 1): every SELL placement refused while it runs. The level falls
+  by one per W_esc without an alarm.
+- **D16:** a slot with sales and no reading, `settlementLag + grace` after it
+  ends, refuses every SELL placement until its reading arrives.
+- **D10:** BUY legs and cancellations never refused.
+- **Persistence:** `check` processes in memory, `commit` and `poke` persist;
+  a refused submission persists nothing.
+- `CheckResult`: C before and after processing; soft and hard are h.
+  `SlotReconciled` and `DeliveryAlarm` carry every input (invariant §10).
+- **Our readings, not in the spec:**
+  - **A slot is taken in only when reconciled** (committed = cleared on both
+    sides). Otherwise a fill the ledger has not booked would make S9 see less
+    sold. An unreconciled slot with sales past grace blocks SELLs like a
+    missing reading; anyone can reconcile.
+  - **An alarm flags its submission** (the spec's "emit PolicyFlag").
+  - **The owner's reset** clears C, the level and the penalty, and moves the
+    pointer to the first unsettled slot. A reading older than the meter's
+    ring (128 slots, 64 h) can no longer be posted, and would otherwise
+    block selling for ever.
+  - **A new instance** starts at the first slot beginning after it.
+- **Keeping it current.** Processing reaches a slot only through a
+  submission or a `poke`, at most `maxProcess` (8) slots each; a day-ahead
+  agent submits a few times a day, fewer than 48 slots / 8. A keeper's poke
+  keeps alarms and D16 current, as the spec intends.
+- **The gate** gains `poke(account, policy, id)` (permissionless) and
+  `resetPolicy(policy, id)` (the account's owner path), through
+  `IMaintainedPolicy`; both need the instance installed. PolicyGate grows
+  to 21,739 bytes (from 21,147).
+- **Config** {k, h, T_pen, W_esc, settlementLag, grace, maxProcess, window}.
+  Tighter: lower k, h or H_pen; longer T_pen or W_esc; smaller grace. Any
+  change of the lag or of maxProcess is a WIDEN; maxProcess 0 or above 32
+  is invalid.
+
+### v0.2-5.3 — The delivery simulator
+
+`offchain/eval/delivery.js`, the spec §7 simulator.
+- **The plan:** per slot of a day, PV and the fixed load forecast by an
+  EWMA of the same slot on earlier days, with B2's own weight (0.3, from
+  `settings.csv`); appliance tasks known (the agent's own schedule); the
+  arm's battery schedule as the plan. Contracted net export = the forecast
+  balance with that schedule, within the 9 kW connection.
+- **The day:** the real PV and load; the battery (the existing `Battery`
+  class) re-dispatched to make the grid flow equal the contract, within its
+  power and state of charge, carried over the year; what the connection
+  cannot export is curtailed. The meter reports the resulting flow.
+- `offchain/eval/delivery.test.js`, 8 tests: an exact forecast delivers
+  every sale; the battery covers a cloudy day after a sunny one; an empty
+  battery cannot; the connection's limit; the oversell; the CUSUM and the
+  percentile by definition.
+- **Limitation:** an order the policies refuse is still delivered as
+  planned in the simulator; S9 then sees less sold, not more missed.
+
+### v0.2-5.4 — Calibration (D19)
+
+`offchain/eval/calibrate-s9.js`; report
+`docs/reports/calibration-s9-2026-10-25.json`. Over every 2022 day of
+home_01, through the simulator:
+
+| | B2 | B0 |
+|---|---:|---:|
+| Slots with a sale | 4,906 | 6,431 |
+| Slots short | 670 | 927 |
+| Sold / short, kWh | 4,015 / 256 | 5,033 / 471 |
+| p95 of s, all slots / selling slots | 0 / 436 Wh | 20 / 607 Wh |
+
+- **k = 436 Wh** (B2, selling slots); **h = 2,100 Wh**, the smallest in
+  100 Wh steps with ARL₀ ≥ 30 days under B2.
+- **Honest false alarms** with these: B2 11 a year (33.2 days apart); B0 19
+  (19.2 days apart). B0, another controller on the same house, does not
+  meet the target with B2's calibration: a finding for step 8.
+- **ARL₁, chronic oversell** (every sale made larger, the battery trying to
+  deliver it): +10 % 26 alarms (14.0 days apart), +20 % 37 (9.9), +50 % 119
+  (3.1). The first alarm comes in early February in every case: the winter
+  has few sales to oversell.
+- **With the literal p95 (k = 0)** h would have to be 19.4 kWh for the same
+  target, and a 20 % oversell would take 28 days to raise its first alarm.
+
+### v0.2-5.5 — Tests
+
+`test/policies/DeliveryReconciliationPolicy.t.sol`, 29 tests, with the
+meter on the market's grid:
+- the arithmetic (a shortfall, over-delivery, a net import, contracted
+  export net of buys, a slot with nothing sold needing no reading);
+- settlement to the second; an unreconciled slot waits; maxProcess; a new
+  instance starts at the next slot;
+- an alarm at level 1 (C at h is not one); level 1's cap, inclusive, and a
+  released sale given back; level 2; the penalty's end; the level's decay;
+  the submission that finds the alarm is flagged;
+- D16 to the second, with a buy and a cancellation passing; a meter on
+  another slot length counts as missing;
+- a refused submission persists nothing; `poke` persists an alarm without a
+  market call; `poke` needs an installed instance; the owner's reset (an
+  alarm and a blocked slot); only an account resets; only the gate writes;
+- configuration; gas.
+- **Spec §7, chronic oversell:** a compromised BMS says the battery is full;
+  S3 passes four 1,000 Wh sales; the meter shows nothing exported. S9
+  raises its alarm on the second slot, and level 1 refuses the next sale.
+  Without S9, it is placed.
+- **Spec §7, meter withholding:** the readings stop; SELLs stop two hours
+  after the first sold slot settles; buying goes on.
+
+### v0.2-5.6 — The verifier recomputes S9
+
+- `offchain/verifier/reconciliation.js` keeps its own pointer, C, penalty and
+  level-1 window, and rebuilds every input at every call: committed and
+  cleared from the ledger's events (`ledger.js`), the meter from the oracle's
+  accepted readings, the window by brute force over every placed sell and its
+  release (`windows.js`). It compares every slot taken in (cn, dn, s, C),
+  every alarm (slot, level, penalty end), every verdict, C before and after,
+  and the reset's pointer.
+- `npm run verify:delivery`: two `ProbeMarket`s on one grid; sales and buys
+  around now; partial and full fills released by a keeper; cancellations;
+  readings late or never; pokes by anyone; owner resets; waits up to 12 h.
+  A small k and h (50, 800 Wh) so the fuzz reaches alarms and both levels.
+- **Six tampered logs** must be rejected: a shortfall under-reported, the
+  meter reading behind it inflated, an alarm hidden, a refusal reported as
+  an execution, a fill dropped, a reset's pointer moved. Each is picked where
+  the change must show (step 4's lesson).
+- The first fuzz drafts refused most submissions (unreconciled orders and
+  missing readings blocked selling) and raised no alarm. Releases now take
+  the oldest order first, readings are rarely withheld, and the waits are
+  shorter.
+- `offchain/verifier/reconciliation.test.js`, 3 tests without a chain.
+
+### v0.2-5.7 — Mutation
+
+New catalogue `delivery`, 37 mutants: the CUSUM's comparison and slack; a
+net import beyond the sale; over-delivery counted; contracted export gross;
+C kept on an alarm; settlement without lag; unreconciled slots and sales
+without readings taken in; maxProcess off by one; a new instance at the slot
+in progress; D16 without grace, exclusive, never, and on buys; a cancellation
+counted as a sale; level 2 never refusing; level 1 never judged, and H_pen
+exclusive; the penalty never ending, or ending inclusive; the levels'
+escalation and decay; sells not counted, and no credit; commit and poke
+persisting nothing; reset keeping the level or the pointer; the gate's poke
+without an instance and reset by anyone; five configuration directions.
+- **At first 35 caught.** "A new instance at the slot in progress" ended at
+  the same pointer (one more slot taken in): the test now checks how many.
+  "Poke persists nothing" made the tests' catch-up loop never end, and the
+  run timed out: the loop is now bounded and fails. Three tests were also
+  tightened while writing the catalogue (C at h is not an alarm; a released
+  sale is given back under level 1; the reset with an alarm raised).
+  **37 of 37.**
+- The runner in Foundry: 33 minutes for the 37, the two honest year replays
+  running alongside.
+
+### v0.2-5.8 — Gas
+
+`docs/reports/gas-v0.2-step5-2026-10-25.md`.
+- **One sell, S9 alone:** 173,776 with nothing to take in; 405,115 taking in
+  8 settled slots (about 29,000 a slot); a poke of 8 slots, 98,620.
+- **The day-ahead batch** against 24 bids, every policy with A3T, S7, S8 and
+  S9, nothing settled: 12,071,510 (+91,554, +0.8 % over S8's). With 8 slots
+  to take in, about 12.3 M. Under EIP-7825's cap.
+- **Sizes:** DeliveryReconciliationPolicy 16,431 bytes; PolicyGate 21,739.
+
+**The demo, on an in-process chain:** every step as at step 4; S9 shows C
+at 0. **A demo fix:** step 8 assumed the agent's battery reading stale at the
+12:00 close, and so refused at the gate; the demo starts at the wall clock's
+time, and run at 10:29 UTC the reading was exactly 30 minutes old, still
+fresh. S3 passed, and the market's refusal reverted the run. Step 8 now
+waits past the reading's age if the close comes first.
+
+### v0.2-5.9 — Honest arms with S9
+
+`honest-day-ahead.js --delivery`, 25 October: the agent trades the
+simulator's day-ahead plan; before each morning's orders the meter's
+readings for every ended slot are posted and a keeper pokes S9 until it has
+taken them in. Every policy of step 4 plus S9 (S3 and S4 left out, as
+before). Reports `docs/reports/honest-delivery-<arm>-2026-10-25.json`.
+
+| | B0 | B2 |
+|---|---:|---:|
+| Submissions | 989 | 831 |
+| Suspensions (G1) | 0 | 0 |
+| Submissions rejected | 153 | 144 |
+| Sold / short (simulator), kWh | 5,029 / 468 | 4,014 / 256 |
+| Meter readings; pokes | 17,344; 2,535 | 17,344; 2,535 |
+| **S9 alarms** | **16** (levels 1211111221222111) | **10** (1111221212) |
+| **ARL₀** | **22.7 days** | **36.3 days** |
+| Rejected by S9 / A1–A6 / S1 / S2 import / S5 | 8 / 107 / 28 / 14 / 7 | 5 / 110 / 21 / 1 / 9 |
+
+- **The acceptance holds for B2:** honest false alarms 36.3 days apart, above
+  the 30-day target (the off-chain calibration said 33.2; on chain, refused
+  orders and merged dust change a few slots).
+- **B0 does not meet it** with B2's calibration (22.7 days), as the
+  calibration predicted (19.2): a controller that sells more, and misses
+  more, alarms more. D19 calibrates per account; the account is the house,
+  the controller is not. For step 8.
+- 4 of B2's 10 alarms and 6 of B0's 16 came at level 2, within the 7-day
+  escalation window of the one before: honest alarms are a month apart on
+  average but cluster in the season. S9 refused 5 (B2) and 8 (B0) honest
+  submissions. For step 8's calibration of T_pen and W_esc.
+- The other policies refused fewer submissions than at step 4 (B2: 144
+  against 304), the agent now trading a forecast plan instead of the
+  realized flow.
+
+### v0.2-5.10 — Checked
+
+**Runs, 25 October:**
+- `npm test`: **592 passing** (step 4: 562; +29 S9, +1 gas).
+- Foundry in Docker, the four real accounts included: **600 passed**.
+- `npm run test:offchain`: **59 passing** (+8 simulator, +3 S9 verifier).
+- `npm run verify:delivery`: 340 submissions (170 refused by S9, 2
+  flagged), 146 pokes, 765 readings, 10 resets, 331 slots taken in, 5
+  alarms; 3,677 figures compared, no disagreement; 6 of 6 tamperings caught.
+- `verify:roundtrip` 4,827, `verify:price` 1,111, `verify:breaker` 1,035,
+  `verify:ledger` 1,280, `verify:window` 6,875 figures: no disagreement.
+- `npm run mutate -- --check`: every pattern found once in all twelve
+  catalogues.
+
+---
+
 ## Open decisions
 
 None left. Dan answered every item on 16 October (log 4.9); the table keeps the questions and records the answers.

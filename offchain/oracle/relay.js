@@ -8,7 +8,7 @@
 // chooses them and records them in deployments/local.json.
 
 import { send, read, events } from "../chain/index.js";
-import { signBms, signForecast, signTariff } from "./typed.js";
+import { signBms, signForecast, signTariff, signMeter } from "./typed.js";
 
 /**
  * Sign and post a PV forecast for prosumer `name`: Wh per market slot from
@@ -33,6 +33,20 @@ export async function postTariff(deployment, name, { firstSlotStart, retail, fee
   const p = deployment.prosumers[name];
   const signed = await signTariff(deployment.oracles.tariffProvider.keyIndex, deployment.chainId, deployment.contracts.oracle, {
     account: p.account, issuedAt, firstSlotStart, slotSeconds: deployment.slotSeconds, retail, feedIn,
+  });
+  const receipt = await handIn(deployment, signed);
+  return { signed, isNew: events(receipt, "OracleVerifier", "ReadingAccepted").length > 0 };
+}
+
+/**
+ * Sign and post what prosumer `name`'s meter measured over the slot starting
+ * at `slotStart`, with the meter's own key (v0.2 step 5, for S9). A reading
+ * posted again is a no-op.
+ */
+export async function postMeter(deployment, name, { slotStart, importWh, exportWh }) {
+  const p = deployment.prosumers[name];
+  const signed = await signMeter(p.meter.keyIndex, deployment.chainId, deployment.contracts.oracle, {
+    account: p.account, slotStart, importWh, exportWh,
   });
   const receipt = await handIn(deployment, signed);
   return { signed, isNew: events(receipt, "OracleVerifier", "ReadingAccepted").length > 0 };

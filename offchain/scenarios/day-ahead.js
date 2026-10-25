@@ -111,6 +111,7 @@ const VERDICT = ["execute", "FLAG", "REJECT"];
 function describe(r) {
   if (r.name.startsWith("S1")) return `${usd(r.valueBefore)} → ${usd(r.valueAfter)}, hard ${usd(r.hard)}`;
   if (r.name.startsWith("S7")) return `given away ${usd(r.valueBefore)} → ${usd(r.valueAfter)} this week, cap ${usd(r.hard)}`;
+  if (r.name.startsWith("S9")) return `delivery shortfall, CUSUM ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)}, alarm above ${kWh(r.hard)}`;
   if (r.name.startsWith("S8")) return `bought and sold in one slot ${kWh(r.valueBefore)} → ${kWh(r.valueAfter)} today, cap ${kWh(r.hard)}`;
   if (r.name.startsWith("A1")) return `bounds broken: ${r.valueAfter}`;
   if (r.valueAfter === 2n ** 256n - 1n) return "cannot judge it (no fresh reading, or beyond the horizon)";
@@ -288,9 +289,12 @@ async function main() {
 
   // ── 8 ───────────────────────────────────────────────────────────────────
   step(8, "Trading closes at 12:00 the day before delivery");
-  await warpTo(closesAt);
   // The agent's battery reading is no longer fresh, so the gate refuses first,
   // without reaching the market. Bob, without a gate, meets the market's rule.
+  // The demo starts at the wall clock's time, so a run late in the morning
+  // can reach the close with the reading still fresh: then wait it out.
+  const lastReading = Number((await batteryOf(d, "alice")).timestamp);
+  await warpTo(Math.max(closesAt, lastReading + d.oracles.bmsMaxAge + 1));
   const late = await viaAgent("alice", "placeBids", [ELECTRICITY, [req(0, 500, "0.25")]]);
   console.log(`  an agent order after closing — ${late.rejected ? "refused by the gate: " + refusedBy("alice", late.receipt) : "!! accepted"}`);
   try {

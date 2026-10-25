@@ -7,6 +7,7 @@ import {DecoderRegistry} from "./DecoderRegistry.sol";
 import {ConfigManager} from "./ConfigManager.sol";
 import {PositionLedger} from "./PositionLedger.sol";
 import {IPolicy} from "../interfaces/IPolicy.sol";
+import {IMaintainedPolicy} from "../interfaces/IMaintainedPolicy.sol";
 import {Order, OrderKind, Verdict, CheckContext, CheckResult, Release, CallKind} from "./GateTypes.sol";
 import {OracleVerifier} from "../oracle/OracleVerifier.sol";
 import {SignedReading} from "../oracle/OracleTypes.sol";
@@ -55,7 +56,8 @@ import {SessionBreaker} from "./SessionBreaker.sol";
 /// the position ledger (steps 1 and 2), the session entry point (step 4.1),
 /// the policy check, commit and credit phases (step 4.2), signed readings
 /// handed in with an order (step 5.1), one slot grid across markets (v0.2
-/// step 1), G1 and A9 (v0.2 step 2).
+/// step 1), G1 and A9 (v0.2 step 2), `poke` and `resetPolicy` for policies
+/// whose state moves with signed data (v0.2 step 5).
 contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     uint256 private constant MODULE_TYPE_EXECUTOR = 2;
 
@@ -172,6 +174,13 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     error PolicyGate_MaxLegsTooSmall(uint256 maxLegs);
     error PolicyGate_TooManyReadings(uint256 readings);
     error PolicyGate_ReadingForAnotherAccount(address account);
+    error PolicyGate_NoSuchPolicy(address account, address policy, bytes32 policyId);
+
+    /// @notice A maintained policy processed `processed` units on a poke.
+    event Poked(address indexed account, address indexed policy, bytes32 policyId, uint256 processed);
+
+    /// @notice The owner reset a maintained policy's penalty state.
+    event PolicyReset(address indexed account, address indexed policy, bytes32 policyId);
 
     /// @param maxLegs_ At least 2, so that a modification fits.
     constructor(PositionLedger ledger_, OracleVerifier oracle_, uint256 maxLegs_) {
@@ -200,6 +209,34 @@ contract PolicyGate is IERC7579Module, DecoderRegistry, ConfigManager {
     /// @notice Lift a G1 suspension; both of its windows start empty.
     function reinstate() external onlyAccount nonReentrant {
         breaker.reinstate(msg.sender, generationOf(msg.sender));
+    }
+
+    // ------------------------------------------------------------------
+    // Maintained policies (v0.2 step 5)
+    // ------------------------------------------------------------------
+
+    /// @notice Have an installed instance process what it can and persist it,
+    ///         without a market call (spec v0.2, S9's `poke`). Anyone may call
+    ///         it: what the policy does depends only on signed data and the
+    ///         ledger, never on the caller.
+    function poke(address account, IPolicy policy, bytes32 policyId)
+        external
+        nonReentrant
+        returns (uint256 processed)
+    {
+        if (!hasPolicy(account, policy, policyId)) revert PolicyGate_NoSuchPolicy(account, address(policy), policyId);
+        processed = IMaintainedPolicy(address(policy)).poke(account, policyId);
+        emit Poked(account, address(policy), policyId, processed);
+    }
+
+    /// @notice The owner path: an installed instance forgets its penalty state
+    ///         (S9's `resetPenalty`).
+    function resetPolicy(IPolicy policy, bytes32 policyId) external onlyAccount nonReentrant {
+        if (!hasPolicy(msg.sender, policy, policyId)) {
+            revert PolicyGate_NoSuchPolicy(msg.sender, address(policy), policyId);
+        }
+        IMaintainedPolicy(address(policy)).reset(msg.sender, policyId);
+        emit PolicyReset(msg.sender, address(policy), policyId);
     }
 
     // ------------------------------------------------------------------

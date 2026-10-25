@@ -27,6 +27,9 @@ const PV_PROVIDER = 19;
 // The retailer that signs the tariff (v0.2 step 3); it only signs.
 const TARIFF_PROVIDER = 21;
 const bmsKeyOf = (i) => 40 + i;
+// Each agent house's meter (v0.2 step 5, for S9): a signer of its own,
+// distinct from the BMS, the forecast and the agent (spec v0.2 section 4).
+const meterKeyOf = (i) => 50 + i;
 // `ReadingKind` in OracleVerifier.
 const BMS = 0;
 const PV_FORECAST = 1;
@@ -77,6 +80,7 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
     ramp: await deploy(OPERATOR, "RampPolicy", [gate]),
     dominated: await deploy(OPERATOR, "DominatedTradePolicy", [gate]),
     roundTrip: await deploy(OPERATOR, "RoundTripPolicy", [gate]),
+    delivery: await deploy(OPERATOR, "DeliveryReconciliationPolicy", [gate]),
   };
   log(`gate        ${gate}  (ledger ${ledger}, oracle ${oracle}, decoder ${decoder})`);
   log(`policies    per-action ${policyContracts.statics}, windows ${policyContracts.windows}, quota ${policyContracts.quota}`);
@@ -143,6 +147,10 @@ export async function deploySystem(config = loadConfig(), { log = console.log } 
       await asAccount(oracle, "OracleVerifier", "setDevice", [PV_FORECAST, key(PV_PROVIDER).address, PV_MAX_AGE]);
       await asAccount(oracle, "OracleVerifier", "setDevice", [TARIFF, key(TARIFF_PROVIDER).address, TARIFF_MAX_AGE]);
       entry.bms = { address: bms, keyIndex: bmsKeyOf(i) };
+      // The house's meter, on the market's slot grid, for S9 (v0.2 step 5).
+      const meter = key(meterKeyOf(i)).address;
+      await asAccount(oracle, "OracleVerifier", "setMeter", [meter, config.slotSeconds]);
+      entry.meter = { address: meter, keyIndex: meterKeyOf(i) };
 
       // Owner path: the session circuit breaker G1 (v0.2 step 2), when the
       // configuration names one. It is opt-in, like every policy.

@@ -49,6 +49,20 @@ const DOMINATED_CONFIG = {
 
 const ROUND_TRIP_CONFIG = DOMINATED_CONFIG; // { soft, window }, the same shape
 
+const DELIVERY_CONFIG = {
+  type: "tuple",
+  components: [
+    { name: "k", type: "uint64" },
+    { name: "h", type: "uint64" },
+    { name: "penaltySeconds", type: "uint32" },
+    { name: "escalationSeconds", type: "uint32" },
+    { name: "settlementLagSeconds", type: "uint32" },
+    { name: "graceSeconds", type: "uint32" },
+    { name: "maxProcess", type: "uint16" },
+    { ...WINDOW, name: "window" },
+  ],
+};
+
 const WINDOW_CONFIG = {
   type: "tuple",
   components: [{ name: "quantity", type: "uint8" }, { name: "soft", type: "uint64" }, { ...WINDOW, name: "window" }],
@@ -113,7 +127,8 @@ function sliding(hours, cap, bucketSeconds = 3600) {
 /**
  * The instances to add for one agent: [{ contract, id, name, config }], where
  * `contract` is "statics", "windows", "quota", "dominated", "roundTrip",
- * "deliverability", "cycles" or "ramp", and `config` the encoded bytes. `battery` is the prosumer's, from
+ * "delivery", "deliverability", "cycles" or "ramp", and `config` the encoded
+ * bytes. `battery` is the prosumer's, from
  * prosumers.json; without one, the physical policies are left out.
  */
 export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
@@ -161,6 +176,27 @@ export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
       name: "S8 round trip",
       config: encodeAbiParameters([ROUND_TRIP_CONFIG], [{
         soft: BigInt(rt.softWh), window: sliding(rt.hours, rt.capWh, slotSeconds),
+      }]),
+    });
+  }
+
+  // S9 (v0.2 step 5): sold against delivered, a CUSUM on the shortfall, when
+  // "delivery" names it. H_pen, level 1's cap on sells, is a share of S2's
+  // export cap (spec default 50 %).
+  const dl = p.delivery;
+  if (dl) {
+    out.push({
+      contract: "delivery",
+      name: "S9 delivery",
+      config: encodeAbiParameters([DELIVERY_CONFIG], [{
+        k: BigInt(dl.kWh),
+        h: BigInt(dl.hWh),
+        penaltySeconds: dl.penaltyHours * 3600,
+        escalationSeconds: dl.escalationDays * 86_400,
+        settlementLagSeconds: dl.settlementLagSlots * slotSeconds,
+        graceSeconds: dl.graceSlots * slotSeconds,
+        maxProcess: dl.maxProcess,
+        window: sliding(dl.windowHours, Math.round(p.exportImport.exportWh * dl.penaltyCapShareOfExport), slotSeconds),
       }]),
     });
   }

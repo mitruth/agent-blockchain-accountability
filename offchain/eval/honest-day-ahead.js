@@ -1,4 +1,4 @@
-// node offchain/eval/honest-day-ahead.js [--arm B2] [--days 364] [--first-day 2022-01-02] [--report file.json] [--full]
+// node offchain/eval/honest-day-ahead.js [--arm B2] [--days 364] [--first-day 2022-01-02] [--report file.json] [--full] [--delivery]
 //
 // An honest agent, day after day, through the gate (spec v0.2 step 2: G1 must
 // never suspend an honest arm; decision of 21 October 2026).
@@ -25,6 +25,14 @@
 // per policy, the submissions it rejected and those it flagged, and every
 // suspension. Rejections and flags here are honest false positives.
 //
+// S9 (v0.2 step 5) reads the house's meter. Before each morning's orders the
+// meter's readings are posted for every delivery slot that has ended, and a
+// keeper pokes S9 until it has taken them in; the run counts S9's alarms. By
+// default the orders are the arm's realized flows, so the meter shows them
+// delivered exactly. --delivery trades a day-ahead plan from forecasts
+// instead (offchain/eval/delivery.js, the delivery simulator): the meter then
+// shows what the real sun and load, and the re-dispatched battery, delivered.
+//
 // Runs on a fresh chain inside this process; needs the contracts built
 // (npm run build). Writes its deployment to deployments/honest.json (git
 // ignored), or to HONEST_DEPLOYMENT_FILE, never to deployments/local.json.
@@ -40,7 +48,9 @@ const { useInProcessChain, send, read, calldata, events, now, warpTo, price } = 
 const { deploySystem, loadConfig } = await import("../deploy/index.js");
 const { runMatcher } = await import("../matcher/index.js");
 const { expireUnmatched, reconcile } = await import("../keeper/index.js");
-const { postForecast, postTariff, bmsReading, batteryAt, forecastAt, tariffAt, armSlots, indexOfDate } = await import("../oracle/index.js");
+const { postForecast, postTariff, postMeter, bmsReading, batteryAt, forecastAt, tariffAt, armSlots, armSettings, indexOfDate } =
+  await import("../oracle/index.js");
+const { simulateDelivery } = await import("./delivery.js");
 const { nextDayAhead, brussels, addDays, wallClock } = await import("../scenarios/calendar.js");
 
 const ELECTRICITY = 0;
@@ -60,6 +70,7 @@ const REPORT = option("report", null);
 
 /** prosumers.json with Alice replaying `ARM` and Bob as the counterparty, both well funded. */
 const FULL = process.argv.includes("--full");
+const DELIVERY = process.argv.includes("--delivery");
 
 function honestConfig() {
   const config = loadConfig();
@@ -88,8 +99,9 @@ async function main() {
   const names = Object.fromEntries(alice.policies.map((p) => [p.id.toLowerCase(), p.name]));
   const MIN_WH = Number(loadConfig().agentPolicies.perAction.minQtyWh ?? 0);
   const tally = {
-    policies: alice.policies.map((p) => p.name), days: 0, submissions: 0, orders: 0, rejected: 0, flagged: 0,
-    suspensions: 0, mergedSlots: 0, droppedWh: 0, byPolicy: {}, staticBounds: {},
+    policies: alice.policies.map((p) => p.name), delivery: DELIVERY, days: 0, submissions: 0, orders: 0, rejected: 0,
+    flagged: 0, suspensions: 0, mergedSlots: 0, droppedWh: 0, byPolicy: {}, staticBounds: {},
+    meterReadings: 0, pokes: 0, s9Alarms: [], contractedSaleWh: 0, shortfallWh: 0,
   };
   const count = (policyId, what) => {
     const name = names[policyId.toLowerCase()] ?? policyId;
@@ -100,6 +112,38 @@ async function main() {
   const slots = armSlots(ARM, alice.home);
   const first = indexOfDate(slots, FIRST_DAY);
   const days = Math.min(DAYS, Math.floor((slots.length - first) / 48) - 1);
+
+  // What the agent contracts and what the meter measures, per data slot: the
+  // arm's realized flows, or the delivery simulator's plan and outcome.
+  const sim = DELIVERY ? simulateDelivery(slots, armSettings(alice.home)) : null;
+  const netImportOf = (k) => (sim ? -sim[k].contractWh : Number(slots[k].importWh) - Number(slots[k].exportWh));
+  const meterOf = (k) =>
+    sim ? { importWh: sim[k].importWh, exportWh: sim[k].exportWh } : { importWh: Number(slots[k].importWh), exportWh: Number(slots[k].exportWh) };
+
+  // S9's instance, for the keeper's pokes; the meter readings still to post.
+  const s9 = alice.policies.find((p) => p.name === "S9 delivery");
+  const pendingMeter = [];
+  const countAlarms = (receipt) => {
+    for (const e of events(receipt, "DeliveryReconciliationPolicy", "DeliveryAlarm")) {
+      tally.s9Alarms.push({ at: Number(receipt.blockNumber), slot: Number(e.args.slot), level: Number(e.args.level) });
+    }
+  };
+  /** Post every reading whose slot has ended, then poke S9 until it has taken in all it can. */
+  const catchUpMeter = async () => {
+    const t = await now();
+    while (pendingMeter.length && pendingMeter[0].slotStart + SLOT <= t) {
+      await postMeter(d, "alice", pendingMeter.shift());
+      tally.meterReadings++;
+    }
+    if (!s9) return;
+    for (;;) {
+      const receipt = await send(d.roles.keeper.keyIndex, gate, "PolicyGate", "poke", [alice.account, s9.policy, s9.id]);
+      tally.pokes++;
+      countAlarms(receipt);
+      const poked = events(receipt, "PolicyGate", "Poked")[0];
+      if (!poked || poked.args.processed === 0n) break;
+    }
+  };
 
   for (let n = 0; n < days; n++) {
     const dataDate = slots[first + 48 * n].date;
@@ -123,6 +167,8 @@ async function main() {
     await postTariff(d, "alice", { firstSlotStart: nowSlot, ...tariff, issuedAt: t });
     const ahead = (start - nowSlot) / SLOT; // the delivery day's first slot in the schedule
     let reading = [await bmsReading(d, "alice", nowSlot, batteryAt(alice, dataDate, start, nowSlot))];
+    // The meter of the delivery so far, taken in by S9 before the agent acts.
+    await catchUpMeter();
 
     // The arm's day, slot by slot, as net orders; Bob mirrors each.
     const bids = [];
@@ -132,9 +178,16 @@ async function main() {
     for (let i = 0; i < slotCount; i++) {
       const s = slots[dayIndex + i];
       if (!s) break;
-      const net = carry + s.importWh - s.exportWh;
+      // The meter will report this slot of the delivery day once it ends.
+      pendingMeter.push({ slotStart: start + i * SLOT, ...meterOf(dayIndex + i) });
+      if (sim) {
+        tally.contractedSaleWh += Math.max(0, sim[dayIndex + i].contractWh);
+        tally.shortfallWh += sim[dayIndex + i].shortfallWh;
+      }
+      const own = netImportOf(dayIndex + i);
+      const net = carry + own;
       if (Math.abs(net) < MIN_WH) {
-        if (s.importWh - s.exportWh !== 0) tally.mergedSlots++;
+        if (own !== 0) tally.mergedSlots++;
         carry = net;
         continue;
       }
@@ -152,6 +205,7 @@ async function main() {
       const submit = calldata("PolicyGate", "submit", [alice.prosumer, calldata("Prosumer", fn, [ELECTRICITY, list]), reading]);
       reading = [];
       const receipt = await send(alice.agent.keyIndex, alice.account, "MiniAccount", "executeAsSession", [gate, submit]);
+      countAlarms(receipt);
       tally.submissions++;
       tally.orders += list.length;
       if (events(receipt, "PolicyGate", "Rejected").length) tally.rejected++;
@@ -184,11 +238,18 @@ async function main() {
     await expireUnmatched(d, session);
     await reconcile(d, session, "alice");
     tally.days++;
-    if (n % 30 === 0) console.log(`  ${dataDate}: ${tally.submissions} submissions, ${tally.rejected} rejected, ${tally.flagged} flagged, ${tally.suspensions} suspensions`);
+    if (n % 30 === 0) {
+      console.log(
+        `  ${dataDate}: ${tally.submissions} submissions, ${tally.rejected} rejected, ${tally.flagged} flagged, ` +
+          `${tally.suspensions} suspensions, ${tally.s9Alarms.length} S9 alarms`,
+      );
+    }
   }
 
   await connection.close();
-  const result = { arm: ARM, firstDay: FIRST_DAY, full: FULL, minQtyWh: MIN_WH, ...tally };
+  const alarms = tally.s9Alarms.length;
+  const s9Arl0Days = alarms ? Number((tally.days / alarms).toFixed(1)) : null;
+  const result = { arm: ARM, firstDay: FIRST_DAY, full: FULL, minQtyWh: MIN_WH, ...tally, s9Arl0Days };
   console.log(JSON.stringify(result, null, 2));
   if (REPORT) fs.writeFileSync(REPORT, JSON.stringify(result, null, 2) + "\n");
   process.exit(tally.suspensions === 0 ? 0 : 1);

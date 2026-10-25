@@ -1,0 +1,72 @@
+{
+  "home": "home_01",
+  "year": 2022,
+  "rule": "k = p95 of B2's shortfall over selling slots; h = smallest (100 Wh steps) with ARL0 >= target under B2",
+  "targetDays": 30,
+  "kWh": 436,
+  "hWh": 2100,
+  "honest": {
+    "B2": {
+      "slots": 17520,
+      "slotsSold": 4906,
+      "slotsShort": 670,
+      "soldWh": 4015136,
+      "shortWh": 256398,
+      "p95ShortfallAllSlotsWh": 0,
+      "p95ShortfallSellingSlotsWh": 436,
+      "alarms": 11,
+      "meanDaysBetween": 33.2,
+      "firstAlarmDay": 63.38
+    },
+    "B0": {
+      "slots": 17520,
+      "slotsSold": 6431,
+      "slotsShort": 927,
+      "soldWh": 5033131,
+      "shortWh": 471032,
+      "p95ShortfallAllSlotsWh": 20,
+      "p95ShortfallSellingSlotsWh": 607,
+      "alarms": 19,
+      "meanDaysBetween": 19.2,
+      "firstAlarmDay": 50.58
+    }
+  },
+  "attack": {
+    "B2, sales +10 %": {
+      "slots": 17520,
+      "slotsSold": 5033,
+      "slotsShort": 933,
+      "soldWh": 4416694,
+      "shortWh": 348168,
+      "p95ShortfallAllSlotsWh": 1,
+      "p95ShortfallSellingSlotsWh": 539,
+      "alarms": 26,
+      "meanDaysBetween": 14,
+      "firstAlarmDay": 35.52
+    },
+    "B2, sales +20 %": {
+      "slots": 17520,
+      "slotsSold": 5147,
+      "slotsShort": 1213,
+      "soldWh": 4818286,
+      "shortWh": 486408,
+      "p95ShortfallAllSlotsWh": 108,
+      "p95ShortfallSellingSlotsWh": 663,
+      "alarms": 37,
+      "meanDaysBetween": 9.9,
+      "firstAlarmDay": 35.52
+    },
+    "B2, sales +50 %": {
+      "slots": 17520,
+      "slotsSold": 5444,
+      "slotsShort": 2103,
+      "soldWh": 6022057,
+      "shortWh": 1172298,
+      "p95ShortfallAllSlotsWh": 566,
+      "p95ShortfallSellingSlotsWh": 1068,
+      "alarms": 119,
+      "meanDaysBetween": 3.1,
+      "firstAlarmDay": 35.48
+    }
+  }
+}

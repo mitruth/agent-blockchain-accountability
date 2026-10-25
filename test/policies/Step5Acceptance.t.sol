@@ -19,6 +19,7 @@ import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
 import {ReadingKind, BmsReading, SignedReading, TariffSchedule} from "../../contracts/oracle/OracleTypes.sol";
 import {DominatedTradePolicy} from "../../contracts/policies/DominatedTradePolicy.sol";
 import {RoundTripPolicy} from "../../contracts/policies/RoundTripPolicy.sol";
+import {DeliveryReconciliationPolicy} from "../../contracts/policies/DeliveryReconciliationPolicy.sol";
 import {OracleFixture} from "../oracle/OracleFixture.sol";
 
 /// Step 5's acceptance criteria (spec Section 9), on the ported P2P market
@@ -354,6 +355,36 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         assertEq(used, 25 * 10, "S8 counted every offer");
         assertEq(_s7Used(s7), 25, "S7 counted every offer, and no bid");
         emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7 and S8, k = 48", batch);
+    }
+
+    /// @dev v0.2 step 5: the same, with S9 added on the house's meter. Its
+    ///      cost here is the window it counts sells into and the slots it
+    ///      looks at, none of them settled yet; taking settled slots in costs
+    ///      about 29,000 gas each, at most maxProcess a submission
+    ///      (DeliveryReconciliationPolicy.t.sol, test_gas_processing).
+    function test_gas_dayAheadBatchWithDelivery() public {
+        _addEveryPolicyWithPrices();
+        RoundTripPolicy s8 = new RoundTripPolicy(address(gate));
+        RoundTripPolicy.Config memory r;
+        r.soft = type(uint64).max;
+        r.window = _sliding(type(uint64).max);
+        _add(s8, keccak256("S8"), abi.encode(r));
+        uint32 slotSeconds = uint32(manager.slotSeconds());
+        vm.prank(aliceOwner);
+        aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setMeter, (meterSigner, slotSeconds)));
+        DeliveryReconciliationPolicy s9 = new DeliveryReconciliationPolicy(address(gate));
+        DeliveryReconciliationPolicy.Config memory d;
+        d.k = 436;
+        d.h = 2_100;
+        d.penaltySeconds = 1 days;
+        d.escalationSeconds = 7 days;
+        d.settlementLagSeconds = slotSeconds;
+        d.graceSeconds = 4 * slotSeconds;
+        d.maxProcess = 8;
+        d.window = _sliding(15_000);
+        _add(s9, keccak256("S9"), abi.encode(d));
+        uint256 batch = _batchAgainstBids();
+        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7, S8 and S9, k = 48", batch);
     }
 
     /// @dev The baseline for S8: the same bids and batch without it.

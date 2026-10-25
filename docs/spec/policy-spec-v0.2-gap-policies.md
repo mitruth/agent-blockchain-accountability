@@ -461,8 +461,9 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 | 1. C1–C5, four oracle kinds, signer distinctness | `v0.2/1-oracles-aggregation` | Committed `7b4c8d7`, 21 October |
 | 2. G1 session circuit breaker, A9 recipient lock | `v0.2/2-breaker-recipient` | Committed `9bc3c52`, 22 October |
 | 3. A3T tariff band, S7 dominated-trade budget | `v0.2/3-tariff-band` | Committed `2afdd4e`, 24 October |
-| 4. S8 same-slot round-trip quota | `v0.2/4-round-trip` | Built; awaiting Dan's review |
-| 5–8 | | Not started |
+| 4. S8 same-slot round-trip quota | `v0.2/4-round-trip` | Committed `ad2d0f4`, 24 October |
+| 5. S9 delivery reconciliation, `poke`, delivery simulator, calibration | `v0.2/5-delivery` | Committed, 25 October (see the log, v0.2 Step 5) |
+| 6–8 | | In progress, 25 October |
 
 **Decisions of 21 October 2026, before step 1** (log v0.2-1.1):
 - Agent keys for signer distinctness are declared by the owner in the OracleVerifier (at most 8): the gate has no agent registry since D1.
@@ -494,3 +495,13 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 - S8 reads the ledger's committed positions, already summed across markets (C4), so churn split between two venues is one round trip. A modification is a cancellation and a placement, so S8 counts only what it adds.
 - S8 counted nothing for either honest arm over the year: a day-ahead agent nets each slot.
 - The step 3 gas figure for A3T and S7 was not the worst case it claimed (S7 counted nothing in that test). Corrected: 12,001,954 gas for the 24-offer batch, +11.2 %.
+
+**Decisions of 25 October 2026, steps 5 to 8** (log v0.2-5.1):
+- Dan asked for steps 5 to 8 in one go: each step on its own branch, committed under his name, with its hand-over in the log.
+- S9's honest data come from a delivery simulator (§7); the calibration is in JavaScript in this repo; A3T at zero tariff stays as specified; regret vs B2 settles refused volume at the real-time price.
+- **D19 refined:** k is the p95 of honest shortfall over the slots where the agent sold. Over all slots it is 0 (only 3.8 % of B2's half-hours fall short).
+
+**Findings of step 5:**
+- k = 436 Wh, h = 2,100 Wh (home_01, B2). On chain, honest B2 alarms 36.3 days apart (target ≥ 30); B0 22.7 days apart with B2's calibration: per account means per controller too.
+- ARL₁ under oversell: +10 % 14.0 days between alarms, +20 % 9.9, +50 % 3.1; winter delays the first alarm to February.
+- S9 reads a slot only once reconciled, and only when processing reaches it: a keeper's `poke` keeps alarms and D16 current. A reading older than the meter's 128-slot ring can no longer be posted; the owner's reset moves past it.
