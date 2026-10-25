@@ -656,6 +656,21 @@ contract ChronicOversellTest is OversellFixture {
     }
 }
 
+/// @notice Spec section 7, meter withholding, with S9 removed: the readings
+///         stop and selling goes on.
+contract MeterWithholdingWithoutS9Test is DeliveryFixture {
+    function _installS9() internal pure override returns (bool) {
+        return false;
+    }
+
+    function test_meterWithholding_passesWithoutS9() public {
+        _sold(10, 1_000);
+        _sold(11, 1_000);
+        vm.warp(market.slotStart(10) + SLOT_SECONDS + LAG + GRACE);
+        assertTrue(_place(Side.SELL, _ahead(), 100, PRICE) != bytes32(0));
+    }
+}
+
 contract ChronicOversellWithoutS9Test is OversellFixture {
     function _installS9() internal pure override returns (bool) {
         return false;

@@ -438,11 +438,20 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
 
     /// @dev S8 and S9 as in the two tests above.
     function _addRoundTripAndDelivery() internal {
+        _addS8();
+        _addS9();
+    }
+
+    function _addS8() internal {
         RoundTripPolicy s8 = new RoundTripPolicy(address(gate));
         RoundTripPolicy.Config memory r;
         r.soft = type(uint64).max;
         r.window = _sliding(type(uint64).max);
         _add(s8, keccak256("S8"), abi.encode(r));
+    }
+
+    /// @dev S9 at its calibrated k and h, on the house's meter.
+    function _addS9() internal {
         uint32 slotSeconds = uint32(manager.slotSeconds());
         vm.prank(aliceOwner);
         aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setMeter, (meterSigner, slotSeconds)));
@@ -482,6 +491,18 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
     ///      offer is dominated, inside A3T's band) and retail well above it
     ///      (so a bid is inside the band and not dominated).
     function _addEveryPolicyWithPrices() internal returns (DominatedTradePolicy s7) {
+        _postTariff();
+        _addStaticWithBand();
+        _addS1S2();
+        _addS3();
+        _addS4();
+        _addS5();
+        s7 = _addS7();
+    }
+
+    /// @dev The tariff device, and a tariff from the session's first slot:
+    ///      retail 300,000, feed-in one unit above the orders' price.
+    function _postTariff() internal {
         vm.prank(aliceOwner);
         aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setDevice, (ReadingKind.TARIFF, tariffSigner, 1 days)));
         uint64[] memory retail = new uint64[](96);
@@ -504,6 +525,10 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
                 })
             )
         );
+    }
+
+    /// @dev A1-A6 with A3T on, 10 % each side.
+    function _addStaticWithBand() internal {
         StaticOrderPolicy.Config memory c;
         c.maxQtyWh = 3_000;
         c.maxValue = 10_000_000;
@@ -515,10 +540,9 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         c.buyMarkupBps = 1_000;
         c.sellDiscountBps = 1_000;
         _add(statics, keccak256("A"), abi.encode(c));
-        _addS1S2();
-        _addS3();
-        _addS4();
-        _addS5();
+    }
+
+    function _addS7() internal returns (DominatedTradePolicy s7) {
         s7 = new DominatedTradePolicy(address(gate));
         DominatedTradePolicy.Config memory d;
         d.soft = type(uint64).max;
@@ -550,6 +574,41 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         _gasLine("  + S4");
         _addS5();
         _gasLine("  + S5");
+        // v0.2 step 8: every other policy, one at a time.
+        _addS1S2();
+        _gasLine("  + S1, S2 x2");
+        _postTariff();
+        _addStaticWithBand();
+        _gasLine("  + A1-A6 with A3T");
+        _addS7();
+        _gasLine("  + S7");
+        _addS8();
+        _gasLine("  + S8");
+        _addS9();
+        _gasLine("  + S9");
+        _addEnvelope();
+        _gasLine("  + S10");
+        _addGridAlert();
+        _gasLine("  + A10 (an ALERT in force)");
+    }
+
+    /// @dev A10, with the operator's ALERT in force over every slot, no
+    ///      direction: every slot judged, nothing refused.
+    function _addGridAlert() internal {
+        GridStatePolicy a10 = new GridStatePolicy(address(gate));
+        _add(a10, keccak256("A10"), abi.encode(GridStatePolicy.Config({minLevel: 1})));
+        vm.prank(aliceOwner);
+        aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setDevice, (ReadingKind.GRID_STATE, gridSigner, 0)));
+        oracle.accept(
+            _signGrid(
+                oracle,
+                GRID_KEY,
+                GridState({
+                    issuedAt: uint64(block.timestamp), validUntil: uint64(block.timestamp) + 1 days,
+                    level: GridLevel.ALERT, direction: GridDirection.NONE, horizonSlots: 200
+                })
+            )
+        );
     }
 
     function _gasLine(string memory label) internal {

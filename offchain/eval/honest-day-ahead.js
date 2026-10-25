@@ -86,11 +86,19 @@ function honestConfig() {
   return { ...config, agentValidityDays, agentPolicies: { ...config.agentPolicies, omit }, prosumers: [alice, bob] };
 }
 
+/** Refused volume and its regret, per side. */
+const refusal = () => ({ submissions: 0, buyWh: 0, sellWh: 0, buyRegretMicroUsd: 0, sellRegretMicroUsd: 0 });
+
 /** An order request at `unitsPerKWh`, at least the market's least price, 1. */
 const req = (slot, wh, unitsPerKWh) => ({ slot, quantity: BigInt(wh), price: BigInt(Math.max(1, unitsPerKWh)) });
 
+// v0.2 step 8: a run reproduces exactly. The chain starts on a fixed date,
+// whenever the run is made, and its blocks do not follow the wall clock.
+const START = Date.UTC(2030, 0, 1) / 1000;
+
 async function main() {
-  const connection = await useInProcessChain();
+  const connection = await useInProcessChain({ fixedTime: true });
+  await warpTo(START);
   const d = await deploySystem(honestConfig(), { log: () => {} });
   const SLOT = d.slotSeconds;
   const alice = d.prosumers.alice;
@@ -106,6 +114,23 @@ async function main() {
     policies: alice.policies.map((p) => p.name), delivery: DELIVERY, days: 0, submissions: 0, orders: 0, rejected: 0,
     flagged: 0, suspensions: 0, mergedSlots: 0, droppedWh: 0, byPolicy: {}, staticBounds: {},
     meterReadings: 0, pokes: 0, s9Alarms: [], contractedSaleWh: 0, shortfallWh: 0, gridEpisodes: 0,
+    refused: { all: refusal(), byPolicy: {} },
+  };
+  // Regret (decision of 25 October 2026): what a refused order's energy costs
+  // settled at the market's real-time price instead of its tariff price. A
+  // refused BUY pays the real-time price: q (rt - p). A refused SELL is paid
+  // it: q (p - rt), negative when rt is above the feed-in price.
+  const RT = BigInt(d.realTimePrice);
+  const refuse = (r, fn, list) => {
+    for (const o of list) {
+      if (fn === "placeBids") {
+        r.buyWh += Number(o.quantity);
+        r.buyRegretMicroUsd += Number((o.quantity * (RT - o.price)) / 1000n);
+      } else {
+        r.sellWh += Number(o.quantity);
+        r.sellRegretMicroUsd += Number((o.quantity * (o.price - RT)) / 1000n);
+      }
+    }
   };
   const count = (policyId, what) => {
     const name = names[policyId.toLowerCase()] ?? policyId;
@@ -235,10 +260,23 @@ async function main() {
       countAlarms(receipt);
       tally.submissions++;
       tally.orders += list.length;
-      if (events(receipt, "PolicyGate", "Rejected").length) tally.rejected++;
+      const rejected = events(receipt, "PolicyGate", "Rejected").length > 0;
+      if (rejected) {
+        tally.rejected++;
+        tally.refused.all.submissions++;
+        refuse(tally.refused.all, fn, list);
+      }
       if (events(receipt, "PolicyGate", "PolicyFlag").length) tally.flagged++;
       for (const e of events(receipt, "PolicyGate", "PolicyResult")) {
-        if (e.args.result.verdict === 2) count(e.args.policyId, "rejected");
+        if (e.args.result.verdict === 2) {
+          count(e.args.policyId, "rejected");
+          // Each refusing policy is charged the whole submission; a
+          // submission two policies refuse counts for both, once in "all".
+          const name = names[e.args.policyId.toLowerCase()] ?? e.args.policyId;
+          tally.refused.byPolicy[name] ??= refusal();
+          tally.refused.byPolicy[name].submissions++;
+          refuse(tally.refused.byPolicy[name], fn, list);
+        }
         if (e.args.result.verdict === 1) count(e.args.policyId, "flagged");
         // A1-A6 report which bounds broke, as a bitmask: count each.
         if (e.args.result.verdict === 2 && names[e.args.policyId.toLowerCase()] === "A1-A6 per action") {

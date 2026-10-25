@@ -4320,6 +4320,134 @@ price-only modification passing either way). **15 of 15 at the first run**,
 
 ---
 
+## v0.2 Step 8. The evaluation
+
+Spec: `docs/spec/policy-spec-v0.2-gap-policies.md`, §7 in full; build order
+11.6 step 8. Branch `v0.2/8-evaluation`, from `858eb84`. The report is
+`docs/reports/evaluation-v0.2-2026-10-25.md`; this section records how it
+was made.
+
+### v0.2-8.1 — The replays reproduce exactly
+
+Step 4 found that a replay's outcome depended on how fast it ran: Hardhat's
+in-process chain advances block time with the wall clock between warps.
+- `useInProcessChain({ fixedTime: true })` (`offchain/chain/client.js`)
+  wraps the provider: a block not given a time of its own comes one second
+  after the last. The honest replay uses it, and starts the chain at a fixed
+  date (1 January 2030), whenever it is run.
+- **Checked:** the same five days, run twice, give byte-identical reports.
+- The fuzzers set every block's time themselves, and are unchanged.
+
+### v0.2-8.2 — Regret
+
+`honest-day-ahead.js` now tallies, per policy and over all, the energy of
+every refused submission and its regret, as Dan decided: the refused volume
+settled at the market's real-time price (0.30 USD/kWh) instead of the
+tariff. A refused BUY pays it: q (0.30 − p). A refused SELL is paid it:
+q (p − 0.30), negative while feed-in is below 0.30 (most of the year).
+- **Read with care.** The real-time price is the market's penalty for a
+  measured deviation beyond 10 % of a commitment (`ClassicSettlement`), not
+  a price at which energy is bought and sold; the figure is a bound of the
+  stakes, not a bill. And the agent does not retry: a refused submission
+  refuses all its legs, often a day's buying, so the refused energy is the
+  agent's whole loss of market access for that batch.
+- A submission two policies refuse counts for each, and once in the total.
+
+### v0.2-8.3 — The attacks
+
+`offchain/eval/section7.js` runs every §7 attack's pair of tests in one
+Hardhat run and writes `docs/reports/section7-2026-10-25.md`. Each attack
+was built in its policy's step, in its policy's test file; the plan's
+collected `test/eval/Section7.t.sol` would have duplicated them, so the
+runner gathers them instead. One counterpart was missing and was added:
+meter withholding with S9 removed (`MeterWithholdingWithoutS9Test`).
+**13 of 13 shown both ways** (the ten rows of §7, A9's three acceptance
+rows of §11.2). Two counterparts are not "the policy removed": G1's on-off
+agent passes when its bursts are spaced beyond the 24 h window; signer
+collusion is refused at registration, and the converse is shown.
+
+### v0.2-8.4 — Gas by k
+
+`Step5Acceptance._reportGasAt(k)` now adds, after S3, S4 and S5, every
+other policy one at a time: S1 and S2, A1–A6 with A3T, S7, S8, S9, S10 and
+A10 (an ALERT in force), one offer and one bid each, at k = 8, 16, 24, 48
+and 96. With everything, one offer costs 767,087 gas at k = 8, 1,050,215 at
+k = 48 and 1,395,410 at k = 96; S3 and S4 grow with k, every v0.2 policy
+costs the same at every k (about 20,000 to 42,000 an order).
+
+### v0.2-8.5 — Step 7's replays (not deterministic)
+
+Step 7's own replays, with A10 and the scripted episodes, finished after its
+commit (the reports are `docs/reports/honest-grid-<arm>-2026-10-25.json`):
+
+| | B0 | B2 |
+|---|---:|---:|
+| Submissions / refused | 989 / 213 | 831 / 208 |
+| Grid alerts posted | 84 | 84 |
+| **Refused by A10** | **77** | **82** |
+| Suspensions (G1); S9 alarms | 0; 15 | 0; 9 |
+
+The honest agent ignores the grid state, so nearly every alert day costs it
+a submission: the price of an alert to an agent that does not read it.
+
+### v0.2-8.6 — The honest evaluation runs
+
+Deterministic, every 2022 day, the agent trading the delivery simulator's
+plan, every policy (S3 and S4 left out, then kept with `--full`); reports
+`docs/reports/honest-eval-<arm>[-full]-2026-10-25.json`; tables in the
+evaluation report §3 (`summarize.js`).
+
+| | B0 | B2 | B0 full | B2 full |
+|---|---:|---:|---:|---:|
+| Submissions | 989 | 831 | 989 | 831 |
+| Refused | 214 (21.6 %) | 208 (25.0 %) | 704 (71.2 %) | 637 (76.7 %) |
+| Suspensions (G1) | 0 | 0 | 0 | 0 |
+| S9 alarms; ARL₀ days | 15; 24.2 | 9; 40.3 | 0; – | 0; – |
+| Most refusals | A1–A6 107, A10 77 | A1–A6 110, A10 82 | S3 668 | S3 591 |
+| Refused buy / sell kWh | 1,806 / 1,568 | 2,322 / 1,050 | 5,868 / 5,021 | 5,341 / 4,012 |
+
+- G1 never suspends an honest arm, with every policy, over a year.
+- S7 and S8 never act; S10 refuses 3 of B2's submissions, on cut days.
+- Every one of A1–A6's refusals is A3's or A3T's at the bottom of the
+  tariff (v0.2-3.8).
+- A10 costs the agent nearly every alert day: it does not read the state.
+- With S3 kept, two submissions in three are refused: S3's reserve-load
+  model (since step 2) is the largest open item.
+
+### v0.2-8.7 — Mutation
+
+The full re-run of every catalogue was started on 25 October, in Foundry's
+Docker image, beside the honest runs. A second copy of the repo, meant to
+run the last catalogues in parallel, could not compile ModuleKit from a
+`node_modules` junction inside Docker, and was dropped. To commit this step
+without waiting about two hours more, the run was stopped after 148 of the
+492 mutants: **145 caught, 3 accepted** (the mock market's, accepted since
+v0.1), **none missed** (`gate` 43, `ledger` 51, `market` 54 of 55). The rest
+runs in a follow-up commit with the merged report
+`docs/reports/mutation-v0.2-2026-10-25.md`. Every v0.2 catalogue already ran
+in full at its own step, on code unchanged since.
+
+### v0.2-8.8 — Checked
+
+**Runs, 25 October:**
+- `node offchain/eval/section7.js`: **13 of 13** attacks shown both ways.
+- `npm test`: **628 passing** (step 7: 627; +1, meter withholding without
+  S9).
+- Foundry in Docker, the four real accounts included: **636 passed**.
+- `npm run test:offchain`: **68 passing**.
+- Every verifier, no disagreement: `gridstate` 1,970, `envelope` 1,994,
+  `delivery` 2,797 (3 alarms), `roundtrip` 4,825, `price` 1,112, `breaker`
+  1,035 (37 suspensions), `ledger` 1,280 totals, `window` 6,875 figures.
+- `npm run mutate -- --check`: every pattern found once in all fourteen
+  catalogues.
+- The demo is as at step 7 (step 8 changed no contract and no deploy).
+
+**v0.2 is built:** every item of §11.1 and every step of §11.6. Open for
+Dan: the A3T zero-tariff band (v0.2-3.8), S3's load model, and the
+calibration findings of the evaluation report §7.
+
+---
+
 ## Open decisions
 
 None left. Dan answered every item on 16 October (log 4.9); the table keeps the questions and records the answers.

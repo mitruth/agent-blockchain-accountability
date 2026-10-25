@@ -1,0 +1,131 @@
+{
+  "arm": "B2",
+  "firstDay": "2022-01-02",
+  "full": true,
+  "minQtyWh": 50,
+  "policies": [
+    "A1-A6 per action",
+    "S7 dominated trades",
+    "S8 round trip",
+    "S9 delivery",
+    "S10 envelope",
+    "A10 grid state",
+    "S1 budget",
+    "S2 export",
+    "S2 import",
+    "S6 cancel quota",
+    "S3 deliverability",
+    "S4 cycles",
+    "S5 ramp"
+  ],
+  "delivery": true,
+  "days": 363,
+  "submissions": 831,
+  "orders": 12314,
+  "rejected": 637,
+  "flagged": 175,
+  "suspensions": 0,
+  "mergedSlots": 929,
+  "droppedWh": 24,
+  "byPolicy": {
+    "S10 envelope": {
+      "rejected": 3,
+      "flagged": 16
+    },
+    "S3 deliverability": {
+      "rejected": 591,
+      "flagged": 0
+    },
+    "S5 ramp": {
+      "rejected": 7,
+      "flagged": 141
+    },
+    "A10 grid state": {
+      "rejected": 82,
+      "flagged": 0
+    },
+    "A1-A6 per action": {
+      "rejected": 110,
+      "flagged": 0
+    },
+    "S4 cycles": {
+      "rejected": 71,
+      "flagged": 16
+    },
+    "S1 budget": {
+      "rejected": 18,
+      "flagged": 9
+    }
+  },
+  "staticBounds": {
+    "A3T tariff band": 61,
+    "A3 price": 49
+  },
+  "meterReadings": 17346,
+  "pokes": 2538,
+  "s9Alarms": [],
+  "contractedSaleWh": 4014407,
+  "shortfallWh": 256398,
+  "gridEpisodes": 84,
+  "refused": {
+    "all": {
+      "submissions": 637,
+      "buyWh": 5341352,
+      "sellWh": 4012083,
+      "buyRegretMicroUsd": 1020860387,
+      "sellRegretMicroUsd": -1126435430
+    },
+    "byPolicy": {
+      "S3 deliverability": {
+        "submissions": 591,
+        "buyWh": 4843041,
+        "sellWh": 4012083,
+        "buyRegretMicroUsd": 901266408,
+        "sellRegretMicroUsd": -1126435430
+      },
+      "S5 ramp": {
+        "submissions": 7,
+        "buyWh": 162343,
+        "sellWh": 17026,
+        "buyRegretMicroUsd": 35630489,
+        "sellRegretMicroUsd": -4723061
+      },
+      "A10 grid state": {
+        "submissions": 82,
+        "buyWh": 886001,
+        "sellWh": 336634,
+        "buyRegretMicroUsd": 164601930,
+        "sellRegretMicroUsd": -95512983
+      },
+      "A1-A6 per action": {
+        "submissions": 110,
+        "buyWh": 1006645,
+        "sellWh": 700461,
+        "buyRegretMicroUsd": 257505480,
+        "sellRegretMicroUsd": -205640308
+      },
+      "S4 cycles": {
+        "submissions": 71,
+        "buyWh": 0,
+        "sellWh": 1094026,
+        "buyRegretMicroUsd": 0,
+        "sellRegretMicroUsd": -299859593
+      },
+      "S10 envelope": {
+        "submissions": 3,
+        "buyWh": 0,
+        "sellWh": 58978,
+        "buyRegretMicroUsd": 0,
+        "sellRegretMicroUsd": -16249911
+      },
+      "S1 budget": {
+        "submissions": 18,
+        "buyWh": 470692,
+        "sellWh": 0,
+        "buyRegretMicroUsd": -28247476,
+        "sellRegretMicroUsd": 0
+      }
+    }
+  },
+  "s9Arl0Days": null
+}

@@ -1,0 +1,198 @@
+{
+  "arm": "B0",
+  "firstDay": "2022-01-02",
+  "full": false,
+  "minQtyWh": 50,
+  "policies": [
+    "A1-A6 per action",
+    "S7 dominated trades",
+    "S8 round trip",
+    "S9 delivery",
+    "S10 envelope",
+    "A10 grid state",
+    "S1 budget",
+    "S2 export",
+    "S2 import",
+    "S6 cancel quota",
+    "S5 ramp"
+  ],
+  "delivery": true,
+  "days": 363,
+  "submissions": 989,
+  "orders": 16231,
+  "rejected": 214,
+  "flagged": 142,
+  "suspensions": 0,
+  "mergedSlots": 1172,
+  "droppedWh": 231,
+  "byPolicy": {
+    "S10 envelope": {
+      "rejected": 0,
+      "flagged": 16
+    },
+    "S2 import": {
+      "rejected": 13,
+      "flagged": 0
+    },
+    "S5 ramp": {
+      "rejected": 7,
+      "flagged": 120
+    },
+    "A10 grid state": {
+      "rejected": 77,
+      "flagged": 0
+    },
+    "A1-A6 per action": {
+      "rejected": 107,
+      "flagged": 0
+    },
+    "S9 delivery": {
+      "rejected": 7,
+      "flagged": 0
+    },
+    "S1 budget": {
+      "rejected": 28,
+      "flagged": 15
+    }
+  },
+  "staticBounds": {
+    "A3 price": 85,
+    "A3T tariff band": 22
+  },
+  "meterReadings": 17346,
+  "pokes": 2538,
+  "s9Alarms": [
+    {
+      "at": 6630,
+      "slot": 1054631,
+      "level": 1
+    },
+    {
+      "at": 7447,
+      "slot": 1054961,
+      "level": 2
+    },
+    {
+      "at": 9068,
+      "slot": 1055635,
+      "level": 1
+    },
+    {
+      "at": 12073,
+      "slot": 1056887,
+      "level": 1
+    },
+    {
+      "at": 22554,
+      "slot": 1061402,
+      "level": 1
+    },
+    {
+      "at": 24009,
+      "slot": 1062029,
+      "level": 1
+    },
+    {
+      "at": 24119,
+      "slot": 1062071,
+      "level": 2
+    },
+    {
+      "at": 24119,
+      "slot": 1062074,
+      "level": 2
+    },
+    {
+      "at": 26047,
+      "slot": 1062884,
+      "level": 1
+    },
+    {
+      "at": 26048,
+      "slot": 1062888,
+      "level": 2
+    },
+    {
+      "at": 26498,
+      "slot": 1063080,
+      "level": 2
+    },
+    {
+      "at": 26498,
+      "slot": 1063081,
+      "level": 2
+    },
+    {
+      "at": 28093,
+      "slot": 1063754,
+      "level": 1
+    },
+    {
+      "at": 34959,
+      "slot": 1066730,
+      "level": 1
+    },
+    {
+      "at": 38997,
+      "slot": 1068408,
+      "level": 1
+    }
+  ],
+  "contractedSaleWh": 5028701,
+  "shortfallWh": 467956,
+  "gridEpisodes": 84,
+  "refused": {
+    "all": {
+      "submissions": 214,
+      "buyWh": 1805802,
+      "sellWh": 1568106,
+      "buyRegretMicroUsd": 220521077,
+      "sellRegretMicroUsd": -452635943
+    },
+    "byPolicy": {
+      "S2 import": {
+        "submissions": 13,
+        "buyWh": 244523,
+        "sellWh": 0,
+        "buyRegretMicroUsd": 32484512,
+        "sellRegretMicroUsd": 0
+      },
+      "S5 ramp": {
+        "submissions": 7,
+        "buyWh": 108685,
+        "sellWh": 24682,
+        "buyRegretMicroUsd": 23462478,
+        "sellRegretMicroUsd": -7163571
+      },
+      "A10 grid state": {
+        "submissions": 77,
+        "buyWh": 927171,
+        "sellWh": 342795,
+        "buyRegretMicroUsd": 160518923,
+        "sellRegretMicroUsd": -97170573
+      },
+      "A1-A6 per action": {
+        "submissions": 107,
+        "buyWh": 274453,
+        "sellWh": 1202799,
+        "buyRegretMicroUsd": 67754150,
+        "sellRegretMicroUsd": -354197222
+      },
+      "S9 delivery": {
+        "submissions": 7,
+        "buyWh": 0,
+        "sellWh": 121221,
+        "buyRegretMicroUsd": 0,
+        "sellRegretMicroUsd": -30381467
+      },
+      "S1 budget": {
+        "submissions": 28,
+        "buyWh": 567231,
+        "sellWh": 0,
+        "buyRegretMicroUsd": -50212063,
+        "sellRegretMicroUsd": 0
+      }
+    }
+  },
+  "s9Arl0Days": 24.2
+}

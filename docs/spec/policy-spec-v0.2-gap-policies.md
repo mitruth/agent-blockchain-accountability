@@ -464,8 +464,8 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 | 4. S8 same-slot round-trip quota | `v0.2/4-round-trip` | Committed `ad2d0f4`, 24 October |
 | 5. S9 delivery reconciliation, `poke`, delivery simulator, calibration | `v0.2/5-delivery` | Committed `aec1ef7`, 25 October |
 | 6. S10 operating envelope | `v0.2/6-envelope` | Committed `17a092a`, 25 October |
-| 7. A10 grid-state gate | `v0.2/7-grid-state` | Committed, 25 October (see the log, v0.2 Step 7) |
-| 8. Evaluation | `v0.2/8-evaluation` | In progress, 25 October |
+| 7. A10 grid-state gate | `v0.2/7-grid-state` | Committed `858eb84`, 25 October |
+| 8. Evaluation | `v0.2/8-evaluation` | Committed, 25 October; report `docs/reports/evaluation-v0.2-2026-10-25.md` |
 
 **Decisions of 21 October 2026, before step 1** (log v0.2-1.1):
 - Agent keys for signer distinctness are declared by the owner in the OracleVerifier (at most 8): the gate has no agent registry since D1.
@@ -515,3 +515,10 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 **Findings of step 7:**
 - A10 judges the change per slot, not per leg: a modification that raises or only reprices a sale passes in DEFICIT; withdrawing or reducing one is refused (the declared exception to D10).
 - Every v0.2 policy at its worst in one 24-offer batch costs about 12.93 M gas, 3.8 M under EIP-7825's cap.
+
+**Findings of step 8** (evaluation report §7):
+- Every §7 attack is shown blocked by its policy and passing without it (13 of 13, A9 included).
+- Honest arms, a year each, every policy but S3/S4: B0 21.6 %, B2 25.0 % of submissions refused; no suspension. Every A1–A6 refusal is A3 or A3T at the bottom of the tariff; A10 costs an agent that ignores the grid nearly every alert day; S7, S8 and S10 cost almost nothing.
+- With S3 kept, about 70 % refused: S3 needs a load forecast before it can run against a real household.
+- S9 meets ARL₀ ≥ 30 days for B2 (40.3) and not for B0 (24.2) with B2's calibration: calibrate per controller.
+- Replays now reproduce exactly (fixed block times).

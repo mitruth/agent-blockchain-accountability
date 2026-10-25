@@ -1133,7 +1133,7 @@ markets** (spec §7): each venue at half the limit, the third sale refused;
 without S10 all four pass.
 
 
-### `test/policies/DeliveryReconciliationPolicy.t.sol`: 29 tests
+### `test/policies/DeliveryReconciliationPolicy.t.sol`: 30 tests
 
 v0.2, S9, with the house's meter on the market's grid: the shortfall and the
 CUSUM; when a slot is taken in (settled, reconciled, at most 8 a call); the
@@ -1444,14 +1444,14 @@ npm install
 
 ### The Hardhat suite
 
-Expect **627 passing** in about three minutes:
+Expect **628 passing** in about three minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
   market, 8 ledger, 15 policy phases, 16 readings, 13 multi-market, 22 circuit breaker, 16 recipient lock;
 - the oracle verifier: 35, and 35 for the v0.2 kinds;
 - the market: 23 token, 41 market flow, 15 gated market, 6 settlement rule;
 - the windows and the policies: 32 `WindowLib`, 19 `StaticOrderPolicy`, 13
-  tariff band, 21 `DominatedTradePolicy`, 16 `RoundTripPolicy`, 29 `DeliveryReconciliationPolicy` (2 of them the oversell attack), 16 `OperatingEnvelopePolicy`, 17 `GridStatePolicy`, 11 `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
+  tariff band, 21 `DominatedTradePolicy`, 16 `RoundTripPolicy`, 30 `DeliveryReconciliationPolicy` (3 of them the oversell and withholding attacks), 16 `OperatingEnvelopePolicy`, 17 `GridStatePolicy`, 11 `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
   `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 27 step 5 acceptance
   (attacks and gas).
 
@@ -1464,7 +1464,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **635 passed**: the 627 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 25 October, at the end of v0.2 step 7: 635 passed.
+Expect **636 passed**: the 628 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 25 October, at the end of v0.2 step 8: 636 passed.
 
 With Foundry installed and allowed to run:
 
@@ -1618,10 +1618,27 @@ node offchain/eval/calibrate-s9.js --report docs/reports/calibration-s9.json
 
 The honest arm through the gate, every data day (v0.2 step 2: G1 must never
 suspend it). About two hours per arm; `--days` shortens it, `--full` keeps S3
-and S4:
+and S4, `--delivery` trades the delivery simulator's forecast plan (v0.2 step
+5). It posts the tariff, the meter, the synthetic envelope and the scripted
+grid alerts, and reports per policy what it refused and flagged, the refused
+energy and its regret. Since v0.2 step 8 a run reproduces exactly: the chain
+starts on 1 January 2030 and its blocks do not follow the wall clock.
 
 ```bash
-node offchain/eval/honest-day-ahead.js --arm B2
+node offchain/eval/honest-day-ahead.js --arm B2 --delivery --report docs/reports/honest-eval-B2.json
+```
+
+Its reports as the evaluation's tables:
+
+```bash
+node offchain/eval/summarize.js docs/reports/honest-eval-B0.json docs/reports/honest-eval-B2.json
+```
+
+Every attack of spec v0.2 §7, each blocked and each shown without its
+policy, in one run, with a report:
+
+```bash
+node offchain/eval/section7.js --report docs/reports/section7.md
 ```
 
 ```bash
