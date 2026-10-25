@@ -4199,6 +4199,127 @@ The step 5 replay (`--delivery`), with S10 and the synthetic envelope added,
 
 ---
 
+## v0.2 Step 7. A10, the grid-state direction gate
+
+Spec: `docs/spec/policy-spec-v0.2-gap-policies.md`, §5 S12 rules, §11.3, D18,
+D20; build order 11.6 step 7. Branch `v0.2/7-grid-state`, from `17a092a`.
+No new questions: §11.3 fixes the policy as a stateless `GridStatePolicy` on
+the signed `GridState` (D20, the HRIA adapter left optional).
+
+### v0.2-7.1 — A10: `GridStatePolicy`
+
+While the account's operator's latest state is fresh and its level is at
+least `minLevel` (ALERT by default), for each slot a submission touches that
+starts within the state's horizon and has not ended, with dNe the change
+the submission makes to the slot's committed net export (all its legs, as
+one change):
+- **DEFICIT:** refused if some slot's dNe < 0 (a BUY placement, or a SELL
+  cancelled or reduced);
+- **SURPLUS:** refused if some slot's dNe > 0, the mirror image;
+- **No direction:** at EMERGENCY every placement refused, cancellations
+  pass; at ALERT nothing refused.
+- **The declared exception to D10** (§5 S12, invariant §10): in DEFICIT a
+  SELL cancellation reduces the owner's exposure but takes energy from the
+  grid; refused, and tested explicitly. SURPLUS the same for a BUY.
+- **Our reading:** the change is judged per slot, not per leg, so a
+  modification that raises a sale in DEFICIT, or only reprices it, passes;
+  §5 S12 speaks of legs, and judged leg by leg its cancellation leg would
+  refuse it.
+- **Fail open (D18), declared:** a stale or missing state is NORMAL. A state
+  from an operator the account did not register is inert (the oracle keeps
+  states per signer).
+- `CheckResult`: before, the level in force (0 when none); after, the
+  direction; soft `minLevel`; hard the horizon in slots.
+- Config {minLevel}: 1 ALERT or 2 EMERGENCY; a higher level is a widening.
+  `prosumers.json`: `gridState { minLevel 1 }`.
+
+### v0.2-7.2 — Off-chain
+
+- `typed.js` `signGridState` (with `GRID_LEVEL`, `GRID_DIRECTION`),
+  `relay.js` `postGridState`; a grid-operator key (23), registered for every
+  agent account (a grid state carries its own validity, so no maximum age).
+- **The scripted episodes** (spec §7), `offchain/eval/grid-feed.js`: on fixed
+  days, the operator posts a state just before the honest agent trades,
+  valid two hours, over 48 slots (tomorrow from midnight to 09:00): every
+  7th day ALERT DEFICIT, every 11th ALERT SURPLUS, every 61st EMERGENCY with
+  no direction. The honest agent does not read the state.
+
+### v0.2-7.3 — Tests
+
+`test/policies/GridStatePolicy.t.sol`, 17 tests: no state, a stale state, a
+stranger's state; DEFICIT (buys refused, sells placed); the D10 exception
+(cancelling or reducing a sale refused, raising it placed, cancelling a buy
+passing); EMERGENCY DEFICIT; a price-only modification passing either way;
+SURPLUS mirrored; EMERGENCY with no direction; ALERT with no direction; the
+horizon's edge; a minimum level of EMERGENCY; configuration; only the gate
+writes; gas.
+- **Spec §7, counter-grid trading under ALERT:** in DEFICIT the agent buys
+  for three slots and cancels its three sales there: all six refused. Without
+  A10 all six go through.
+
+### v0.2-7.4 — The verifier recomputes A10
+
+- `offchain/verifier/gridstate.js`: the latest state of the account's
+  operator from the accepted states, its freshness, the slots it covers,
+  each slot's dNe from the decoded legs; it compares the verdict and the
+  four figures.
+- `npm run verify:gridstate`: one `ProbeMarket`; placements, cancellations
+  and modifications; states of every level and direction, horizons of 0 to
+  30 slots, validity up to 4 h, a fifth of them from another signer.
+  **Four tampered logs** must be rejected: a refusal reported as an
+  execution; the state behind a refusal changed; the level in force
+  misreported; a stranger's state taken as the operator's.
+- The first fuzz posted states only until 40 orders were open, and then
+  only modified: 35 states, 2 refusals. Now a full book posts states or
+  cancels, and placements fall within the horizons: 209 states, 15
+  refusals.
+- `offchain/verifier/gridstate.test.js`, 5 tests without a chain, the
+  episodes among them.
+
+### v0.2-7.5 — Mutation
+
+New catalogue `gridstate`, 15 mutants: an unchanged slot refused in DEFICIT
+or SURPLUS; DEFICIT refusing what helps; EMERGENCY refusing cancellations;
+ALERT with no direction refusing placements; never refusing; a stale state
+applied; the minimum level exclusive; the horizon's end inclusive, or the
+horizon ignored; a slot's legs not merged; CANCEL legs added; the sides
+swapped; two configuration directions. A test was added while writing it (a
+price-only modification passing either way). **15 of 15 at the first run**,
+6.0 minutes.
+
+### v0.2-7.6 — Gas
+
+`docs/reports/gas-v0.2-step7-2026-10-25.md`.
+- **One sell, A10 alone:** 152,168 with no state in force, 157,412 under a
+  DEFICIT covering the slot.
+- **The day-ahead batch** against 24 bids, every v0.2 policy, under an ALERT
+  DEFICIT covering every slot (every offer passes, every slot is judged):
+  12,694,138 (+197,979, +1.6 %). With S9 taking in 8 slots too, about
+  12.93 M: every policy at its worst leaves about 3.8 M under EIP-7825's cap.
+- **Size:** GridStatePolicy 4,369 bytes.
+
+### v0.2-7.7 — Checked
+
+**Runs, 25 October:**
+- `npm test`: **627 passing** (step 6: 609; +17 A10, +1 gas).
+- Foundry in Docker, the four real accounts included: **635 passed**.
+- `npm run test:offchain`: **68 passing** (+5).
+- `npm run verify:gridstate`: 391 submissions (15 refused), 209 grid states;
+  1,970 figures compared, no disagreement; 4 of 4 tamperings caught.
+- `verify:envelope` 1,993, `verify:delivery` 2,803, `verify:roundtrip`
+  4,797, `verify:price` 1,111, `verify:breaker` 1,035, `verify:ledger`
+  1,280, `verify:window` 6,875 figures: no disagreement.
+- `npm run mutate -- --check`: every pattern found once in all fourteen
+  catalogues.
+- **The demo:** A10 installed, no state posted: "no grid alert in force" on
+  every submission; every step as at step 6.
+- **The honest replays with A10** and the scripted episodes were still
+  running when this step was committed (Dan asked to go on). A10's
+  acceptance (§11.6) is the tests above; the replays are evaluation, and
+  their results are recorded with step 8's (v0.2 Step 8).
+
+---
+
 ## Open decisions
 
 None left. Dan answered every item on 16 October (log 4.9); the table keeps the questions and records the answers.

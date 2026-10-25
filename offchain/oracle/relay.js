@@ -8,7 +8,7 @@
 // chooses them and records them in deployments/local.json.
 
 import { send, read, events } from "../chain/index.js";
-import { signBms, signForecast, signTariff, signMeter, signEnvelope } from "./typed.js";
+import { signBms, signForecast, signTariff, signMeter, signEnvelope, signGridState } from "./typed.js";
 
 /**
  * Sign and post a PV forecast for prosumer `name`: Wh per market slot from
@@ -61,6 +61,18 @@ export async function postEnvelope(deployment, name, { firstSlotStart, exportLim
   const p = deployment.prosumers[name];
   const signed = await signEnvelope(deployment.oracles.dso.keyIndex, deployment.chainId, deployment.contracts.oracle, {
     account: p.account, issuedAt, firstSlotStart, slotSeconds: deployment.slotSeconds, exportLimitWh, importLimitWh,
+  });
+  const receipt = await handIn(deployment, signed);
+  return { signed, isNew: events(receipt, "OracleVerifier", "ReadingAccepted").length > 0 };
+}
+
+/**
+ * Sign and post the grid operator's state (v0.2 step 7, for A10). It applies
+ * to every account that registered this operator.
+ */
+export async function postGridState(deployment, { issuedAt, validUntil, level, direction, horizonSlots }) {
+  const signed = await signGridState(deployment.oracles.gridOperator.keyIndex, deployment.chainId, deployment.contracts.oracle, {
+    issuedAt, validUntil, level, direction, horizonSlots,
   });
   const receipt = await handIn(deployment, signed);
   return { signed, isNew: events(receipt, "OracleVerifier", "ReadingAccepted").length > 0 };

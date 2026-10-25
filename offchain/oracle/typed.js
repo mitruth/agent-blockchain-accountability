@@ -44,7 +44,18 @@ export const TYPES = {
     { name: "exportLimitWh", type: "uint64[]" },
     { name: "importLimitWh", type: "uint64[]" },
   ],
+  GridState: [
+    { name: "issuedAt", type: "uint64" },
+    { name: "validUntil", type: "uint64" },
+    { name: "level", type: "uint8" },
+    { name: "direction", type: "uint8" },
+    { name: "horizonSlots", type: "uint16" },
+  ],
 };
+
+/** `GridLevel` and `GridDirection` in the contract. */
+export const GRID_LEVEL = { NORMAL: 0, ALERT: 1, EMERGENCY: 2 };
+export const GRID_DIRECTION = { DEFICIT: 0, SURPLUS: 1, NONE: 2 };
 
 const asTuple = (fields) => ({ type: "tuple", components: fields });
 
@@ -147,4 +158,24 @@ export async function signEnvelope(keyIndex, chainId, verifier, envelope) {
     domain: domain(chainId, verifier), types: { Envelope: TYPES.Envelope }, primaryType: "Envelope", message,
   });
   return { kind: KIND.ENVELOPE, data: encodeAbiParameters([asTuple(TYPES.Envelope)], [message]), signature };
+}
+
+/**
+ * The grid operator's state, signed with the test key at `keyIndex` (spec
+ * v0.2 section 4): for every account that registered this operator, until
+ * `validUntil`, over the next `horizonSlots` slots. A10 reads it.
+ * @param state { issuedAt, validUntil, level, direction, horizonSlots }, integers (GRID_LEVEL, GRID_DIRECTION)
+ */
+export async function signGridState(keyIndex, chainId, verifier, state) {
+  const message = {
+    issuedAt: BigInt(state.issuedAt),
+    validUntil: BigInt(state.validUntil),
+    level: Number(state.level),
+    direction: Number(state.direction),
+    horizonSlots: Number(state.horizonSlots),
+  };
+  const signature = await key(keyIndex).signTypedData({
+    domain: domain(chainId, verifier), types: { GridState: TYPES.GridState }, primaryType: "GridState", message,
+  });
+  return { kind: KIND.GRID_STATE, data: encodeAbiParameters([asTuple(TYPES.GridState)], [message]), signature };
 }

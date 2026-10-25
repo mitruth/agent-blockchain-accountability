@@ -132,8 +132,8 @@ function sliding(hours, cap, bucketSeconds = 3600) {
 /**
  * The instances to add for one agent: [{ contract, id, name, config }], where
  * `contract` is "statics", "windows", "quota", "dominated", "roundTrip",
- * "delivery", "envelope", "deliverability", "cycles" or "ramp", and `config`
- * the encoded bytes. `battery` is the prosumer's, from
+ * "delivery", "envelope", "gridState", "deliverability", "cycles" or "ramp",
+ * and `config` the encoded bytes. `battery` is the prosumer's, from
  * prosumers.json; without one, the physical policies are left out.
  */
 export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
@@ -214,6 +214,17 @@ export function agentPolicyInstances(p, { battery, slotSeconds } = {}) {
       contract: "envelope",
       name: "S10 envelope",
       config: encodeAbiParameters([ENVELOPE_CONFIG], [{ connectionW: ev.connectionW, softBps: Math.round(ev.softPercent * 100) }]),
+    });
+  }
+
+  // A10 (v0.2 step 7): no trading against the grid operator's declared need,
+  // from the level "gridState" names (1 ALERT, 2 EMERGENCY).
+  const gs = p.gridState;
+  if (gs) {
+    out.push({
+      contract: "gridState",
+      name: "A10 grid state",
+      config: encodeAbiParameters([{ type: "tuple", components: [{ name: "minLevel", type: "uint8" }] }], [{ minLevel: gs.minLevel }]),
     });
   }
 

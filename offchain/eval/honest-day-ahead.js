@@ -49,11 +49,12 @@ const { deploySystem, loadConfig } = await import("../deploy/index.js");
 const { runMatcher } = await import("../matcher/index.js");
 const { expireUnmatched, reconcile } = await import("../keeper/index.js");
 const {
-  postForecast, postTariff, postMeter, postEnvelope, bmsReading, batteryAt, forecastAt, tariffAt, dataIndexAt, homeSlots, armSlots,
-  armSettings, indexOfDate,
+  postForecast, postTariff, postMeter, postEnvelope, postGridState, bmsReading, batteryAt, forecastAt, tariffAt, dataIndexAt, homeSlots,
+  armSlots, armSettings, indexOfDate,
 } = await import("../oracle/index.js");
 const { simulateDelivery } = await import("./delivery.js");
 const { envelopeOf } = await import("./envelope-feed.js");
+const { episodeOf, VALID_SECONDS, HORIZON_SLOTS } = await import("./grid-feed.js");
 const { nextDayAhead, brussels, addDays, wallClock } = await import("../scenarios/calendar.js");
 
 const ELECTRICITY = 0;
@@ -104,7 +105,7 @@ async function main() {
   const tally = {
     policies: alice.policies.map((p) => p.name), delivery: DELIVERY, days: 0, submissions: 0, orders: 0, rejected: 0,
     flagged: 0, suspensions: 0, mergedSlots: 0, droppedWh: 0, byPolicy: {}, staticBounds: {},
-    meterReadings: 0, pokes: 0, s9Alarms: [], contractedSaleWh: 0, shortfallWh: 0,
+    meterReadings: 0, pokes: 0, s9Alarms: [], contractedSaleWh: 0, shortfallWh: 0, gridEpisodes: 0,
   };
   const count = (policyId, what) => {
     const name = names[policyId.toLowerCase()] ?? policyId;
@@ -188,6 +189,13 @@ async function main() {
     let reading = [await bmsReading(d, "alice", nowSlot, batteryAt(alice, dataDate, start, nowSlot))];
     // The meter of the delivery so far, taken in by S9 before the agent acts.
     await catchUpMeter();
+    // A scripted grid alert, on its days (v0.2 step 7, grid-feed.js).
+    const episode = loadConfig().agentPolicies.gridState ? episodeOf(dataDate) : null;
+    if (episode) {
+      const issuedAt = await now();
+      await postGridState(d, { issuedAt, validUntil: issuedAt + VALID_SECONDS, ...episode, horizonSlots: HORIZON_SLOTS });
+      tally.gridEpisodes++;
+    }
 
     // The arm's day, slot by slot, as net orders; Bob mirrors each.
     const bids = [];

@@ -463,8 +463,9 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 | 3. A3T tariff band, S7 dominated-trade budget | `v0.2/3-tariff-band` | Committed `2afdd4e`, 24 October |
 | 4. S8 same-slot round-trip quota | `v0.2/4-round-trip` | Committed `ad2d0f4`, 24 October |
 | 5. S9 delivery reconciliation, `poke`, delivery simulator, calibration | `v0.2/5-delivery` | Committed `aec1ef7`, 25 October |
-| 6. S10 operating envelope | `v0.2/6-envelope` | Committed, 25 October (see the log, v0.2 Step 6) |
-| 7–8 | | In progress, 25 October |
+| 6. S10 operating envelope | `v0.2/6-envelope` | Committed `17a092a`, 25 October |
+| 7. A10 grid-state gate | `v0.2/7-grid-state` | Committed, 25 October (see the log, v0.2 Step 7) |
+| 8. Evaluation | `v0.2/8-evaluation` | In progress, 25 October |
 
 **Decisions of 21 October 2026, before step 1** (log v0.2-1.1):
 - Agent keys for signer distinctness are declared by the owner in the OracleVerifier (at most 8): the gate has no agent registry since D1.
@@ -510,3 +511,7 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 **Findings of step 6:**
 - S10 judges a modification's two legs as one change to the slot, so reducing a sale after a tightening passes.
 - On the synthetic envelope (9 kW, a midday export cut to 40 % every fifth day), S10 refused 3 honest B2 submissions in the year and none of B0's; the rating itself never binds for home_01.
+
+**Findings of step 7:**
+- A10 judges the change per slot, not per leg: a modification that raises or only reprices a sale passes in DEFICIT; withdrawing or reducing one is refused (the declared exception to D10).
+- Every v0.2 policy at its worst in one 24-offer batch costs about 12.93 M gas, 3.8 M under EIP-7825's cap.

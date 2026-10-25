@@ -1,0 +1,111 @@
+{
+  "arm": "B2",
+  "firstDay": "2022-01-02",
+  "full": false,
+  "minQtyWh": 50,
+  "policies": [
+    "A1-A6 per action",
+    "S7 dominated trades",
+    "S8 round trip",
+    "S9 delivery",
+    "S10 envelope",
+    "A10 grid state",
+    "S1 budget",
+    "S2 export",
+    "S2 import",
+    "S6 cancel quota",
+    "S5 ramp"
+  ],
+  "delivery": true,
+  "days": 363,
+  "submissions": 831,
+  "orders": 12312,
+  "rejected": 208,
+  "flagged": 164,
+  "suspensions": 0,
+  "mergedSlots": 929,
+  "droppedWh": 24,
+  "byPolicy": {
+    "S10 envelope": {
+      "rejected": 3,
+      "flagged": 16
+    },
+    "S5 ramp": {
+      "rejected": 9,
+      "flagged": 146
+    },
+    "A10 grid state": {
+      "rejected": 82,
+      "flagged": 0
+    },
+    "A1-A6 per action": {
+      "rejected": 110,
+      "flagged": 0
+    },
+    "S9 delivery": {
+      "rejected": 4,
+      "flagged": 0
+    },
+    "S1 budget": {
+      "rejected": 21,
+      "flagged": 10
+    }
+  },
+  "staticBounds": {
+    "A3T tariff band": 61,
+    "A3 price": 49
+  },
+  "meterReadings": 17344,
+  "pokes": 2540,
+  "s9Alarms": [
+    {
+      "at": 8406,
+      "slot": 999813,
+      "level": 1
+    },
+    {
+      "at": 11129,
+      "slot": 1001060,
+      "level": 1
+    },
+    {
+      "at": 20572,
+      "slot": 1005578,
+      "level": 1
+    },
+    {
+      "at": 21870,
+      "slot": 1006205,
+      "level": 1
+    },
+    {
+      "at": 21966,
+      "slot": 1006248,
+      "level": 2
+    },
+    {
+      "at": 22060,
+      "slot": 1006291,
+      "level": 2
+    },
+    {
+      "at": 23661,
+      "slot": 1007064,
+      "level": 1
+    },
+    {
+      "at": 23661,
+      "slot": 1007067,
+      "level": 2
+    },
+    {
+      "at": 25473,
+      "slot": 1007929,
+      "level": 1
+    }
+  ],
+  "contractedSaleWh": 4014407,
+  "shortfallWh": 256398,
+  "gridEpisodes": 84,
+  "s9Arl0Days": 40.3
+}

@@ -664,6 +664,7 @@ configuration.
 | `StaticOrderPolicy.sol` | A1 to A4 and A6, each order on its own; the result reports the bounds broken as a bitmask                                                                                                                                                              |
 | `DominatedTradePolicy.sol` | S7: the value given away against the tariff, per placement at its limit price, on a `WindowLib` window; keeps each placement's excess for its credit |
 | `RoundTripPolicy.sol` | S8: Wh bought and sold in the same slot, min(committed buy, committed sell) from the ledger across every market, counted when created on a `WindowLib` window; no credits |
+| `GridStatePolicy.sol` | A10: while the grid operator's signed state is an alert, no trading against the grid's need in the slots it covers (DEFICIT: no buying, no withdrawing a sale; SURPLUS the mirror; EMERGENCY: no placing); fails open when the state is stale; stateless |
 | `OperatingEnvelopePolicy.sol` | S10: the committed net position per slot, across every market, within the DSO's signed envelope, or the connection's rating when none applies; refuses what makes an excess larger; stateless |
 | `DeliveryReconciliationPolicy.sol` | S9: per settled slot, the sale the ledger cleared against the export the meter measured; a CUSUM on the shortfall raises alarms, which narrow selling (level 1 caps it, level 2 stops it); fails closed on a missing reading; moved on by `PolicyGate.poke` |
 | `WindowPolicy.sol`      | S1, the budget (BUY value), and S2, the export and import caps (Wh), on a `WindowLib` window per instance                                                                                                                                              |
@@ -1111,6 +1112,16 @@ inside A3T's band but under feed-in; S7 stops the 26th, and with S7 removed
 all 30 pass.
 
 
+### `test/policies/GridStatePolicy.t.sol`: 17 tests
+
+v0.2, A10, under the account's grid operator: no state, a stale state, a
+stranger's; DEFICIT and SURPLUS; the declared exception to D10 (in DEFICIT a
+sale may not be withdrawn); modifications judged per slot; EMERGENCY with and
+without a direction; the horizon's edge; the minimum level; configuration;
+gas. **Counter-grid trading under ALERT** (spec §7): six actions against a
+DEFICIT, all refused; without A10 all six go through.
+
+
 ### `test/policies/OperatingEnvelopePolicy.t.sol`: 16 tests
 
 v0.2, S10, on two markets and a 9 kW connection: the static limit both ways;
@@ -1433,15 +1444,15 @@ npm install
 
 ### The Hardhat suite
 
-Expect **609 passing** in about three minutes:
+Expect **627 passing** in about three minutes:
 
 - the gate: 38 key model, 33 configuration, 26 order lifecycle on the mock
   market, 8 ledger, 15 policy phases, 16 readings, 13 multi-market, 22 circuit breaker, 16 recipient lock;
 - the oracle verifier: 35, and 35 for the v0.2 kinds;
 - the market: 23 token, 41 market flow, 15 gated market, 6 settlement rule;
 - the windows and the policies: 32 `WindowLib`, 19 `StaticOrderPolicy`, 13
-  tariff band, 21 `DominatedTradePolicy`, 16 `RoundTripPolicy`, 29 `DeliveryReconciliationPolicy` (2 of them the oversell attack), 16 `OperatingEnvelopePolicy`, 11 `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
-  `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 26 step 5 acceptance
+  tariff band, 21 `DominatedTradePolicy`, 16 `RoundTripPolicy`, 29 `DeliveryReconciliationPolicy` (2 of them the oversell attack), 16 `OperatingEnvelopePolicy`, 17 `GridStatePolicy`, 11 `WindowPolicy`, 9 `CancelQuotaPolicy`, 32 `DeliverabilityPolicy`, 16
+  `CyclePolicy`, 12 `RampPolicy`, 15 step 4 acceptance, 27 step 5 acceptance
   (attacks and gas).
 
 ```bash
@@ -1453,7 +1464,7 @@ does not build under Hardhat.
 
 ### Everything, under Foundry
 
-Expect **617 passed**: the 609 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 25 October, at the end of v0.2 step 6: 617 passed.
+Expect **635 passed**: the 627 above plus the eight real-account tests (four for the gate, four for the Smart Session prototype). Last run on 25 October, at the end of v0.2 step 7: 635 passed.
 
 With Foundry installed and allowed to run:
 
@@ -1497,7 +1508,7 @@ and `test_gateIsNeverATargetWhateverTheCall`. Put the line back.
 
 ### The JavaScript tests
 
-Expect **63 passing** in a few seconds, after a build:
+Expect **68 passing** in a few seconds, after a build:
 
 - the verifier's definitions, the matcher's rule and the dataset's decimal
   reading, with no chain;
@@ -1588,6 +1599,14 @@ caught:
 
 ```bash
 npm run verify:envelope
+```
+
+A10 (v0.2 step 7): every verdict, from the accepted grid states and the
+decoded legs; it must end "no disagreement", with four of four tamperings
+caught:
+
+```bash
+npm run verify:gridstate
 ```
 
 S9's calibration (k and h, D19) from the delivery simulator, over every 2022

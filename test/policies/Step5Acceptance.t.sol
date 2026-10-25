@@ -16,11 +16,12 @@ import {CyclePolicy} from "../../contracts/policies/CyclePolicy.sol";
 import {RampPolicy} from "../../contracts/policies/RampPolicy.sol";
 import {WindowLib} from "../../contracts/policies/WindowLib.sol";
 import {OracleVerifier} from "../../contracts/oracle/OracleVerifier.sol";
-import {ReadingKind, BmsReading, SignedReading, TariffSchedule, Envelope} from "../../contracts/oracle/OracleTypes.sol";
+import {ReadingKind, BmsReading, SignedReading, TariffSchedule, Envelope, GridState, GridLevel, GridDirection} from "../../contracts/oracle/OracleTypes.sol";
 import {DominatedTradePolicy} from "../../contracts/policies/DominatedTradePolicy.sol";
 import {RoundTripPolicy} from "../../contracts/policies/RoundTripPolicy.sol";
 import {DeliveryReconciliationPolicy} from "../../contracts/policies/DeliveryReconciliationPolicy.sol";
 import {OperatingEnvelopePolicy} from "../../contracts/policies/OperatingEnvelopePolicy.sol";
+import {GridStatePolicy} from "../../contracts/policies/GridStatePolicy.sol";
 import {OracleFixture} from "../oracle/OracleFixture.sol";
 
 /// Step 5's acceptance criteria (spec Section 9), on the ported P2P market
@@ -375,6 +376,44 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
     function test_gas_dayAheadBatchWithEnvelope() public {
         _addEveryPolicyWithPrices();
         _addRoundTripAndDelivery();
+        _addEnvelope();
+        uint256 batch = _batchAgainstBids();
+        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7, S8, S9 and S10, k = 48", batch);
+    }
+
+    /// @dev v0.2 step 7: the same, with A10 added, under an ALERT DEFICIT that
+    ///      covers every slot of the batch: the offers help the grid, so all
+    ///      pass, and A10 judges each slot (its worst case). The state comes
+    ///      after the bids, which it would refuse.
+    function test_gas_dayAheadBatchWithGridState() public {
+        _addEveryPolicyWithPrices();
+        _addRoundTripAndDelivery();
+        _addEnvelope();
+        GridStatePolicy a10 = new GridStatePolicy(address(gate));
+        _add(a10, keccak256("A10"), abi.encode(GridStatePolicy.Config({minLevel: 1})));
+        vm.prank(aliceOwner);
+        aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setDevice, (ReadingKind.GRID_STATE, gridSigner, 0)));
+        oracle.accept(_battery(2_500, 0)[0]);
+        _submit(_bidsCall(_slots24(), 20, PRICE));
+        assertEq(session.bidIds().length, 24, "a bid in every slot");
+        oracle.accept(
+            _signGrid(
+                oracle,
+                GRID_KEY,
+                GridState({
+                    issuedAt: uint64(block.timestamp), validUntil: uint64(block.timestamp) + 1 days,
+                    level: GridLevel.ALERT, direction: GridDirection.DEFICIT, horizonSlots: 200
+                })
+            )
+        );
+        _offers(_slot1(0), 10);
+        uint256 batch = _gasOf(_offersCall(_slots24(), 10));
+        assertEq(session.offerIds().length, 25, "the batch was placed");
+        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7, S8, S9, S10 and A10 (DEFICIT), k = 48", batch);
+    }
+
+    /// @dev S10 on the DSO's envelope: the connection's rating both ways.
+    function _addEnvelope() internal {
         vm.prank(aliceOwner);
         aliceAccount.execute(address(oracle), 0, abi.encodeCall(oracle.setDevice, (ReadingKind.ENVELOPE, envelopeSigner, 1 days)));
         uint64[] memory limits = new uint64[](96);
@@ -395,8 +434,6 @@ contract Step5AcceptanceTest is MarketFixture, OracleFixture {
         );
         OperatingEnvelopePolicy s10 = new OperatingEnvelopePolicy(address(gate));
         _add(s10, keccak256("S10"), abi.encode(OperatingEnvelopePolicy.Config({connectionW: 9_000, softBps: 9_000})));
-        uint256 batch = _batchAgainstBids();
-        emit log_named_uint("gas, 24-offer batch against 24 bids, every policy with A3T, S7, S8, S9 and S10, k = 48", batch);
     }
 
     /// @dev S8 and S9 as in the two tests above.
