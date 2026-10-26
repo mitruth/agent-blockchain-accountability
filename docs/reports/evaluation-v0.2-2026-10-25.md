@@ -167,19 +167,24 @@ settled slots. The per-transaction cap (EIP-7825) is 16,777,216: about
 ## 6. Mutation
 
 Every catalogue, in Foundry's Docker image (`npm run mutate`): 14
-catalogues, 492 mutants.
+catalogues, 492 mutants. **489 caught, 3 accepted, none missed, none failed
+to build.** Per mutant: `mutation-v0.2-2026-10-25.md`.
 
-- **Each new catalogue ran in full at its own step**, against code that has
-  not changed since: `breaker` 45 of 45 (step 2), `price` 30 of 30 (step 3),
-  `roundtrip` 20 of 20 (step 4), `delivery` 37 of 37 (step 5), `envelope` 18
-  of 18 (step 6), `gridstate` 15 of 15 (step 7).
-- **The full re-run of every catalogue,** the v0.1 ones above all, whose
-  code v0.2 changed underneath them (the gate, the ledger, the market):
-  - so far: `gate` 43 of 43; `ledger` 48 caught and 3 accepted (faults in
-    the mock market, a test double: accepted since v0.1); `market` 54 of the
-    first 54. **145 caught, 3 accepted, none missed.**
-  - The rest was stopped to commit this step, and is completed in a follow-up
-    commit with its report (`mutation-v0.2-2026-10-25.md`).
+- **The 3 accepted** are `ledger`'s faults in the mock market, a test double
+  of `test/gate/`, accepted since v0.1. The real market's catalogue,
+  `market`, catches all 55 of its own.
+- **Every catalogue in full:** `gate` 43, `ledger` 51 (48 + 3 accepted),
+  `market` 55, `window` 35, `policies` 53, `physical` 47, `oracle2` 34,
+  `breaker` 45, `price` 30, `roundtrip` 20, `delivery` 37, `envelope` 18,
+  `gridstate` 15, `accounts` 9.
+- **The v0.1 catalogues** (`gate`, `ledger`, `market`, `window`, `policies`,
+  `physical`, `accounts`) were re-run on the v0.2 code, which changed the
+  gate, the ledger and the market beneath them; each v0.2 catalogue also
+  ran in full at its own step, with the same result.
+- **The run went in three parts** (25–26 October): one stopped to commit
+  this step, one that died overnight with the session, and one of 343
+  mutants in 186 minutes that re-ran `window` in full and finished the
+  rest. The report merges the three logs.
 
 ## 7. Findings for calibration
 

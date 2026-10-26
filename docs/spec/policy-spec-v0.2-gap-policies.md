@@ -465,7 +465,7 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 | 5. S9 delivery reconciliation, `poke`, delivery simulator, calibration | `v0.2/5-delivery` | Committed `aec1ef7`, 25 October |
 | 6. S10 operating envelope | `v0.2/6-envelope` | Committed `17a092a`, 25 October |
 | 7. A10 grid-state gate | `v0.2/7-grid-state` | Committed `858eb84`, 25 October |
-| 8. Evaluation | `v0.2/8-evaluation` | Committed, 25 October; report `docs/reports/evaluation-v0.2-2026-10-25.md` |
+| 8. Evaluation | `v0.2/8-evaluation` | Committed `92cffc4`, 25 October; report `docs/reports/evaluation-v0.2-2026-10-25.md`. Full mutation run completed 26 October: `docs/reports/mutation-v0.2-2026-10-25.md` |
 
 **Decisions of 21 October 2026, before step 1** (log v0.2-1.1):
 - Agent keys for signer distinctness are declared by the owner in the OracleVerifier (at most 8): the gate has no agent registry since D1.
@@ -522,3 +522,4 @@ Kept current at the end of each step of 11.6. Detail in `docs/decisions/design-d
 - With S3 kept, about 70 % refused: S3 needs a load forecast before it can run against a real household.
 - S9 meets ARL₀ ≥ 30 days for B2 (40.3) and not for B0 (24.2) with B2's calibration: calibrate per controller.
 - Replays now reproduce exactly (fixed block times).
+- The full mutation run of all 14 catalogues on the v0.2 code: 492 mutants, 489 caught, 3 accepted (faults in the mock market, a test double), none missed.

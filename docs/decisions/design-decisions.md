@@ -4422,10 +4422,17 @@ run the last catalogues in parallel, could not compile ModuleKit from a
 `node_modules` junction inside Docker, and was dropped. To commit this step
 without waiting about two hours more, the run was stopped after 148 of the
 492 mutants: **145 caught, 3 accepted** (the mock market's, accepted since
-v0.1), **none missed** (`gate` 43, `ledger` 51, `market` 54 of 55). The rest
-runs in a follow-up commit with the merged report
-`docs/reports/mutation-v0.2-2026-10-25.md`. Every v0.2 catalogue already ran
-in full at its own step, on code unchanged since.
+v0.1), **none missed** (`gate` 43, `ledger` 51, `market` 54 of 55). Every
+v0.2 catalogue already ran in full at its own step, on code unchanged since.
+
+**Completed, 26 October (follow-up commit).** The rest ran detached in two
+more parts. The first (market's last mutant, then `window`) died overnight
+with the session after 26 of `window`'s 35, leaving `WindowLib.sol` mutated;
+it was restored from the runner's `.mutation-backup` and the tree checked
+clean. The second re-ran `window` in full and every catalogue after it:
+343 mutants in 186 minutes, **343 caught**. Merged by mutant name from the
+three logs, the full run is **492 mutants: 489 caught, 3 accepted, none
+missed, none failed to build**, in `docs/reports/mutation-v0.2-2026-10-25.md`.
 
 ### v0.2-8.8 — Checked
 

@@ -1,13 +1,19 @@
 # Project guide
 
 What the project contains today, what every file does, what the tests prove,
-and how to run everything. Current as of 2026-10-22: v0.1 steps 1 to 5 are
-built, and v0.2 step 1 of 8 (`docs/spec/policy-spec-v0.2-gap-policies.md`,
-Section 11.6): A1's rated-power term and minimum order, S3's floor by hour of
-day, positions summed on one slot grid across markets, the tariff, meter,
-envelope and grid-state oracles, and distinct trust anchors. Step 2 adds the session circuit
-breaker G1 and the recipient lock A9, both in the gate. Step 3 adds the
-tariff-relative price band A3T and the dominated-trade budget S7.
+and how to run everything. Current as of 2026-10-26: v0.1 steps 1 to 5 are
+built, and all eight steps of v0.2 (`docs/spec/policy-spec-v0.2-gap-policies.md`,
+Section 11.6) are committed. Step 1: A1's rated-power term and minimum order,
+S3's floor by hour of day, positions summed on one slot grid across markets,
+the tariff, meter, envelope and grid-state oracles, and distinct trust
+anchors. Step 2 adds the session circuit breaker G1 and the recipient lock
+A9, both in the gate. Step 3 adds the tariff-relative price band A3T and the
+dominated-trade budget S7. Step 4 adds the same-slot round-trip quota S8;
+step 5 the delivery reconciliation S9, with the gate's `poke` and owner
+reset, a delivery simulator and S9's calibration; step 6 the operating
+envelope S10; step 7 the grid-state direction gate A10. Step 8 is the
+evaluation: `docs/reports/evaluation-v0.2-2026-10-25.md`, with the full
+mutation run in `docs/reports/mutation-v0.2-2026-10-25.md`.
 
 
 | For                                     | Read                                 |
@@ -55,12 +61,12 @@ v0.2 (Section 11.6 of its spec), one branch per step:
 | ---- | ------- | ------ |
 | 1 | C1–C5, the four new oracle kinds, signer distinctness | **Committed** `7b4c8d7` (`v0.2/1-oracles-aggregation`) |
 | 2 | G1 session circuit breaker, A9 recipient lock | **Committed** `9bc3c52` (`v0.2/2-breaker-recipient`) |
-| 3 | Tariff-relative price band A3T, dominated-trade budget S7 | **Built and passing** (`v0.2/3-tariff-band`) |
-| 4 | Same-slot round-trip quota S8 | Not started |
-| 5 | Delivery reconciliation S9, `poke`, calibration | Not started |
-| 6 | Operating envelope S10 | Not started |
-| 7 | Grid-state direction gate A10 | Not started |
-| 8 | Evaluation | Not started |
+| 3 | Tariff-relative price band A3T, dominated-trade budget S7 | **Committed** `2afdd4e` (`v0.2/3-tariff-band`) |
+| 4 | Same-slot round-trip quota S8 | **Committed** `ad2d0f4` (`v0.2/4-round-trip`) |
+| 5 | Delivery reconciliation S9, `poke`, calibration | **Committed** `aec1ef7` (`v0.2/5-delivery`) |
+| 6 | Operating envelope S10 | **Committed** `17a092a` (`v0.2/6-envelope`) |
+| 7 | Grid-state direction gate A10 | **Committed** `858eb84` (`v0.2/7-grid-state`) |
+| 8 | Evaluation | **Committed** `92cffc4` (`v0.2/8-evaluation`); full mutation run in a follow-up commit |
 
 
 
@@ -101,7 +107,24 @@ crossing is flagged and goes ahead; released volume is credited back.
   N_max cycles.
   - `RampPolicy`, S5 (step 5.5): the net position may not jump by more than
   R_max from one slot to the next.
+  - `RoundTripPolicy`, S8 (v0.2 step 4): over a sliding window, the volume both
+  bought and sold for the same slot, from the ledger's positions across
+  markets.
+  - `DeliveryReconciliationPolicy`, S9 (v0.2 step 5): per settled slot, the
+  shortfall of what the meter delivered against what was sold, in a CUSUM;
+  an alarm caps sales (level 1) or stops them (level 2) for a penalty
+  period, and a missing meter reading stops sales after a grace (D16).
+  - `OperatingEnvelopePolicy`, S10 (v0.2 step 6): the net committed position
+  per slot, across markets, within the DSO's signed envelope, or the static
+  connection limit when there is none.
+  - `GridStatePolicy`, A10 (v0.2 step 7): under the operator's signed ALERT,
+  orders against the grid's need are refused (in DEFICIT, a buy, or
+  withdrawing a sale: the declared exception to D10); EMERGENCY refuses all
+  placements.
   Section 3 explains what each checks; section 6 shows four attacks blocked.
+- `poke` **and owner reset** (v0.2 step 5, `IMaintainedPolicy`): anyone may
+`poke` a maintained policy (S9) to process settled slots without a market
+call; the owner may reset it.
 - **The session circuit breaker G1** (v0.2 step 2, `SessionBreaker`): too many
 rejected or flagged submissions within a sliding window suspend the account's
 `submit` to cancel-only, until the owner reinstates it or a cooldown runs out.
@@ -144,18 +167,22 @@ twice its cap across midnight, where a sliding one admits it once.
 - **An independent verifier** (`offchain/verifier/`): rebuilds every window,
 and the ledger's per-slot totals across markets, from the event log, recomputes
 them by a different algorithm, then compares every figure the chain reported.
-- **A mutation suite** (`offchain/mutation/`): 201 deliberate defects, each of
-which must make a test fail. The last full run caught 189 of the 192 that run
-under Hardhat; the other 3 are faults in test doubles.
+- **A mutation suite** (`offchain/mutation/`): 492 deliberate defects in 14
+catalogues, each of which must make a test fail. The last full run (25–26
+October 2026, Foundry in Docker) caught 489; the other 3 are faults in a test
+double, the mock market.
+- **The evaluation tools** (`offchain/eval/`, v0.2 steps 5–8): the delivery
+simulator, S9's calibration, the synthetic envelope and grid feeds, the honest
+year replays with regret, and the run of every spec §7 attack.
 
 
 
 ### What does not exist yet
 
-The tariff oracle exists (v0.2 step 1), but no policy reads it yet: A3's price
-bounds stay absolute until A3T (v0.2 step 3). Likewise the meter, envelope and
-grid-state oracles wait for S9, S10 and A10. Nothing is deployed to a network. The false-positive rate on honest agents, the full attack
-matrix and the monolithic gas variant are step 6.
+Nothing is deployed to a network. The monolithic gas variant (spec D14) was
+not measured. The A arms of the HEMS were not evaluated: their logs are mock
+echoes of B0 and B2. The evaluation report's section 8 lists its other
+limits, and its section 7 the calibration findings still open.
 
 Two roles of the market are outside the repository by design: the off-chain
 matching service, linked to the chain by an oracle, which registers trades; and
@@ -1403,8 +1430,12 @@ Since step 3 the runs are committed as the mutation suite, `offchain/mutation/`.
 The step 1, step 2 and market lists are its `gate`, `ledger` and `market`
 catalogues, and the nine real-account defects its `accounts` catalogue; steps
 3, 4 and 5 added `window`, `policies` and `physical`. Spec 8's mutants are all
-in a catalogue now: none is pending. The
-runbook says how to run it.
+in a catalogue now: none is pending. v0.2 added `oracle2` (step 1), `breaker`
+(2), `price` (3), `roundtrip` (4), `delivery` (5), `envelope` (6) and
+`gridstate` (7), each run in full at its own step. The full run of all 14 on
+the v0.2 code, 25–26 October: 492 mutants, 489 caught, 3 accepted (the mock
+market's), none missed. Report: `docs/reports/mutation-v0.2-2026-10-25.md`.
+The runbook says how to run it.
 
 ### What the tests do not show
 
